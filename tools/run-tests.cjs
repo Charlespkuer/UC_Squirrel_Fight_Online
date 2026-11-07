@@ -34,7 +34,15 @@ const TIMEOUT_MS = 600000;
 const files = fs.readdirSync(path.join(ROOT, 'tools'))
   .filter((f) => /^test-.*\.cjs$/.test(f))
   .filter((f) => !only || only.test(f))
-  .sort();
+  /* 长的先跑：整体耗时由最慢的套件决定（2026-11 实测 test-fixes-round 38s、
+   * test-save-boot 22s、test-sync 11s），先排它们能让并行末尾少空等几秒。 */
+  .sort((a, b) => {
+    const slow = ['test-fixes-round.cjs', 'test-save-boot.cjs', 'test-sync.cjs', 'test-online-api.cjs',
+      'test-mint-shop.cjs', 'test-ios-remote.cjs'];
+    const ra = slow.indexOf(a), rb = slow.indexOf(b);
+    if (ra !== rb) return (ra < 0 ? 99 : ra) - (rb < 0 ? 99 : rb);
+    return a.localeCompare(b);
+  });
 if (!files.length) { console.error('没有匹配的 tools/test-*.cjs'); process.exit(1); }
 
 const defaultJobs = Math.max(2, Math.min(4, os.cpus().length));
