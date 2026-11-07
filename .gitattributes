@@ -1,0 +1,34 @@
+# 仓库级换行规则
+# ------------------------------------------------------------
+# `scripts/.gitattributes` 只作用于 scripts/ 子目录；本文件补上仓库其余位置
+# （`server/deploy/*.sh`、`tools/*.ps1` 等）。本机 Git 是 `core.autocrlf=true`，
+# 没有这些规则时 `.sh` 会被检出成 CRLF —— Linux / macOS 上 bash 会直接报
+# `syntax error near unexpected token $'do\r'`（scripts/.gitattributes 里记过这个坑）。
+#
+#   · bash / python 脚本 —— 存 LF、检出 LF，与平台无关；
+#   · Windows 批处理 / PowerShell —— 检出 CRLF（cmd.exe、老版 PowerShell 更稳）；
+#   · 图片 / 音频 / 安装包 —— 按二进制存，避免任何换行转换。
+*.command text eol=lf
+*.sh      text eol=lf
+*.py      text eol=lf
+*.cmd     text eol=crlf
+*.bat     text eol=crlf
+*.ps1     text eol=crlf
+
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.ico  binary
+*.mp3  binary
+*.ogg  binary
+*.wav  binary
+*.woff binary
+*.woff2 binary
+*.ttf  binary
+*.zip  binary
+*.apk  binary
+*.exe  binary
+*.jks  binary
+*.swf  binary

@@ -1,0 +1,54 @@
+# ⚠ 历史文件：这是**旧服 111.229.39.217** 的独立 Caddy 配置（该配置已随旧服 ssdz 于 2026-11-04 删除）。
+# 新服 140.143.142.110 的游戏 API 直连 :5896，不经过 Caddy；新服的 Caddy 是
+# Docker 容器（/soft/caddy/Caddyfile），同时服务 open-webui / 单机网页 / 云存档，
+# **不要用本文件覆盖它**。现行部署见 docs/服务器与部署.md。
+#
+# /etc/caddy/Caddyfile —— 松鼠大战 Online（旧服）
+#
+# 现状（2026-10-26 实测）：
+#   · 云防火墙**只放行 22 / 80**；443 从外网连 TCP 都握不上（证书其实是有效的
+#     Let's Encrypt IP 证书，缺的只是安全组那一格）。
+#   · 所以 :80 **不重定向**到 https，直接给 API；等 443 放行后客户端会自动优先用
+#     https（js/net.js 的 `discover()` 会并行探测并在后台升级），不用重新打包。
+#
+# 部署后自检：
+#   curl -s http://111.229.39.217/api/health      # 期望 {"ok":true,...,"db":"ok"}
+
+{
+	# 用 IP 访问时客户端通常不带 SNI；把默认 SNI 钉在这台机器上。
+	default_sni 111.229.39.217
+}
+
+http://111.229.39.217 {
+	encode gzip
+
+	# certbot 续期用的 webroot 通道
+	handle /.well-known/acme-challenge/* {
+		root * /var/lib/ssdz-acme
+		file_server
+	}
+
+	# 唯一的公网入口：API（反代到本机 3100；服务端只监听 127.0.0.1）
+	handle /api/* {
+		reverse_proxy 127.0.0.1:3100
+	}
+
+	# 安装包自带资源，这里不提供网页版；留一句话给误点进来的浏览器
+	handle {
+		respond "Squirrel Fight Online API. Use the installed client." 200
+	}
+}
+
+# 443 放行之后自动生效；证书在 /etc/caddy/ssdz-tls（Let's Encrypt，SAN=IP）
+https://111.229.39.217 {
+	tls /etc/caddy/ssdz-tls/fullchain.pem /etc/caddy/ssdz-tls/privkey.pem
+	encode gzip
+
+	handle /api/* {
+		reverse_proxy 127.0.0.1:3100
+	}
+
+	handle {
+		respond "Squirrel Fight Online API. Use the installed client." 200
+	}
+}

@@ -1,0 +1,66 @@
+name: Deploy to GitHub Pages
+
+# 这是最省事的「Mac + Windows 都能玩」的发布方式：
+# 不需要打包、不需要安装任何东西，浏览器打开同一个网址即可。
+# 仓库 Settings → Pages → Source 选 "GitHub Actions" 后，推 main 就会自动部署。
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      pages_configured: ${{ steps.configure_pages.outcome == 'success' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # 只发布游戏运行需要的东西：index.html + css/js/images/audio。
+      # references/（含原 APK）与 tools/（开发工具、截图证据）不进站点，省流量也避免版权问题。
+      # serve.js / serve.py / 启动器是给「下载到本地玩」用的，静态站点上不需要（Pages 上存档退到 localStorage）。
+      - name: 组装站点目录
+        run: |
+          mkdir -p _site
+          # 首页在 scripts/ 里，但站点根还是放 index.html —— 页面里的
+          # css/、js/ 这些相对引用是相对 URL 根解析的，所以一个引用都不用改
+          cp scripts/index.html _site/
+          cp -R css js images audio _site/
+          # 参考素材不上线：images/_reference/ 运行时不读（图集出处清单、新版界面截图裁切、未使用旧图）
+          rm -rf _site/images/_reference
+          # 版本标识：源文件在 scripts/version.json，站点根仍放一份（URL 不变）
+          [ -f scripts/version.json ] && cp scripts/version.json _site/ || true
+          # 游戏本体没有任何构建步骤，原样发布即可
+          du -sh _site
+          find _site -maxdepth 1 -mindepth 1 | sort
+
+      - id: configure_pages
+        continue-on-error: true
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.configure_pages.outcome == 'success'
+        with:
+          path: _site
+
+  deploy:
+    if: needs.build.outputs.pages_configured == 'true'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

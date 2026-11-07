@@ -1,0 +1,2244 @@
+#!/usr/bin/env node
+/* ============================================================
+ * tools/sync/sync.js —— 双机同步（存档 + 游戏文件），零依赖
+ *
+ * 用途：Mac 与 Windows 常年用 ZeroTier 连在同一个虚拟局域网里，
+ *       这个脚本让两边「一键」互相送存档、以及把本机改过的文件推给对方。
+ *
+ * 两条通道：
+ *   · 存档通道：save/progress.json（整体 JSON，推送/拉取前都会先备份）
+ *   · 文件通道：游戏目录里改动过的文件（默认按 修改时间 + 大小 比对，--verify 用 sha1；
+ *     忽略规则以仓库根的 .gitignore 为准（见「.gitignore 感知」一节），
+ *     再叠加脚本内置的同步专属规则与 sync.config.json 的 ignore）
+ *     加 --delete 时进入「镜像式」：把对端没有、本机却有的文件在本机删掉
+ *     （默认关闭；只删文件、避开忽略清单与本趟传失败的路径）
+ *
+ * 角色：
+ *   serve   = 接收端（一台机器开着，另一台才能推/拉）；监听 0.0.0.0:<port>
+ *   push    = 把本机的东西发给对端
+ *   pull    = 把对端的东西取到本机
+ *
+ * 命令：
+ *   node scripts/sync/sync.js init                     生成配置 + 显示本机 ZeroTier 地址
+ *   node scripts/sync/sync.js serve [--port N]         前台跑接收服务
+ *   node scripts/sync/sync.js start | stop | restart   后台接收服务（PID 在 save/.sync.pid）
+ *   node scripts/sync/sync.js status [peer]            本机和对端的状态
+ *   node scripts/sync/sync.js discover                 扫描 ZeroTier 网段找对端
+ *   node scripts/sync/sync.js push [peer] [选项]       本机 → 对端
+ *   node scripts/sync/sync.js pull [peer] [选项]       对端 → 本机
+ *   node scripts/sync/sync.js watch [peer] [选项]      盯着本地改动，自动推给对端
+ *   node scripts/sync/sync.js token [值]               查看 / 设置同步口令
+ *   node scripts/sync/sync.js autostart install|remove|status   开机自启
+ *
+ * 选项：--save 只同步存档 / --files 只同步文件 / --all 两者（默认两者）
+ *       --force 存档比对方旧也覆盖 / --dry 只列计划 / --verify 文件用 sha1 精确比对
+ *       --peer <名字或IP> / --interval <秒>（watch）
+ *
+ * 安全：接收端只在 <游戏目录> 里读写，路径必须是一段段普通目录（挡掉 ../、盘符），
+ *   · 更新通道：/local/update/check | /local/update/run（游戏内「一键拉取远端更新」，
+ *     实际执行 scripts/update-game.js；放在这里是因为轻壳 exe 的内置服务器要重编才有 /__update，
+ *     而这个服务本来就是「本机 agent」+ Node，旧 exe 也能靠它一键更新。）
+ *       忽略清单里的东西永远不传；/api/* 需要 x-ssdz-token 与配置里的口令一致；
+ *       /local/* 只允许本机（127.0.0.1）调用，且带 Origin 时必须是 127.0.0.1/localhost。
+ * ============================================================ */
+'use strict';
+
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const crypto = require('crypto');
+const { spawn, execFile, execFileSync } = require('child_process');
+// Optional in old portable bundles; authenticated peers can build iOS only on macOS.
+const { createIosBuildService } = (() => {
+  const file = path.join(__dirname, 'ios-build.cjs');
+  return fs.existsSync(file) ? require(file) : { createIosBuildService: () => null };
+})();
+
+// ---------------------------------------------------------------- 常量与路径
+
+const TOOL_DIR = __dirname;
+const ROOT = path.resolve(TOOL_DIR, '..', '..');          // 游戏目录（有 index.html 的那层）
+const SAVE_DIR = path.join(ROOT, 'save');
+const SAVE_FILE = path.join(SAVE_DIR, 'progress.json');
+const BACKUP_DIR = path.join(SAVE_DIR, 'backup');
+const CONFIG_CANDIDATES = [
+  path.join(TOOL_DIR, 'sync.config.json'),                    // 正常位置：scripts/sync/sync.config.json
+  path.join(ROOT, 'tools', 'sync', 'sync.config.json'),       // 旧位置：布局迁移期仍然认，口令不会丢
+];
+/** 配置文件用哪个：先看正常位置，没有就认旧的（还没有就用正常位置新建）。 */
+function configPath() {
+  for (const p of CONFIG_CANDIDATES) {
+    try { if (fs.statSync(p).isFile()) return p; } catch (e) {}
+  }
+  return CONFIG_CANDIDATES[0];
+}
+const PID_FILE = path.join(SAVE_DIR, '.sync.pid');
+const OUT_LOG = path.join(SAVE_DIR, 'sync.out.log');
+const ERR_LOG = path.join(SAVE_DIR, 'sync.err.log');
+
+const APP_TAG = 'ssdz-sync';
+const PROCESS_STARTED_AT = Date.now();   // 服务进程启动时刻：用来判断它跑的是不是磁盘上这份新代码
+const APP_VERSION = 2;
+const SAVE_MAX = 4 * 1024 * 1024;                          // 与 serve.js 一致
+/* 默认接收端口。两台机器 sync.config.json 里存的是显式值，这里只影响「新生成的配置」。
+ * 为什么不用 8788：2026-10 起 Windows 把它划进了系统保留段（Hyper-V/WSL 预留的 8719-8818），
+ * 非管理员进程绑这个端口直接 EACCES —— 表面现象是「同步服务怎么都起不来」。
+ * 18788 在动态端口段（本机是 1024-15000）之外，避开这类预留。换端口用：
+ *   node scripts/sync/sync.js port <新端口>（两台机器必须一样）。 */
+const DEFAULT_PORT = 18788;
+const BACKUP_KEEP = 10;
+const FW_RULE_NAME = 'SSDZ Sync';        // Windows 入站放行规则的名字（自检/一键放行都用它）
+
+/* 控制台编码（2026-10 用户报「终端显示一些乱码」）：
+ * 本脚本的输出**全是 UTF-8 字节**。在 Windows 控制台里，如果代码页是 936（简体中文默认），
+ * node 走控制台写通道时通常没问题，但只要有一层把它当 ANSI 解码（被父进程捕获、
+ * 或者输出进了 GBK 的控制台），中文就全是乱码。
+ * 所以：Windows + stdout 真的连着控制台时，**主动把控制台切成 65001**。
+ * 改的是"这个控制台"（子进程共享同一个控制台，所以 chcp 生效），不影响调用方之外的任何东西；
+ * 输出被重定向时（不是 TTY）什么都不做 —— 那种情况下字节本来就是 UTF-8，由读的人负责。
+ * 注：一键同步.cmd / 重启同步服务.cmd 里也先 chcp 了，这里是"直接手敲 node"时的兜底。 */
+function ensureUtf8Console() {
+  if (process.platform !== 'win32') return;
+  if (!process.stdout.isTTY) return;
+  try {
+    execFileSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'chcp.com'), ['65001'],
+      { stdio: 'ignore', timeout: 4000, windowsHide: true });
+  } catch (e) {}
+}
+ensureUtf8Console();
+
+/* ============================================================
+ * .gitignore 感知（2026-10）
+ *
+ * 用户口径：**双机同步不该搬 .gitignore 里的东西**。
+ * 那些文件要么是本机产物（out/、references/、save/、node_modules…），
+ * 要么是每台机器各不相同的私货（sync.config.json），来回搬只会污染对端。
+ *
+ * 以前这份清单是**手写**在 DEFAULT_IGNORE 里的，跟 .gitignore 各维护一份，
+ * 必然漂移（例如 .gitignore 新加了 out/ 或 .bak-upscale/，同步这边不会知道）。
+ * 现在直接把仓库根的 .gitignore 解析进来，和 config.ignore 一起生效：
+ *
+ *   · 支持 # 注释、空行、! 例外、尾随 / （只匹配目录）、前导 / （锚定仓库根）
+ *   · 含 / 的路径模式按「仓库根开始的相对路径」匹配（本仓库没用到「子目录 .gitignore」，
+ *     所以不实现 base 跟随；将来真要支持，改 readGitignorePatterns 的遍历即可）
+ *   · 未匹配任何模式 → 不忽略（与 git 一致）
+ *   · 最后命中的模式先生效（negate 后命中即取消忽略）
+ *
+ * 注意 `**` 的语义：`images/` 下那条 `.bak-upscale/` 忽略规则里的 `**`
+ * 后面紧跟斜杠时，要能匹配**零层或多层**中间目录，否则 .bak-upscale 会被漏掉。
+ * ============================================================ */
+const GITIGNORE_PATH = path.join(ROOT, '.gitignore');
+/** 把 gitignore 的通配模式编译成正则（对「相对游戏根」的路径做整串匹配）。
+ *
+ *  锚定规则照 `gitignore(5)` 原文：
+ *   · 模式里**含斜杠**（前导的、或中间那个；**尾随**的那个不算）→ 相对 .gitignore 所在目录，
+ *     也就是**锚定游戏根**；
+ *   · 不含斜杠（`out` / `*.log` / `node_modules`）→ 匹配**任意层级**的同名项。
+ *  本仓库只有根那一份 .gitignore，所以"相对 .gitignore 所在目录"就等于"游戏根"。
+ *
+ *  ⚠⚠ 以前这里**只看前导 `/`**（`anchored = pat.startsWith('/')`），而锚定与否最终又只影响
+ *    注释里那句"用 `(?:^|/)` 也不会误伤"——实际上**没有任何区别**，等于前导 `/` 完全没生效。
+ *    后果：`.gitignore` 里的 `/启动游戏.command` 把 `scripts/启动游戏.command` 一起忽略了，
+ *    仓库里那份**正式启动器永远同步不过去**（`tools/test-sync.cjs` 造的临时目录没带
+ *    .gitignore，所以那条断言一直是绿的，照不出这个 bug —— 2026-10-16 实测发现）。 */
+function gitignoreGlobRegex(pat, dirOnly) {
+  const body = pat.replace(/^\/+/, '');
+  /* 「含斜杠」判据要**先剥掉尾随斜杠**：`references/` 只算"目录名"，是任意层级；
+   * `src-tauri/web/` 含中间斜杠，是根下的固定路径。 */
+  const rooted = pat.startsWith('/') || body.includes('/');
+  let rx = '';
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (c === '*') {
+      if (body[i + 1] === '*') {
+        // `**/` → 零层或多层目录；`**`（结尾或后面不是 /）→ 任意字符（可以跨 /）
+        if (body[i + 2] === '/') { rx += '(?:.*/)?'; i += 2; }
+        else { rx += '.*'; i += 1; }
+      } else rx += '[^/]*';
+    } else if (c === '?') rx += '[^/]';
+    else if (c === '[') {
+      const close = body.indexOf(']', i + 1);
+      if (close < 0) rx += '\\[';
+      else { rx += body.slice(i, close + 1); i = close; }
+    } else rx += c.replace(/[.+^${}()|\\]/g, '\\$&');
+  }
+  /* 两端都要是路径边界：
+   *   · 头部：锚定模式用 `^`（只认游戏根那一条路径）；非锚定模式用 `(?:^|/)`（任意层级）。
+   *   · 目录模式（尾随 /）：命中目录本身或它下面的任何东西。
+   *   · 为什么不用「名字前缀」匹配：`.bak-upscale/` 那条绝不该命中
+   *     `xxx.bak-upscale-yyy/` 这种「只是前缀像」的目录。 */
+  const tail = dirOnly ? '(?:/.*)?' : '';
+  return new RegExp((rooted ? '^' : '(?:^|/)') + rx + tail + '$');
+}
+/** 读仓库根的 .gitignore，返回 matcher 列表 [{neg, rx}]（保持文件里的顺序）。 */
+function readGitignorePatterns() {
+  let text = '';
+  try { text = fs.readFileSync(GITIGNORE_PATH, 'utf8'); } catch (e) { return []; }
+  const out = [];
+  for (const raw of text.split(/\r?\n/)) {
+    let line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    let neg = false;
+    if (line.startsWith('!')) { neg = true; line = line.slice(1).trim(); }
+    if (!line) continue;
+    const dirOnly = line.endsWith('/');
+    const pat = dirOnly ? line.replace(/\/+$/, '') : line;
+    try { out.push({ neg, rx: gitignoreGlobRegex(pat, dirOnly) }); } catch (e) {}
+  }
+  return out;
+}
+
+/* 文件通道的忽略清单：
+ *   · 以 / 结尾 = 相对游戏目录的前缀（目录）
+ *   · 含 *      = 通配（匹配相对路径或文件名）
+ *   · 其它      = 任意一层目录/文件名等于它
+ *   · 以 ! 开头 = 例外（即使前面被忽略也同步），例如 !tools/sync/keep.me
+ *
+ * 这里只留「.gitignore 表达不了 / 不适合写进仓库」的规则：
+ *   · 本机私货：同步口令、PID、日志
+ *   · 目录噪音：._* 资源分叉
+ *   · 同步自己的旧布局副本（Windows 台可能还留着根目录同名文件）
+ * 其余（references/ save/ out/ node_modules/ src-tauri/* 构建产物…）一律由 .gitignore 负责。
+ */
+const DEFAULT_IGNORE = [
+  // 布局迁移期兼容：这几个辅助脚本现在住在 scripts/ 里（两台机器都是）。
+  // 但 Windows 那台如果还是旧布局，根目录下仍留着同名副本、以及旧的 tools/sync/，
+  // 不挡住的话 pull 会把它们复制到本机根目录，多出一堆重复文件。
+  // 前缀 / 表示「只匹配游戏目录的根那一层」，所以不会误伤 scripts/ 里的正式副本。
+  '/停止游戏.command', '/一键同步.cmd', '/一键同步.command', '/重启同步服务.cmd',
+  '/index.html', '/serve.js', '/serve.py', '/start-game.ps1', '/tools/sync/',
+  // 根目录的 macOS/Linux 启动器是**本机私货**（原生版路径 / 浏览器 profile / 权限位都跟机器绑定），
+  // 两台机器之间搬没有意义。.gitignore 里也忽略了它（前导 / = 只锚定游戏根，修复后语义正确），
+  // 但这里**必须再写一次**：便携包的游戏目录未必带 .gitignore，
+  // 而这条走 ruleMatcher 的前导 / 分支 → 精确匹配根目录那一个文件，scripts/ 里的照常同步。
+  '/启动游戏.command',
+  // 每台机器各不相同的私货：口令 / 端点 / 运行期状态
+  'scripts/sync/sync.config.json', 'tools/sync/.cache.json', 'scripts/sync/.cache.json',
+  // 同步服务自己的运行期文件（save/ 已被 .gitignore 忽略，这里是双保险）
+  'save/.sync.pid', 'save/sync.out.log', 'save/sync.err.log',
+  // 版本库与缓存：git 自己管理，同步搬它有害无益（.gitignore 管不到 .git 自身）
+  '.git/', '.cache/', 'build/',
+  // 运行期噪音（.gitignore 里没有这几条，但同步更不该搬它们）
+  '*.log', '*.tmp', '*.swp', '*~',
+  // 开发截图（headless-shot / test-battle 跑出来的证据图）：本机产物，两台机器之间来回搬
+  // 只会白占空间。仓库的 .gitignore 已经忽略了它们，但**这里也要留** ——
+  // 同步的「游戏目录」可能是任意解压出来的目录（未必带 .gitignore），
+  // 而且 tools/test-sync.cjs 明确断言了「这两类截图不进清单」（见该文件第 154 行）。
+  'tools/verification/*.png', 'tools/research/*.png', 'tools/research/*.jpg',
+  'tools/research/tmp-*.png', 'tools/research/battle-check/',
+  // macOS 资源分叉（.gitignore 里只有 .DS_Store，挡不住 ._xxx）
+  '._*',
+  // 「没有 .gitignore 也能用」的底线：便携包（release.yml）**不带 .gitignore**，
+  // 解压出来的目录同样不能把存档 save/、依赖 node_modules/、原版归档 references/、
+  // 构建/发布产物 out/ dist/ _site/ 这些整包传给对端。
+  // （上面这些在仓库里由 .gitignore 负责，但同步的游戏目录未必是仓库。）
+  'save/', 'node_modules/', 'references/', 'out/', 'dist/', '_site/', '__pycache__/',
+  'package-lock.json', '.DS_Store', 'Thumbs.db', 'desktop.ini',
+];
+
+
+// ---------------------------------------------------------------- 小工具
+
+const log = (...a) => console.log(...a);
+const warn = (...a) => console.log(...a);
+function die(msg, code) { console.error(msg); process.exit(code == null ? 1 : code); }
+function nowStamp() {
+  const d = new Date(), p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+}
+function fmtTime(ms) {
+  if (!ms) return '—';
+  const d = new Date(Number(ms)), p = (n) => String(n).padStart(2, '0');
+  return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+const tty = () => !!process.stdout.isTTY;
+const cyan = (s) => (tty() ? '\x1b[36m' + s + '\x1b[0m' : s);
+const green = (s) => (tty() ? '\x1b[32m' + s + '\x1b[0m' : s);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ---------------------------------------------------------------- 配置
+
+let config = null;
+let configMtime = -1;      // 配置文件上次读进来时的 mtime：改了文件不用重启服务也能生效
+
+function defaultConfig() {
+  return {
+    name: os.hostname().replace(/\.local$/i, '') || 'this-pc',
+    port: DEFAULT_PORT,
+    token: crypto.randomBytes(16).toString('hex'),
+    peers: {},          // { "win": "10.32.170.20" }
+    ignore: [],         // 额外忽略项（在 DEFAULT_IGNORE 之后生效）
+  };
+}
+/** 口令指纹：只暴露 6 位，用来判断两台机器的 token 是不是一样，又不至于把口令本身写进日志。 */
+function tokenId(t) { return crypto.createHash('sha1').update(String(t == null ? '' : t)).digest('hex').slice(0, 6); }
+/**
+ * 读配置。**每次都会 stat 一下文件**：改了 scripts/sync/sync.config.json（最常见的是改 token）
+ * 之后不用重启同步服务，下一次请求就用新口令 —— 以前这里是无条件缓存，
+ * 于是出现「两边 token 明明改成一样了，还是报口令不对」，其实是服务进程还拿着启动时的旧口令。
+ */
+function loadConfig() {
+  let st = null;
+  try { st = fs.statSync(configPath()); } catch (e) { st = null; }
+  const mtime = st ? st.mtimeMs : 0;
+  if (config && mtime === configMtime) return config;
+  if (!st && config) return config;                    // 文件暂时读不到，先用手里的
+  let raw = null;
+  try { raw = JSON.parse(fs.readFileSync(configPath(), 'utf8')); } catch (e) { raw = null; }
+  if (!raw || typeof raw !== 'object') {
+    if (config) return config;                         // 文件写坏了也别把内存里的好配置冲掉
+    raw = defaultConfig();
+  }
+  const cfg = Object.assign(defaultConfig(), raw);
+  cfg.port = Number(cfg.port) || DEFAULT_PORT;
+  cfg.token = String(cfg.token || '');
+  cfg.peers = (cfg.peers && typeof cfg.peers === 'object') ? cfg.peers : {};
+  cfg.ignore = Array.isArray(cfg.ignore) ? cfg.ignore : [];
+  config = cfg;
+  configMtime = mtime;
+  return cfg;
+}
+function saveConfig() {
+  const file = configPath();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(config, null, 2) + '\n', 'utf8');
+  try { configMtime = fs.statSync(file).mtimeMs; } catch (e) { configMtime = -1; }
+}
+/** 没有配置文件就生成一份（含随机口令）。 */
+function ensureConfig() {
+  const existed = fs.existsSync(configPath());
+  loadConfig();
+  if (!existed) saveConfig();
+  return config;
+}
+
+// ---------------------------------------------------------------- 忽略规则
+
+function ruleMatcher(rule) {
+  // 以 / 开头 = 只匹配游戏目录「根那一层」（用来精确忽略根目录下的某个文件/文件夹）
+  if (rule.startsWith('/')) {
+    const p = rule.replace(/^\/+/, '').replace(/\/+$/, '');
+    if (rule.endsWith('/')) return (rel) => rel === p || rel.startsWith(p + '/');
+    return (rel) => rel === p;
+  }
+  if (rule.endsWith('/')) { const p = rule.slice(0, -1); return (rel) => rel === p || rel.startsWith(p + '/'); }
+  if (rule.includes('*')) {
+    const rx = new RegExp('^' + rule.split('*').map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$');
+    return (rel, base) => rx.test(rel) || rx.test(base);
+  }
+  // 带 / 的写死路径（例：scripts/sync/sync.config.json）按相对路径匹配，也当目录前缀
+  if (rule.includes('/')) return (rel) => rel === rule || rel.startsWith(rule + '/');
+  return (rel, base, segs) => base === rule || segs.includes(rule);
+}
+/* 忽略规则的求值顺序（**后写优先**，最后命中的那条说了算）：
+ *
+ *   ① `.gitignore` 的**忽略**规则   —— 屏蔽标准就是它
+ *   ② 内置 `DEFAULT_IGNORE`        —— 便携包/临时目录未必带 .gitignore 时的兜底
+ *   ③ `.gitignore` 的 **`!` 例外**  —— 标准说的"要同步"必须压得住内置清单
+ *   ④ `sync.config.json` 的 ignore —— 玩家自己追加的最优先
+ *
+ *  ⚠⚠ ③ 是**单独拎出来放最后**的，不是跟①混在一起按文件顺序排：`.gitignore` 里写在
+ *    `!out/keep.me` 前面的 `out/` 会把这条例外"夹"在中间，而内置清单里的同一个 `out/`
+ *    又排在它后面 —— 结果就是"`.gitignore` 说要的，内置清单照样挡掉"。
+ *    （旧注释写着"`.gitignore` 的 `!` 例外因此也能『救回』被 DEFAULT_IGNORE 忽略的东西"，
+ *      但实现是按文件顺序整体排在前面的，那句话并不成立；2026-10-16 用 `!out/keep.me` 实测发现。）
+ *
+ *  缓存：sync.js 每次启动进程读一次即可；服务是长驻进程，所以给一个
+ *  「mtime 变了就重建」的失效判断，改完 .gitignore 不用重启服务。 */
+let _matchers = null;
+let _matchersKey = '';
+function buildMatchers() {
+  const list = [];
+  const push = (rules) => {
+    for (const r of rules || []) {
+      const neg = String(r).startsWith('!');
+      list.push({ neg, m: ruleMatcher(neg ? String(r).slice(1) : r) });
+    }
+  };
+  /* `.gitignore` 的规则用 gitignoreGlobRegex 求值，但为了和 ruleMatcher 同形，
+   * 这里直接展开成同样的 {neg, m} 结构（m 接收 (rel, base, segs)）。 */
+  const gi = readGitignorePatterns();
+  const asMatcher = (g) => ({ neg: g.neg, m: (rel) => g.rx.test(rel) });
+  for (const g of gi) if (!g.neg) list.push(asMatcher(g));     // ① 忽略
+  push(DEFAULT_IGNORE);                                        // ② 内置兜底
+  for (const g of gi) if (g.neg) list.push(asMatcher(g));      // ③ `!` 例外压住内置
+  push(loadConfig().ignore || []);                             // ④ 玩家追加
+  return list;
+}
+function ignored(rel) {
+  /* 缓存键：.gitignore 的 mtime + 当前配置里的 ignore 列表 —— service 是长驻进程，
+   * 改完 .gitignore / sync.config.json 不用重启就能生效。
+   * 只算一次 stat（配置那边 loadConfig() 已经自己按 mtime 缓存了）。 */
+  let gk = 0;
+  try { gk = fs.statSync(GITIGNORE_PATH).mtimeMs; } catch (e) { gk = 0; }
+  const key = gk + '|' + JSON.stringify(loadConfig().ignore || []);
+  if (!_matchers || _matchersKey !== key) { _matchers = buildMatchers(); _matchersKey = key; }
+  const segs = rel.split('/');
+  const base = segs[segs.length - 1];
+  let hit = false;
+  for (const r of _matchers) if (r.m(rel, base, segs)) hit = !r.neg;
+  return hit;
+}
+/** 忽略规则的**来源摘要**：给 `/local/status` 与游戏内同步面板用 ——
+ *  让"屏蔽标准就是 .gitignore"这件事**看得见**，而不是让玩家猜。
+ *  只回规则条数 + 三个探针结果，不回整张表（那会把两边的目录结构全暴露出去）。 */
+function ignoreSummary() {
+  let rules = 0, at = 0;
+  try { rules = readGitignorePatterns().length; at = Math.round(fs.statSync(GITIGNORE_PATH).mtimeMs); } catch (e) { rules = 0; at = 0; }
+  return {
+    gitignore: { path: fs.existsSync(GITIGNORE_PATH) ? path.relative(ROOT, GITIGNORE_PATH).split(path.sep).join('/') : '', rules: rules, at: at },
+    builtin: DEFAULT_IGNORE.length,
+    custom: (loadConfig().ignore || []).length,
+    /* 三个探针：本地产物必须被屏蔽、源码必须照常同步。面板直接照这个说人话。 */
+    sample: {
+      'out': ignored('out') && ignored('out/x.png'),
+      'save': ignored('save/progress.json'),
+      'code': !ignored('js/main.js'),
+    },
+  };
+}
+
+// ---------------------------------------------------------------- 文件清单
+
+/** 遍历游戏目录，返回 [{p, s, m}]（相对路径用 / 分隔；m 是修改时间毫秒）。
+ *  判定「内容是否变了」时给 1 秒的宽容（不同文件系统的时间精度不一样），
+ *  但判定「哪边更新」用原始毫秒，这样同一秒内改完就同步也能走对方向。 */
+function walk(root, withHash, sub, out) {
+  out = out || [];
+  sub = sub || '';
+  let entries;
+  try { entries = fs.readdirSync(path.join(root, sub), { withFileTypes: true }); } catch (e) { return out; }
+  for (const e of entries) {
+    const rel = sub ? sub + '/' + e.name : e.name;
+    if (ignored(rel)) continue;
+    if (e.isDirectory()) { walk(root, withHash, rel, out); continue; }
+    let st;
+    try { st = fs.statSync(path.join(root, rel)); } catch (err) { continue; }
+    if (!st.isFile()) continue;
+    const item = { p: rel, s: st.size, m: Math.round(st.mtimeMs) };
+    if (withHash) { try { item.h = sha1File(path.join(root, rel)); } catch (err) {} }
+    out.push(item);
+  }
+  return out;
+}
+function manifestMap(entries) {
+  const m = new Map();
+  for (const e of entries) m.set(e.p, e);
+  return m;
+}
+function sha1File(abs) {
+  return crypto.createHash('sha1').update(fs.readFileSync(abs)).digest('hex');
+}
+/** 内容是否不同：大小不同 = 不同；都用 sha1 时只看哈希；否则看修改时间（差 > 1 秒才算）。 */
+function fileDiffers(a, b, verify) {
+  if (!a || !b) return true;
+  if (a.s !== b.s) return true;
+  if (verify && a.h && b.h) return a.h !== b.h;
+  return Math.abs(a.m - b.m) > 1000;
+}
+/** 哪边更新（内容不同时用它决定传哪边；时间一样时以本机为准）。 */
+function isNewer(a, b) { return a.m >= b.m ? 'a' : 'b'; }
+
+// ---------------------------------------------------------------- 存档备份
+
+function backupSave() {
+  try {
+    if (!fs.existsSync(SAVE_FILE)) return null;
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const dest = path.join(BACKUP_DIR, 'progress-' + nowStamp() + '.json');
+    fs.copyFileSync(SAVE_FILE, dest);
+    const olds = fs.readdirSync(BACKUP_DIR).filter((f) => /^progress-.*\.json$/.test(f)).sort();
+    while (olds.length > BACKUP_KEEP) { try { fs.unlinkSync(path.join(BACKUP_DIR, olds.shift())); } catch (e) {} }
+    return dest;
+  } catch (e) { return null; }
+}
+function readSaveInfo() {
+  try {
+    const st = fs.statSync(SAVE_FILE);
+    const txt = fs.readFileSync(SAVE_FILE, 'utf8');
+    let data = null;
+    try { data = JSON.parse(txt); } catch (e) {}
+    return {
+      exists: true, size: st.size, savedAt: Math.floor(st.mtimeMs),
+      name: data && typeof data.name === 'string' ? data.name : '',
+      level: data && Number.isFinite(data.level) ? data.level : null,
+      data,
+    };
+  } catch (e) { return { exists: false, size: 0, savedAt: 0, name: '', level: null, data: null }; }
+}
+/** 存档「真正的时间」：优先用存档内容里的 savedAt，文件修改时间只作兜底。
+ *  两边判断谁更新时用这个，才不会因为「接收方写盘时间」而误判。 */
+function saveTimeOf(info) {
+  if (!info) return 0;
+  const t = info.data && Number(info.data.savedAt);
+  if (Number.isFinite(t) && t > 0) return t;
+  return Number(info.savedAt) || 0;
+}
+/** 对端存档的真实时间：新版 /api/save/meta 会直接给 saveTime；老版本就取整份存档来读。 */
+async function remoteSaveTime(peer, meta) {
+  if (meta && Number(meta.saveTime)) return Number(meta.saveTime);
+  try {
+    const full = await getJson(peer.host, peer.port, '/api/save', 8000);
+    const t = full && full.data && Number(full.data.savedAt);
+    if (Number.isFinite(t) && t > 0) return t;
+  } catch (e) {}
+  return meta ? (Number(meta.savedAt) || 0) : 0;
+}
+/** 存档的「进度」：判断哪一份更靠前。**不看时间** ——
+ *  这游戏自动保存非常频繁（打开游戏、每次操作都存），谁刚打开过谁的时间就最新，
+ *  用 savedAt 判断「谁更新」完全没有意义。改成比 等级 → 经验 → 金松果。 */
+function saveProgress(info) {
+  const d = (info && info.data) || null;
+  const pick = (k) => {
+    const v = d && d[k] != null ? d[k] : (info ? info[k] : 0);
+    return Number(v) || 0;
+  };
+  return {
+    name: (d && typeof d.name === 'string' && d.name) || (info && info.name) || '',
+    level: pick('level'),
+    exp: pick('exp'),
+    gold: pick('goldPoint'),
+  };
+}
+/** 'a' = 前者更靠前，'b' = 后者更靠前，'same' = 一样 */
+function compareProgress(a, b) {
+  if (!b) return 'a';
+  if (!a) return 'b';
+  if (a.level !== b.level) return a.level > b.level ? 'a' : 'b';
+  if (a.exp !== b.exp) return a.exp > b.exp ? 'a' : 'b';
+  if (a.gold !== b.gold) return a.gold > b.gold ? 'a' : 'b';
+  return 'same';
+}
+function describeProgress(p) {
+  if (!p) return '（没有存档）';
+  return (p.name || '小松鼠') + ' ' + p.level + ' 级（经验 ' + p.exp + '，金松果 ' + p.gold + '）';
+}
+/** 本地存档 + 对端存档的进度对比，给 /local/save/preview 和 savePush/savePull 共用。 */
+async function saveComparison(peer) {
+  const local = readSaveInfo();
+  const remote = await getJson(peer.host, peer.port, '/api/save', 10000).catch(() => null);
+  const lp = local.exists ? saveProgress(local) : null;
+  const rp = remote && remote.exists ? saveProgress(remote) : null;
+  return { local, remote, lp, rp, ahead: (lp && rp) ? compareProgress(lp, rp) : 'same' };
+}
+function describeSave(info, label) {
+  if (!info || !info.exists) return label + '：还没有存档';
+  return label + '：' + (info.name || '小松鼠') + ' ' + (info.level == null ? '?' : info.level) + ' 级 · 存档时间 ' + fmtTime(info.savedAt);
+}
+
+// ---------------------------------------------------------------- 本机地址
+
+/* Windows 的 ZeroTier 网卡名是「ZeroTier One [b9a18a606f69408b]」，macOS 是 feth0 / zt0，
+ * 只有 Linux 才一定叫 ztXXXX。旧版只认 zt/feth 前缀，于是在 Windows 上永远扫不到对端网段
+ * （现象：mac 能连上 win，win 却「找不到对端」）。这里把 ZeroTier 字样的网卡也算上。 */
+const ZT_IFACE_RE = /^(zt|feth)|zerotier/i;
+const ZT_CLI_PATHS = ['/usr/local/bin/zerotier-cli', '/opt/homebrew/bin/zerotier-cli', '/usr/sbin/zerotier-cli',
+  'C:\\Program Files (x86)\\ZeroTier\\One\\zerotier-cli.bat', 'C:\\Program Files\\ZeroTier\\One\\zerotier-cli.bat', 'zerotier-cli'];
+/** 本机所有非回环 IPv4（带网卡名）。 */
+function ipv4List() {
+  const out = [];
+  const ifs = os.networkInterfaces();
+  for (const name of Object.keys(ifs)) {
+    for (const a of ifs[name] || []) if (a.family === 'IPv4' && !a.internal) out.push({ name, ip: a.address });
+  }
+  return out;
+}
+/** 能不能拿去扫：排除回环和 169.254 链路本地（ZeroTier / WLAN 没入网时网卡会拿到这种地址）。 */
+function scannableIp(ip) { return !!ip && !/^127\./.test(ip) && !/^169\.254\./.test(ip); }
+/** 从 zerotier-cli 拿本机 ZeroTier 地址；没有就退回名字像 ZeroTier 的网卡。 */
+let ztIpsCache = { at: 0, ips: [] };
+function zeroTierIps() {
+  // 一条命令里会问好几次（扫网段、自检、打印横幅），5 秒内复用，避免反复弹 zerotier-cli
+  if (ztIpsCache.ips.length && Date.now() - ztIpsCache.at < 5000) return ztIpsCache.ips.slice();
+  const ips = new Set();
+  const cli = findExecutable(ZT_CLI_PATHS);
+  if (cli) {
+    try {
+      // Windows 上的 zerotier-cli 是 .bat，execFile 不能直接跑批处理，得经过 cmd /c。
+      // 非管理员跑 listnetworks 会往 stderr 吐「authtoken.secret not found」，属于正常现象，直接丢掉。
+      const isBatch = /\.(bat|cmd)$/i.test(cli);
+      const out = isBatch
+        ? execFileSync(process.env.ComSpec || 'cmd.exe', ['/c', cli, 'listnetworks'], { encoding: 'utf8', timeout: 6000, stdio: ['ignore', 'pipe', 'ignore'] })
+        : execFileSync(cli, ['listnetworks'], { encoding: 'utf8', timeout: 4000, stdio: ['ignore', 'pipe', 'ignore'] });
+      for (const line of out.split(/\r?\n/)) {
+        for (const c of line.trim().split(/\s+/)) {
+          if (/^\d+\.\d+\.\d+\.\d+\/\d+$/.test(c)) ips.add(c.split('/')[0]);
+        }
+      }
+    } catch (e) {}
+  }
+  if (!ips.size) {
+    for (const iface of ipv4List()) {
+      if (ZT_IFACE_RE.test(iface.name) && scannableIp(iface.ip)) ips.add(iface.ip);
+    }
+  }
+  ztIpsCache = { at: Date.now(), ips: [...ips] };
+  return ztIpsCache.ips.slice();
+}
+/** 除 ZeroTier 以外的本机地址：ZeroTier 认不出来时拿它兜底扫局域网。 */
+function otherLocalIps() {
+  const zt = new Set(zeroTierIps());
+  return ipv4List().map((x) => x.ip).filter((ip) => scannableIp(ip) && !zt.has(ip));
+}
+/** 取 /24 网段前缀。 */
+function subnetOf(ip) { const p = String(ip).split('.'); return p[0] + '.' + p[1] + '.' + p[2]; }
+/** 扫描计划：先 ZeroTier 网段，再（兜底）本机其它网段。discover 命令用它打印进度。 */
+function subnetPlan() {
+  const self = zeroTierIps();
+  const ztNets = [...new Set(self.map(subnetOf))];
+  const extraNets = [...new Set(otherLocalIps().map(subnetOf))].filter((n) => !ztNets.includes(n));
+  return { self, ztNets, extraNets };
+}
+function findExecutable(list) {
+  const exts = process.platform === 'win32' ? ['', '.exe', '.bat', '.cmd'] : [''];
+  for (const p of list) {
+    try {
+      if (p.includes(path.sep) || p.includes('/')) { if (fs.existsSync(p)) return p; continue; }
+      for (const d of (process.env.PATH || '').split(path.delimiter)) {
+        for (const ext of exts) {
+          const f = path.join(d, p + ext);
+          if (fs.existsSync(f)) return f;
+        }
+      }
+    } catch (e) {}
+  }
+  return null;
+}
+function localHostname() { return os.hostname().replace(/\.local$/i, ''); }
+
+// ---------------------------------------------------------------- HTTP 客户端
+
+/** 向对端发一个请求。返回 {status, headers, buffer, json}（json 只在能解析时给出）。 */
+function request(host, port, method, urlPath, opts) {
+  opts = opts || {};
+  const limit = opts.timeout || 15000;
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      host, port, method, path: urlPath,
+      /* 长驻同步服务**不能复用全局 keep-alive agent**：ZeroTier 换过地址 / 对端休眠再回来
+       * 之后，池里的旧 socket 会让新请求直接 EHOSTUNREACH；CLI 每次都是新进程所以看不出来。
+       * 一次同步的请求量不大，关掉连接复用换“不会卡在死 socket 上”是值得的。 */
+      agent: false,
+      headers: Object.assign({ 'x-ssdz-token': loadConfig().token }, opts.headers || {}),
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        const buffer = Buffer.concat(chunks);
+        let json = null;
+        try { json = JSON.parse(buffer.toString('utf8')); } catch (e) {}
+        resolve({ status: res.statusCode, headers: res.headers, buffer, json });
+      });
+    });
+    // 连接阶段的超时也要算数：ZeroTier 上不存在的地址，TCP 握手可能挂很久，
+    // 光靠 socket.setTimeout 不保险，所以自己拿一个定时器兜底 destroy。
+    const timer = setTimeout(() => { try { req.destroy(new Error('连接超时')); } catch (e) {} }, limit);
+    const clear = () => clearTimeout(timer);
+    req.on('close', clear);
+    req.on('error', (e) => { clear(); reject(e); });
+    if (opts.body != null) req.write(opts.body);
+    req.end();
+  });
+}
+async function getJson(host, port, urlPath, timeout) {
+  const r = await request(host, port, 'GET', urlPath, { timeout });
+  if (r.status !== 200) throw new Error((r.json && r.json.msg) || ('HTTP ' + r.status));
+  return r.json;
+}
+async function getBuffer(host, port, urlPath) {
+  const r = await request(host, port, 'GET', urlPath);
+  if (r.status !== 200) throw new Error((r.json && r.json.msg) || ('HTTP ' + r.status));
+  return r;
+}
+/* 对端探测：ZeroTier 走中继时 RTT 可能上到 1 秒以上（实测 Mac↔Win 1106ms、偶发丢包），
+ * 原来只探一次、3 秒超时，链路抖一下就判成「连不上对端」。
+ * 现在：默认超时抬到 6 秒，并且最多重试 3 次（每次间隔 400ms）。 */
+async function pingPeer(host, port, timeout) {
+  const per = Math.max(2000, timeout || 6000);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const r = await request(host, port, 'GET', '/api/ping', { timeout: per });
+      if (r.status === 200 && r.json && r.json.app === APP_TAG) return r.json;
+    } catch (e) {}
+    if (attempt < 2) await new Promise((r) => setTimeout(r, 400));
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------- 对端解析
+
+/** 扫若干个 /24，找开着同步服务的对端（skip 里的地址不扫）。 */
+function scanSubnets(nets, port, skip, budgetMs) {
+  const seen = new Set(skip || []);
+  const targets = [];
+  for (const net of nets) {
+    for (let i = 1; i <= 254; i++) {
+      const cand = net + '.' + i;
+      if (seen.has(cand)) continue;
+      seen.add(cand); targets.push(cand);
+    }
+  }
+  const found = [];
+  return new Promise((resolve) => {
+    if (!targets.length) return resolve(found);
+    let idx = 0, active = 0, done = false;
+    const finish = () => { if (done) return; done = true; clearTimeout(fallback); resolve(found); };
+    const fallback = setTimeout(finish, budgetMs || 12000);   // 兜底：扫太久就直接返回现有的
+    const next = () => {
+      if (done) return;
+      if (idx >= targets.length) { if (active === 0) finish(); return; }
+      const host = targets[idx++];
+      active++;
+      pingPeer(host, port, 800).then((info) => {
+        if (info) found.push({ name: info.name || host, host, saveAt: info.saveAt || 0 });
+      }).catch(() => {}).then(() => { active--; next(); });
+    };
+    for (let i = 0; i < 128; i++) next();
+  });
+}
+/**
+ * 找对端：先试配置里写过的地址 → 再扫本机 ZeroTier 网段 → 一台都没有才兜底扫本机其它网段。
+ * 第三步是给「ZeroTier 网卡名字不标准 / 用的是局域网或 Tailscale」准备的。
+ */
+async function discoverPeers() {
+  const cfg = loadConfig();
+  const plan = subnetPlan();
+  const skip = new Set(ipv4List().map((x) => x.ip));
+  const known = Object.values(cfg.peers || {}).map(String).filter((h) => /^\d+\.\d+\.\d+\.\d+$/.test(h));
+  for (const host of known) {
+    skip.add(host);
+    const info = await pingPeer(host, cfg.port, 1500);
+    if (info) return [{ name: info.name || host, host, saveAt: info.saveAt || 0 }];
+  }
+  const hit = await scanSubnets(plan.ztNets, cfg.port, skip, 8000);
+  if (hit.length || !plan.extraNets.length) return hit;
+  return scanSubnets(plan.extraNets, cfg.port, skip, 12000);
+}
+
+async function resolvePeer(arg) {
+  const cfg = loadConfig();
+  const peers = cfg.peers || {};
+  if (arg) {
+    const key = String(arg).trim();
+    if (peers[key]) return { name: key, host: peers[key], port: cfg.port };
+    if (/^\d+\.\d+\.\d+\.\d+$/.test(key)) return { name: key, host: key, port: cfg.port };
+    const found = await discoverPeers();
+    const hit = found.find((p) => p.name === key);
+    if (hit) return { name: hit.name, host: hit.host, port: cfg.port };
+    throw new Error('不认识这台机器「' + key + '」。先跑一次  node scripts/sync/sync.js discover，' +
+      '或者在 ' + configPath() + ' 的 peers 里写上它的 ZeroTier 地址（例："' + key + '": "10.32.170.20"）。');
+  }
+  const names = Object.keys(peers);
+  if (names.length === 1) return { name: names[0], host: peers[names[0]], port: cfg.port };
+  const found = await discoverPeers();
+  if (found.length === 1) return { name: found[0].name, host: found[0].host, port: cfg.port };
+  if (found.length > 1) throw new Error('发现多台机器（' + found.map((f) => f.name + '@' + f.host).join('、') + '），请指定一台：… push <名字>');
+  if (names.length > 1) throw new Error('配置里有 ' + names.length + ' 台机器，请指定一台：… push <名字>');
+  throw new Error('还没找到对端。跑  node scripts/sync/sync.js discover 扫一下 ZeroTier 网段，或直接  … push <对端IP>');
+}
+
+// ---------------------------------------------------------------- 自检与防火墙
+
+/** 本机防火墙状态（只看，不改）。返回 {label, ok, hint} 数组。 */
+/** Windows：端口是否落在 netsh 的 TCP 保留段里；命中返回 "起-止"，否则 / 查不到返回 null。
+ *  （Hyper-V / WSL 会预留整段端口，非管理员进程绑进去就是 EACCES —— 「服务起不来」的经典根因。） */
+function windowsPortExcluded(port) {
+  if (process.platform !== 'win32') return null;
+  try {
+    const r = execFileSync('netsh', ['interface', 'ipv4', 'show', 'excludedportrange', 'protocol=tcp'], { encoding: 'utf8', timeout: 8000 });
+    const re = /^\s*(\d+)\s+(\d+)\s*\*?\s*$/gm;
+    let m;
+    while ((m = re.exec(r))) {
+      const a = Number(m[1]), b = Number(m[2]);
+      if (port >= a && port <= b) return a + '-' + b;
+    }
+  } catch (e) {}
+  return null;
+}
+/** 能不能绑上这个端口（亲测一次，立刻关掉）。用来给"保留段挡住了"挑一个能用的替代端口。 */
+function canBind(port) {
+  return new Promise((resolve) => {
+    let s;
+    try { s = require('node:net').createServer(); } catch (e) { return resolve(false); }
+    s.once('error', () => { try { s.close(); } catch (e) {} resolve(false); });
+    s.listen(port, '0.0.0.0', () => { try { s.close(); } catch (e) {} resolve(true); });
+  });
+}
+/** 端口自愈：配置里的端口如果落在 **Windows 保留段** 里（Hyper-V/WSL 预留，非管理员绑就是 EACCES），
+ *  自动换到 `DEFAULT_PORT`（或它后面第一个能绑的）。
+ *
+ *  为什么值得自动改：2026-10 起 8788 被圈进了保留段，而**老机器的 sync.config.json 里存的是显式 8788**
+ *  —— `DEFAULT_PORT` 改成 18788 只影响"新生成的配置"，于是老机器上服务永远起不来，
+ *  表现就是「一键同步 / 重启同步服务 点了没反应」。这里把它救回来，并把"对端也要改"喊出来。
+ *
+ *  ⚠ 端口是**两端共用**的（`peerPort = 本机 cfg.port`）：只改本机的话，本机能起来、
+ *    但对端还是往老端口连 —— 所以必须把对面那条命令一起打出来。改完还要 `firewall` 放行新端口。 */
+async function ensureBindablePort(quiet) {
+  const cur = loadConfig().port;
+  const inRange = windowsPortExcluded(cur);
+  if (!inRange) return { port: cur, changed: false };
+  let pick = 0;
+  for (let p = DEFAULT_PORT; p < DEFAULT_PORT + 20 && !pick; p++) {
+    if (windowsPortExcluded(p)) continue;
+    if (await canBind(p)) pick = p;
+  }
+  if (!pick) {
+    if (!quiet) warn('[!] 端口 ' + cur + ' 落在 Windows 保留段 ' + inRange + ' 里，而且 ' + DEFAULT_PORT + '-' + (DEFAULT_PORT + 19) + ' 也都不行。');
+    return { port: cur, changed: false, range: inRange, failed: true };
+  }
+  config.port = pick; saveConfig();
+  if (!quiet) {
+    warn('[!] 端口 ' + cur + ' 落在 Windows 保留段 ' + inRange + ' 里（Hyper-V/WSL 预留，普通权限绑不上）→ 本机已自动改用 ' + pick + '。');
+    warn('    ⚠ **在对面那台也改过来之前，两台机器互相都连不上**（端口是两端共用的，谁都不会去猜）。');
+    warn('      ① 到对面（Mac）上跑一次：node scripts/sync/sync.js port ' + pick + ' 然后重启服务；');
+    warn('      ② 这台机器放行一次新端口（会弹 UAC）：node scripts/sync/sync.js firewall。');
+    warn('    不想动对面 / 想保住 ' + cur + '：开一个【管理员】终端跑  net stop winnat && net start winnat');
+    warn('    再  node scripts/sync/sync.js port ' + cur + ' & node scripts/sync/sync.js restart  —— 两端都不用改。');
+  }
+  return { port: pick, changed: true, from: cur, range: inRange };
+}
+/** 本机防火墙状态（只看，不改）。返回 {label, ok, hint} 数组。 */
+function firewallChecks() {
+  const out = [];
+  if (process.platform === 'darwin') {
+    let state = '';
+    try { state = execFileSync('/usr/libexec/ApplicationFirewall/socketfilterfw', ['--getglobalstate'], { encoding: 'utf8', timeout: 4000 }); } catch (e) {}
+    const enabled = /enabled/i.test(state) && !/disabled/i.test(state);
+    if (!state.trim()) out.push({ label: 'macOS 应用防火墙：查不到状态', ok: true, hint: '查不到就当没拦：macOS 的防火墙默认关闭。' });
+    else if (!enabled) out.push({ label: 'macOS 应用防火墙：已关闭（不会拦入站连接）', ok: true });
+    else {
+      let app = '';
+      try { app = execFileSync('/usr/libexec/ApplicationFirewall/socketfilterfw', ['--getappblocked', process.execPath], { encoding: 'utf8', timeout: 4000 }); } catch (e) {}
+      const blocked = /blocked/i.test(app) && !/not blocked|allowed/i.test(app);
+      out.push({
+        label: 'macOS 应用防火墙：开着' + (app.trim() ? '，node ' + (blocked ? '被拦' : '没被拦') : ''),
+        ok: !blocked,
+        hint: blocked ? '系统设置 → 网络 → 防火墙 → 选项，把 node 改成「允许传入连接」（或直接关掉防火墙）。' : '首次运行如果弹出「是否允许 node 接受传入连接」，要选允许。',
+      });
+    }
+  } else if (process.platform === 'win32') {
+    let has = false;
+    try {
+      const r = execFileSync('netsh', ['advfirewall', 'firewall', 'show', 'rule', 'name=' + FW_RULE_NAME], { encoding: 'utf8', timeout: 8000 });
+      has = r.includes(FW_RULE_NAME);
+    } catch (e) { has = false; }
+    out.push({
+      label: 'Windows 防火墙入站规则「' + FW_RULE_NAME + '」：' + (has ? '已存在' : '没有'),
+      ok: has,
+      hint: has ? '' : '跑一次  node scripts/sync/sync.js firewall （会弹 UAC），或者双击「一键同步」菜单里的「a) 自检 / 放行防火墙」。' +
+        '没有这条规则时，另一台机器连不上你这台的 ' + loadConfig().port + ' 端口（现象是「连不上」，而且本机看起来一切正常）。',
+    });
+  }
+  return out;
+}
+/** Windows：加一条入站放行规则（需要管理员；没有权限就自动弹 UAC 重来一次）。 */
+function firewallAdd() {
+  const port = loadConfig().port;
+  if (process.platform !== 'win32') {
+    log('这个命令只在 Windows 上需要：macOS 的防火墙默认不放行也会弹窗问一次，允许就行。');
+    for (const c of firewallChecks()) log('  ' + (c.ok ? '[√]' : '[!]') + ' ' + c.label + (c.hint ? '\n      → ' + c.hint : ''));
+    return;
+  }
+  const args = ['advfirewall', 'firewall', 'add', 'rule', 'name=' + FW_RULE_NAME, 'dir=in', 'action=allow',
+    'protocol=TCP', 'localport=' + String(port), 'profile=any'];
+  try {
+    execFileSync('netsh', args, { stdio: 'inherit' });
+    log(green('[√] 已放行入站 TCP ' + port + '（规则名「' + FW_RULE_NAME + '」）'));
+    return;
+  } catch (e) {
+    warn('[!] 直接加规则失败（大概是没用管理员权限），正在弹 UAC …');
+  }
+  try {
+    const inner = 'netsh ' + args.map((a) => (a.includes(' ') ? '"' + a + '"' : a)).join(' ');
+    execFileSync('powershell', ['-NoProfile', '-Command',
+      'Start-Process -Verb RunAs -Wait -FilePath cmd.exe -ArgumentList \'/c ' + inner + ' & pause\''],
+      { stdio: 'inherit', timeout: 120000 });
+    log(green('[√] 已请求管理员权限添加规则；如果刚才那个黑窗口里没报错，就是加好了。'));
+  } catch (e) {
+    warn('[x] 没加成。手动来一次也可以：右键开始菜单 →「终端(管理员)」→ 粘贴：');
+    warn('    ' + inner);
+  }
+}
+
+/** 一次性把所有常见故障点过一遍，告诉用户下一步该做什么。 */
+async function doctor(opts) {
+  const cfg = ensureConfig();
+  const lines = [];
+  const say = (s) => { log(s); lines.push(s); };
+
+  say(cyan('松鼠大战 · 双机同步自检'));
+  say('');
+  say('1) Node 与配置');
+  say('   node ' + process.version + '（' + process.execPath + '）');
+  say('   本机名字：' + cfg.name + '，端口：' + cfg.port + '，口令：' + (cfg.token ? cfg.token.slice(0, 4) + '…（' + cfg.token.length + ' 位）' : '（空！）'));
+  say('   游戏目录：' + ROOT);
+  say('   已配置对端：' + (Object.keys(cfg.peers || {}).length ? Object.entries(cfg.peers).map(([k, v]) => k + '=' + v).join('、') : '（无）'));
+  if (process.platform === 'win32') {
+    const hit = windowsPortExcluded(cfg.port);
+    if (hit) say('   [x] 端口 ' + cfg.port + ' 落在系统保留段 ' + hit + ' 里（Hyper-V/WSL 之类预留的）：非管理员绑不上，服务会报 EACCES。');
+    if (hit) say('       换一个：node scripts/sync/sync.js port <新端口>（两台机器都要换），再 firewall 放行。');
+  }
+
+  say('');
+  say('2) ZeroTier');
+  const cli = findExecutable(ZT_CLI_PATHS);
+  const ips = zeroTierIps();
+  if (!cli) say('   [!] 找不到 zerotier-cli（ZeroTier 没装或不在 PATH 里）');
+  else {
+    try {
+      const isBatch = /\.(bat|cmd)$/i.test(cli);
+      const info = isBatch
+        ? execFileSync(process.env.ComSpec || 'cmd.exe', ['/c', cli, 'info'], { encoding: 'utf8', timeout: 6000, stdio: ['ignore', 'pipe', 'ignore'] })
+        : execFileSync(cli, ['info'], { encoding: 'utf8', timeout: 4000, stdio: ['ignore', 'pipe', 'ignore'] });
+      say('   ' + info.trim());
+    } catch (e) { say('   [!] zerotier-cli info 失败：' + (e.message || e)); }
+  }
+  say('   本机 ZeroTier 地址：' + (ips.join('、') || '（一个都没检测到 —— ZeroTier 没连上）'));
+  const plan = subnetPlan();
+  say('   自动扫描网段：' + (plan.ztNets.map((n) => n + '.0/24').join('、') || '（无）') +
+    (plan.extraNets.length ? '；兜底 ' + plan.extraNets.map((n) => n + '.0/24').join('、') : ''));
+
+  say('');
+  say('3) 本机同步服务');
+  const svc = await pingLocal(cfg.port);
+  if (svc) {
+    say(green('   [√] 正在运行（' + svc.name + '），监听 0.0.0.0:' + cfg.port));
+    // 服务进程可能是改口令之前启动的（老版本会把口令读进内存就不再变），这里直接对一下指纹
+    if (svc.tokenId && svc.tokenId !== tokenId(cfg.token)) {
+      say('   [x] 但本机服务用的还是**旧口令**（服务指纹 ' + svc.tokenId + '，配置文件指纹 ' + tokenId(cfg.token) + '）');
+      say('       → 跑一次 node scripts/sync/sync.js restart 让服务读到新口令');
+    } else if (svc.tokenId) {
+      say('       服务口令指纹：' + svc.tokenId + '（和配置文件一致）');
+    }
+  } else {
+    say('   [x] 没在运行 —— 对端连不上本机');
+    say('       → 双击「一键同步」选「启动后台同步服务」，或跑 node scripts/sync/sync.js start'
+      + (process.platform === 'win32' ? '（Windows 上会注册计划任务「' + WIN_TASK_NAME + '」，关掉窗口也不会停）' : ''));
+  }
+
+  say('');
+  say('4) 防火墙');
+  const fw = firewallChecks();
+  if (!fw.length) say('   （这个平台没有可自动检查的项目）');
+  for (const c of fw) {
+    say('   ' + (c.ok ? green('[√]') : '[x]') + ' ' + c.label);
+    if (!c.ok && c.hint) say('       → ' + c.hint);
+  }
+
+  say('');
+  say('5) 对端');
+  const peerArg = opts.peer || opts._[1];
+  let peer = null;
+  try { peer = await resolvePeer(peerArg); } catch (e) { say('   ' + (e.message || e)); }
+  if (peer) {
+    say('   目标：' + peer.name + ' @ ' + peer.host + ':' + peer.port);
+    const tcp = await tcpProbe(peer.host, peer.port, 3000);
+    say('   TCP 连接：' + (tcp.ok ? green('通（' + tcp.ms + 'ms）') : '不通（' + tcp.reason + '）'));
+    const info = await pingPeer(peer.host, peer.port, 8000);
+    if (info) {
+      say(green('   [√] 同步服务在线：' + info.name + '（存档时间 ' + fmtTime(info.saveAt) + '）'));
+      const st = await request(peer.host, peer.port, 'GET', '/api/status', { timeout: 5000 }).catch(() => null);
+      const mine = tokenId(cfg.token);
+      if (st && st.status === 403) {
+        const rid = (st.json && st.json.tokenId) || info.tokenId || '（对端版本较老，没返回指纹）';
+        say('   [x] 口令不一致：本机指纹 ' + mine + '，对端指纹 ' + rid);
+        say('       → 把两边 scripts/sync/sync.config.json 的 token 改成完全一样（菜单第 8 项看本机的）；');
+        say('       → 改完在对端跑一次 node scripts/sync/sync.js restart（老版本服务不重启不生效）。');
+      } else if (st && st.status === 200) {
+        say(green('   [√] 口令一致（指纹 ' + mine + '），可以直接 push / pull。'));
+      }
+    } else if (!tcp.ok && /超时/.test(tcp.reason || '')) {
+      say('   [x] 连上了但端口没响应 —— 最常见的原因是【对端 Windows 防火墙没放行 ' + peer.port + '】');
+      say('       或【对端根本没启动同步服务】。这两件事都要在对端那台机器上做：');
+      say('       · 对端双击「一键同步」→「启动后台同步服务」；');
+      say('       · 对端跑一次 node scripts/sync/sync.js firewall（Windows 会弹 UAC 放行入站）。');
+    } else if (!tcp.ok) {
+      say('   [x] 连不上 ' + peer.host + ':' + peer.port + '（' + tcp.reason + '）');
+      say('       · 先 ping 一下：' + (process.platform === 'win32' ? 'ping ' : 'ping -c 2 ') + peer.host);
+      say('       · 两边 ZeroTier 都要在线，且在同一张网络里（上面第 2 项）。');
+    } else {
+      say('   [x] 端口通但不是同步服务（可能被别的程序占用）。');
+    }
+  }
+
+  say('');
+  say('6) 结论');
+  const blockers = [];
+  if (!ips.length) blockers.push('本机 ZeroTier 没连上');
+  if (!svc) blockers.push('本机同步服务没启动（对端要连本机时必须开）');
+  if (fw.some((c) => !c.ok)) blockers.push('本机防火墙没放行（对端连本机时会被挡）');
+  if (peer) {
+    const info = await pingPeer(peer.host, peer.port, 2500);
+    if (!info) blockers.push('对端服务连不上（对端没启动服务，或对端防火墙没放行 ' + peer.port + '）');
+    else {
+      const st = await request(peer.host, peer.port, 'GET', '/api/status', { timeout: 5000 }).catch(() => null);
+      if (st && st.status === 403) blockers.push('两边口令（token）不一致 —— 改完要在对端 restart 才生效');
+    }
+  }
+  if (!blockers.length) say(green('   没发现问题：可以 push / pull 了。'));
+  else for (const b of blockers) say('   · ' + b);
+  return lines;
+}
+function tcpProbe(host, port, ms) {
+  const net = require('net');
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const s = new net.Socket();
+    let done = false;
+    const fin = (ok, reason) => { if (done) return; done = true; s.destroy(); resolve({ ok, ms: Date.now() - t0, reason }); };
+    s.setTimeout(ms, () => fin(false, '超时（被防火墙丢包，或对端不在线）'));
+    s.on('error', (e) => fin(false, e.code === 'ECONNREFUSED' ? '端口没人监听（对端服务没启动）' : e.code));
+    s.connect(port, host, () => fin(true));
+  });
+}
+
+// ---------------------------------------------------------------- 任务进度
+/*
+ * 游戏里的「跨设备同步」面板要能看见进度，所以每次 /local/* 同步都记一份进度：
+ * 现在在干什么、传到第几个、最近几行日志、最后成功还是失败（带机器可读的 code）。
+ * 页面用 GET /local/progress 轮询它。
+ */
+const job = {
+  active: false, kind: '', dir: '', peer: '', phase: '空闲',
+  done: 0, total: 0, bytes: 0, startedAt: 0, finishedAt: 0,
+  ok: null, code: '', msg: '', lines: [], save: null,
+};
+function jobReset(kind, dir, peer) {
+  job.active = true; job.kind = kind || ''; job.dir = dir || ''; job.peer = peer || '';
+  job.phase = '准备中'; job.done = 0; job.total = 0; job.bytes = 0;
+  job.startedAt = Date.now(); job.finishedAt = 0; job.ok = null; job.code = ''; job.msg = '';
+  job.lines = []; job.save = null;
+}
+function jobPhase(phase) { job.phase = phase; jobLine('· ' + phase); }
+function jobLine(text) {
+  job.lines.push(String(text));
+  if (job.lines.length > 40) job.lines.shift();
+}
+function jobProgress(done, total, bytes) {
+  if (typeof done === 'number') job.done = done;
+  if (typeof total === 'number') job.total = total;
+  if (typeof bytes === 'number') job.bytes += bytes;
+}
+function jobFinish(ok, code, msg) {
+  job.active = false; job.ok = !!ok; job.code = code || ''; job.msg = msg || '';
+  job.finishedAt = Date.now();
+  job.phase = ok ? '完成' : '失败'; jobLine('· ' + (msg || (ok ? '完成' : '失败')));
+}
+function jobSnapshot() {
+  return {
+    active: job.active, kind: job.kind, dir: job.dir, peer: job.peer, phase: job.phase,
+    done: job.done, total: job.total, bytes: job.bytes,
+    startedAt: job.startedAt, finishedAt: job.finishedAt,
+    ok: job.ok, code: job.code, msg: job.msg,
+    lines: job.lines.slice(-14), save: job.save,
+  };
+}
+/** 带 code 的错误：面板据此给出对症的下一步提示。 */
+function syncError(code, msg) { const e = new Error(msg); e.code = code; return e; }
+
+// ---------------------------------------------------------------- 存档同步
+
+async function savePush(peer, opts) {
+  const local = readSaveInfo();
+  if (!local.exists) throw syncError('NO_LOCAL_SAVE', '本机还没有存档（' + SAVE_FILE + '），先在游戏里玩一局、等它保存好再同步。');
+  jobPhase('读取两边存档');
+  const cmp = await saveComparison(peer);
+  const { lp, rp } = cmp;
+  const remote = cmp.remote;      // 对端的完整存档（含 data），下面「内容是否一致」要用
+  job.save = { local: lp, remote: rp };
+  log('本机  ：' + describeProgress(lp));
+  log('对端  ：' + describeProgress(rp));
+  jobLine('本机  ：' + describeProgress(lp));
+  jobLine('对端  ：' + describeProgress(rp));
+  // 方向是用户点出来的（「把存档送过去」），所以**不再因为「谁的时间更新」而拦下来**。
+  // 只在对面进度更靠前时提醒一句 —— 覆盖前的自动备份仍然照做。
+  const targetAhead = rp && compareProgress(rp, lp) === 'a';
+  if (targetAhead) {
+    warn('');
+    warn('[!] 对面的进度更靠前（' + describeProgress(rp) + '），你仍然用本机的 ' + describeProgress(lp) + ' 覆盖了它。');
+    warn('    对面旧档会自动备份到它对端的 save/backup/，想反悔可以拉回来。');
+  }
+  // 两边内容完全一样就别白推一次：每次覆盖都会在对端 save/backup/ 留一份备份，
+  // 反复推同一份只会堆垃圾。这里按**内容**比（以前按时间+大小，时间已经不用来判断新旧了）。
+  if (!opts.force && remote && remote.exists && remote.data) {
+    try {
+      if (fs.readFileSync(SAVE_FILE, 'utf8') === JSON.stringify(remote.data)) {
+        const msg = '两边存档内容已经一致，没有需要推送的改动。';
+        log((opts.dry ? '[dry] ' : '[√] ') + msg);
+        jobLine(msg);
+        return { ok: true, skipped: true, code: 'SAME_SAVE', msg };
+      }
+    } catch (e) {}
+  }
+  if (opts.dry) { log('[dry] 会把本机存档 POST 到 ' + peer.host + ':' + peer.port); return { ok: true, code: 'OK', msg: '演练：会用本机存档覆盖对面' }; }
+  jobPhase('把存档写到对端');
+  const body = fs.readFileSync(SAVE_FILE);
+  const post = (force) => request(peer.host, peer.port, 'POST', '/api/save' + (force ? '?force=1' : ''), {
+    headers: { 'content-type': 'application/json' }, body,
+  });
+  let r = await post(opts.force);
+  // 对端如果还是老版本，会用「文件修改时间」拦一手；方向是用户点的，自动带 force 重发一次
+  if (r.json && !r.json.ok && (r.json.code === 'PEER_NEWER' || /没有覆盖/.test(String(r.json.msg || '')))) {
+    jobLine('对端是老版本、还在按文件时间拦 → 自动带 force 重发一次');
+    r = await post(true);
+  }
+  if (r.status !== 200 || !r.json || !r.json.ok) throw syncError((r.json && r.json.code) || 'PEER_REJECT', (r.json && r.json.msg) || ('对端拒绝：HTTP ' + r.status));
+  const note = r.json.backup ? '（对面原来的 ' + describeProgress(rp) + ' 已备份成 ' + r.json.backup + '）' : '';
+  log(green('[√] 已把存档送到「' + peer.name + '」：' + describeProgress(lp)) + note);
+  return {
+    ok: true, code: 'OK',
+    warn: targetAhead ? '对面的进度本来更靠前，这次是用本机这份把它覆盖了' : '',
+    msg: '已把存档送到「' + peer.name + '」：' + describeProgress(lp) + note,
+  };
+}
+
+async function savePull(peer, opts) {
+  jobPhase('读取两边存档');
+  const local = readSaveInfo();
+  const r = await request(peer.host, peer.port, 'GET', '/api/save', { timeout: 8000 });
+  if (r.status !== 200 || !r.json || !r.json.ok) throw syncError('PEER_REJECT', (r.json && r.json.msg) || ('对端拒绝：HTTP ' + r.status));
+  const remote = r.json;
+  log(describeSave(local, '本机  '));
+  log(describeSave(remote, '对端  '));
+  job.save = { local: { name: local.name, level: local.level, savedAt: local.savedAt },
+               remote: { name: remote.name, level: remote.level, savedAt: remote.savedAt, exists: remote.exists } };
+  jobLine(describeSave(local, '本机  '));
+  jobLine(describeSave(remote, '对端  '));
+  if (!remote.exists) return { ok: false, code: 'PEER_NO_SAVE', msg: '对端还没有存档，没什么可取的。' };
+  // 同上：方向是用户点出来的（「取回对面存档」），不再用时间拦；只在被覆盖的那份更靠前时提醒
+  const lp = local.exists ? saveProgress(local) : null;
+  const rp = saveProgress(remote);
+  const targetAhead = lp && compareProgress(lp, rp) === 'a';
+  if (targetAhead) {
+    warn('');
+    warn('[!] 本机的进度更靠前（' + describeProgress(lp) + '），你仍然用对面的 ' + describeProgress(rp) + ' 覆盖了它。');
+    warn('    本机旧档会自动备份到 save/backup/，想反悔可以拷回来。');
+  }
+  if (opts.dry) { log('[dry] 会把对端存档写入 ' + SAVE_FILE); return { ok: true }; }
+  jobPhase('写入本机存档');
+  fs.mkdirSync(SAVE_DIR, { recursive: true });
+  const backup = backupSave();
+  fs.writeFileSync(SAVE_FILE, JSON.stringify(remote.data), 'utf8');
+  // 同上：时间对齐成对面存档的 savedAt，这样两边的时间戳含义一致、不会再互相挡
+  const at = Number(remote.data && remote.data.savedAt) || Number(remote.savedAt) || Date.now();
+  try { fs.utimesSync(SAVE_FILE, at / 1000, at / 1000); } catch (e) {}
+  log(green('[√] 已从「' + peer.name + '」取回存档：' + describeProgress(rp)));
+  if (backup) log('    本机旧档（' + describeProgress(lp) + '）已备份到 ' + path.relative(ROOT, backup));
+  log('    游戏里刷新页面（或重新进系统页）即可看到新进度。');
+  return {
+    ok: true, code: 'OK',
+    warn: targetAhead ? '本机进度本来更靠前，这次是用对面那份把它覆盖了' : '',
+    msg: '已从「' + peer.name + '」取回存档：' + describeProgress(rp) + (backup ? '（本机原来的存档已备份成 ' + path.basename(backup) + '）' : ''),
+  };
+}
+
+// ---------------------------------------------------------------- 文件同步
+
+/** 拿到两边的清单，按「大小+修改时间」（verify 时按 sha1）算出差集。 */
+async function diffWithPeer(peer, verify) {
+  const local = manifestMap(walk(ROOT, verify));
+  const rem = await getJson(peer.host, peer.port, '/api/manifest' + (verify ? '?hash=1' : ''), 120000);
+  const remote = manifestMap(rem.entries || []);
+  // 清单由对端算出来，对端可能是老版本、忽略清单不一样（例如会把 Windows 专属的
+  // src-tauri/node_modules 也列进来）。这里按**本机**的规则再滤一遍，
+  // 保证「我只碰我认为该同步的文件」，不会把对面的平台二进制拉到本机。
+  for (const p of [...remote.keys()]) if (ignored(p)) remote.delete(p);
+  const toSend = [], toFetch = [], onlyLocal = [], onlyRemote = [];
+  for (const [p, e] of local) {
+    const r = remote.get(p);
+    if (!r) { onlyLocal.push({ p, e }); continue; }
+    if (!fileDiffers(e, r, verify)) continue;
+    if (isNewer(e, r) === 'a') toSend.push({ p, e }); else toFetch.push({ p, r });
+  }
+  for (const [p, r] of remote) if (!local.has(p)) onlyRemote.push({ p, r });
+  return { local, remote, toSend, toFetch, onlyLocal, onlyRemote };
+}
+async function collectFilePlan(peer, opts) {
+  let plan = await diffWithPeer(peer, !!opts.verify);
+  // 两边的文件来自不同来源（zip 解压、U 盘拷、换过机器）时修改时间会整体错开，
+  // 按时间比就会显示「一千多个文件都变了」，真去推等于把几十 MB 原样重传一遍。
+  // 遇到这种数量级就自动改用 sha1 按内容再比一次 —— 实测 1492 个「变了」里只有 17 个是真的。
+  const suspect = plan.toSend.length + plan.toFetch.length;
+  if (!opts.verify && suspect > 200) {
+    log('按修改时间看有 ' + suspect + ' 个文件不同，多半是两边时间戳整体错开；自动改用内容比对（sha1）…');
+    const t0 = Date.now();
+    plan = await diffWithPeer(peer, true);
+    log('内容比对完成（' + ((Date.now() - t0) / 1000).toFixed(1) + 's）：实际不同的只有 ' +
+      (plan.toSend.length + plan.toFetch.length) + ' 个。');
+  }
+  return plan;
+}
+
+/**
+ * `--delete`：镜像式删除 —— 把「对端有、本机清单里没有」的文件在本机删掉。
+ *
+ * 用户口径（2026-10）：希望同步能删文件。
+ * 默认**不开**：这个功能一旦方向搞反就是不可逆的数据丢失，必须显式 `--delete`。
+ *
+ * 安全边界（每一条都是刻意的）：
+ *   1. 只删**文件**，从不删目录（空目录留着无所谓，省得连 .git 内部结构都动到）；
+ *   2. 只删**本机**的文件（push 时对端的多余文件不碰；pull 时才是本机）；
+ *      反过来，「本机有、对端没有」的文件要同步到对端后由**对端自己**跑 `--delete`
+ *      才能删 —— 本机没有权限直接删对端的文件（服务端故意不提供删除接口）。
+ *   3. 忽略清单里的路径永不删；
+ *   4. 同一次同步里**传失败的文件不删**（`failedPaths`），否则会「传失败 + 删掉」= 真丢数据；
+ *   5. 对端清单为空 / 明显拿不到时直接跳过（避免一次网络抖动把本机文件清空）；
+ *   6. `--dry` 时只列不删。
+ */
+async function deleteExtras(plan, opts, direction, failedPaths) {
+  const extras = direction === 'push' ? plan.onlyRemote : plan.onlyLocal;
+  const who = direction === 'push' ? '对端' : '本机';
+  if (!extras.length) return { ok: true, deleted: 0, skipped: 0, code: 'OK', msg: '没有需要删除的多余文件' };
+  /* 安全闸：对端清单一个文件都没有，却报「本机多出一堆」—— 多半是清单没取到，别删。 */
+  if (direction === 'push' && plan.remote.size === 0) {
+    warn('[!] 对端清单是空的，跳过删除（避免误删；先确认对端服务与口令正常）。');
+    return { ok: false, deleted: 0, skipped: extras.length, code: 'SKIP_EMPTY_MANIFEST',
+      msg: '对端清单为空，已跳过删除' };
+  }
+  const targets = [];
+  let skipped = 0;
+  for (const x of extras) {
+    const p = x.p;
+    if (ignored(p)) { skipped++; continue; }               // 规则 3
+    if (failedPaths && failedPaths.has(p)) { skipped++; continue; }  // 规则 4
+    const abs = path.resolve(ROOT, p);
+    if (!abs.startsWith(ROOT + path.sep)) { skipped++; continue; }   // 越界保护
+    let st = null;
+    try { st = fs.statSync(abs); } catch (e) { skipped++; continue; } // 已经不在了
+    if (!st.isFile()) { skipped++; continue; }             // 规则 1：只删文件
+    targets.push({ p, abs });
+  }
+  if (opts.dry) {
+    for (const t of targets) log('[dry] 会删除 ' + t.p);
+    return { ok: true, deleted: 0, skipped, code: 'OK',
+      msg: '演练：会删除 ' + targets.length + ' 个' + who + '多余的文件' + (skipped ? '（跳过 ' + skipped + '）' : '') };
+  }
+  let deleted = 0, failed = 0;
+  for (const t of targets) {
+    try { fs.unlinkSync(t.abs); deleted++; log('  ✗ 删除 ' + t.p); jobLine('删除 ' + t.p); }
+    catch (e) { failed++; warn('  [!] 删除失败 ' + t.p + '：' + ((e && e.message) || e)); }
+  }
+  /* 顺手清掉因为删文件而空掉的目录（只往上走到游戏根，且目录确实为空才删）。 */
+  const dirs = new Set();
+  for (const t of targets) dirs.add(path.dirname(t.abs));
+  for (const d of dirs) pruneEmptyDirs(d);
+  log(green('[√] 删除 ' + deleted + ' 个' + who + '多余的文件') + (skipped ? '（跳过 ' + skipped + '）' : '') + (failed ? '，失败 ' + failed : ''));
+  return { ok: true, deleted, skipped, failed, code: failed ? 'PARTIAL' : 'OK',
+    msg: '删除 ' + deleted + ' 个' + who + '多余的文件' + (failed ? '，失败 ' + failed : '') };
+}
+/** 从最深的目录往上删空目录，遇到非空 / 到游戏根就停。 */
+function pruneEmptyDirs(dir) {
+  let cur = dir;
+  while (cur.startsWith(ROOT + path.sep)) {
+    let names;
+    try { names = fs.readdirSync(cur); } catch (e) { return; }
+    if (names.length) return;
+    try { fs.rmdirSync(cur); } catch (e) { return; }
+    cur = path.dirname(cur);
+  }
+}
+
+async function filesSync(peer, opts, direction) {
+  jobPhase('对比两边文件清单');
+  const plan = await collectFilePlan(peer, opts);
+  log('本机 ' + plan.local.size + ' 个文件，对端 ' + plan.remote.size + ' 个文件');
+  // push：本机较新的 + 本机新加的；pull：对端较新的 + 对端新加的。两边都没有的「新文件」不会互相删。
+  const changes = direction === 'push'
+    ? plan.toSend.concat(plan.onlyLocal)
+    : plan.toFetch.concat(plan.onlyRemote);
+  const fresh = direction === 'push' ? plan.onlyLocal.length : plan.onlyRemote.length;
+  jobProgress(0, changes.length, 0);
+  if (!changes.length) log(green('[√] 没有需要' + (direction === 'push' ? '推送' : '拉取') + '的改动'));
+  else if (fresh) log('其中 ' + fresh + ' 个是' + (direction === 'push' ? '本机新加的' : '对端新加的') + '文件');
+  if (opts.dry) {
+    for (const c of changes) log('[dry] ' + (direction === 'push' ? '→ ' : '← ') + c.p);
+    if (opts.del) await deleteExtras(plan, opts, direction, null);
+    return { ok: true, sent: 0, code: 'OK', msg: '演练：会传 ' + changes.length + ' 个文件（没有真的写）' };
+  }
+  let done = 0, bytes = 0, failed = 0, refusedByPeer = 0, idx = 0;
+  /* 这一趟里**传输失败**的路径 —— `--delete` 必须避开它们（见 deleteExtras 规则 4），
+   * 否则「本机没有 / 传失败」会被当成「对端多余」而在本机删掉。 */
+  const failedPaths = new Set();
+  const CONC = 4;
+  async function worker() {
+    while (idx < changes.length) {
+      const c = changes[idx++];
+      try {
+        if (direction === 'push') {
+          const buf = fs.readFileSync(path.join(ROOT, c.p));
+          const r = await request(peer.host, peer.port, 'POST', '/api/file?path=' + encodeURIComponent(c.p), {
+            headers: { 'content-type': 'application/octet-stream', 'x-ssdz-mtime': String(c.e.m) }, body: buf,
+          });
+          if (r.status !== 200 || !r.json || !r.json.ok) throw new Error((r.json && r.json.msg) || ('HTTP ' + r.status));
+          bytes += buf.length;
+        } else {
+          const r = await getBuffer(peer.host, peer.port, '/api/file?path=' + encodeURIComponent(c.p));
+          const abs = path.join(ROOT, c.p);
+          fs.mkdirSync(path.dirname(abs), { recursive: true });
+          fs.writeFileSync(abs, r.buffer);
+          const mt = Number(r.headers['x-ssdz-mtime']);
+          if (Number.isFinite(mt) && mt > 0) { try { fs.utimesSync(abs, mt / 1000, mt / 1000); } catch (e) {} }
+          bytes += r.buffer.length;
+        }
+        done++;
+        jobProgress(done, changes.length, 0);
+        log((direction === 'push' ? '  → ' : '  ← ') + c.p);
+        jobLine((direction === 'push' ? '→ ' : '← ') + c.p);
+      } catch (e) {
+        const em = String((e && e.message) || e);
+        if (/路径不合法或已被忽略/.test(em)) {
+          // 对端按它自己的忽略清单拒收：通常是对端版本较旧（忽略清单不一样）。
+          // 这不是故障，算「跳过」，并告诉用户怎么让它生效。
+          refusedByPeer++;
+          jobLine('⊘ ' + c.p + '（对端忽略清单拒收）');
+        } else {
+          failed++;
+          failedPaths.add(c.p);        // --delete 必须避开它（见 deleteExtras 规则 4）
+          jobLine('✗ ' + c.p + '：' + em);
+          warn('  [!] ' + c.p + ' 失败：' + em);
+        }
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(CONC, changes.length)) }, worker));
+  log(green('[√] ' + (direction === 'push' ? '推送' : '拉取') + ' ' + done + '/' + changes.length + ' 个文件（' + (bytes / 1024).toFixed(0) + ' KB）') + (failed ? '，失败 ' + failed + ' 个' : ''));
+  if (direction === 'push' && plan.onlyRemote.length) log('    对端还多出 ' + plan.onlyRemote.length + ' 个本机没有的文件' + (opts.del ? '（下面按 --delete 处理）' : '（不会自动删，需要时加 --delete）'));
+  if (direction === 'pull' && plan.onlyLocal.length) log('    本机还有 ' + plan.onlyLocal.length + ' 个对端没有的文件' + (opts.del ? '（下面按 --delete 处理）' : '（不会自动删，需要时加 --delete）'));
+  if (refusedByPeer) {
+    log('    对端按自己的忽略清单拒收了 ' + refusedByPeer + ' 个文件');
+    log('    （最常见的原因：对端那台还是旧版本/旧目录布局。在对端跑一次');
+    log('      node scripts/sync/sync.js restart，或者双击 scripts/restart-sync.cmd，之后再同步一次就会过去。）');
+  }
+  /* --delete：传完之后再删，这样「新文件先落地、再清理对面没有的」顺序最安全。 */
+  let delInfo = null;
+  if (opts.del) {
+    log('');
+    log(cyan('—— 删除' + (direction === 'push' ? '对端' : '本机') + '多余的文件（--delete）——'));
+    jobPhase('删除多余文件');
+    try { delInfo = await deleteExtras(plan, opts, direction, failedPaths); }
+    catch (e) { warn('[!] 删除阶段出错：' + ((e && e.message) || e)); }
+  }
+  const verb = direction === 'push' ? '推送' : '拉取';
+  if (!changes.length) {
+    const dm = delInfo ? '；' + delInfo.msg : '';
+    return { ok: true, sent: 0, failed: 0, deleted: delInfo ? delInfo.deleted : 0,
+      code: delInfo && delInfo.code !== 'OK' ? delInfo.code : 'OK',
+      msg: '两边文件一致，没有需要' + verb + '的' + dm };
+  }
+  if (failed && !done) throw syncError('FILES_FAILED', verb + '失败：' + failed + ' 个文件都没成功，多半是对端服务断了或磁盘写不进去。');
+  const extra = (failed ? '，失败 ' + failed + ' 个' : '') + (refusedByPeer ? '，对端忽略 ' + refusedByPeer + ' 个（对端版本较旧）' : '')
+    + (delInfo && delInfo.deleted ? '，删除 ' + delInfo.deleted + ' 个' : '');
+  return {
+    ok: true, sent: done, failed, deleted: delInfo ? delInfo.deleted : 0,
+    code: failed ? 'PARTIAL' : (refusedByPeer ? 'PARTIAL_PEER_OLD' : 'OK'),
+    msg: verb + ' ' + done + '/' + changes.length + ' 个文件（' + (bytes / 1024).toFixed(0) + ' KB）' + extra,
+  };
+}
+
+/** watch 用：只推指定的这几个文件。 */
+async function pushFiles(peer, list, opts) {
+  let done = 0;
+  for (const c of list) {
+    try {
+      const buf = fs.readFileSync(path.join(ROOT, c.p));
+      const r = await request(peer.host, peer.port, 'POST', '/api/file?path=' + encodeURIComponent(c.p), {
+        headers: { 'content-type': 'application/octet-stream', 'x-ssdz-mtime': String(c.e.m) }, body: buf,
+      });
+      if (r.status !== 200 || !r.json || !r.json.ok) throw new Error((r.json && r.json.msg) || ('HTTP ' + r.status));
+      done++;
+      log('  → ' + c.p);
+    } catch (e) { warn('  [!] ' + c.p + ' 失败：' + (e.message || e)); }
+  }
+  return done;
+}
+
+// ---------------------------------------------------------------- 接收服务
+
+function safeRelPath(rel) {
+  if (!rel || rel.includes('\0')) return null;
+  const norm = String(rel).replace(/\\/g, '/').replace(/^\/+/, '');
+  if (norm.includes(':')) return null;
+  const segs = norm.split('/');
+  if (segs.some((s) => s === '..' || s === '')) return null;
+  if (ignored(norm)) return null;
+  const abs = path.resolve(ROOT, norm);
+  if (!abs.startsWith(ROOT + path.sep)) return null;
+  return { rel: norm, abs };
+}
+function readBody(req, limit) {
+  return new Promise((resolve, reject) => {
+    let size = 0; const chunks = [];
+    req.on('data', (c) => { size += c.length; if (size > limit) { reject(new Error('太大')); req.destroy(); return; } chunks.push(c); });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+function sendJson(res, code, obj, extraHeaders) {
+  const body = Buffer.from(JSON.stringify(obj), 'utf8');
+  res.writeHead(code, Object.assign({ 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'content-length': body.length }, extraHeaders || {}));
+  res.end(body);
+}
+function tokenOk(req) {
+  const t = String(req.headers['x-ssdz-token'] || '');
+  const want = loadConfig().token;
+  if (!t || !want || t.length !== want.length) return false;
+  try { return crypto.timingSafeEqual(Buffer.from(t), Buffer.from(want)); } catch (e) { return false; }
+}
+function isLoopback(req) {
+  const a = req.socket.remoteAddress || '';
+  return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
+}
+/** 返回：null = 没有 Origin（curl 之类，放行）；undefined = Origin 不合法（拒绝）；字符串 = 回显的 CORS 头。 */
+function allowedOrigin(req) {
+  const o = req.headers.origin;
+  if (!o) return null;
+  /* 允许本机页面：浏览器（127.0.0.1 / localhost / [::1]）以及 Tauri 桌面壳
+   * （macOS 是 tauri://localhost，Windows 是 http://tauri.localhost）。
+   * 桌面客户端里打开游戏时，origin 不是 127.0.0.1，之前会被这条拦掉 →
+   * 游戏内「一键同步」永远报「连不上对端」，而命令行却完全正常。 */
+  if (/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(o)) return o;
+  if (/^https?:\/\/tauri\.localhost(:\d+)?$/.test(o)) return o;
+  if (o === 'tauri://localhost') return o;
+  return undefined;
+}
+
+/** 跑一次 scripts/update-game.js（固定参数、白名单由调用方校验），把它的 JSON 结果拿回来。 */
+function runUpdateHelper(args) {
+  return new Promise((resolve) => {
+    const helper = path.join(ROOT, 'scripts', 'update-game.js');
+    if (!fs.existsSync(helper)) return resolve({ ok: false, code: 'NO_HELPER', msg: '这个游戏目录里没有 scripts/update-game.js，没法一键更新' });
+    execFile(process.execPath, [helper, '--json'].concat(args),
+      { timeout: 1800000, maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
+        const last = String(stdout || '').trim().split('\n').filter(Boolean).pop() || '';
+        let parsed = null;
+        try { parsed = JSON.parse(last); } catch (e) { parsed = null; }
+        if (parsed) {
+          parsed.log = String(stderr || '').trim().split('\n').filter(Boolean).slice(-8);
+          resolve(parsed);
+        } else {
+          resolve({ ok: false, code: 'HELPER_FAILED',
+            msg: ((err && err.message) || '更新脚本没有返回结果') + (stderr ? '：' + String(stderr).trim().slice(-300) : '') });
+        }
+      });
+  });
+}
+
+function createServer() {
+  const iosBuild = createIosBuildService({ root: ROOT });
+  return http.createServer(async (req, res) => {
+    let url;
+    try { url = new URL(req.url, 'http://127.0.0.1'); } catch (e) { return sendJson(res, 400, { ok: false, msg: 'bad url' }); }
+    const p = url.pathname;
+    const cfg = loadConfig();
+
+    // ---- 对端接口（需要口令） ----
+    if (p === '/api/ping') {
+      const s = readSaveInfo();
+      // tokenId 只是口令的 6 位指纹，用来让对面判断「我们俩的口令一样吗」，不需要认证也不会泄露口令
+      return sendJson(res, 200, { ok: true, app: APP_TAG, version: APP_VERSION, name: cfg.name || localHostname(), saveAt: s.savedAt, tokenId: tokenId(cfg.token), startedAt: PROCESS_STARTED_AT });
+    }
+    if (p.startsWith('/api/')) {
+      if (!tokenOk(req)) {
+        return sendJson(res, 403, {
+          ok: false,
+          tokenId: tokenId(cfg.token),
+          msg: '同步口令不对：本机（' + (cfg.name || localHostname()) + '）的口令指纹是 ' + tokenId(cfg.token) +
+            '，和对面不一致。把两边 scripts/sync/sync.config.json 的 token 改成一样；' +
+            '改完不用重启（新版会自动读新配置），老版本要跑一次 node scripts/sync/sync.js restart。',
+        });
+      }
+      try {
+        // This service accepts source snapshots and fixed iOS build operations, never shell commands.
+        if (iosBuild && p.startsWith('/api/ios-build/') && await iosBuild.handle(req, res, url)) return;
+        if (p === '/api/status') {
+          const s = readSaveInfo();
+          return sendJson(res, 200, { ok: true, app: APP_TAG, version: APP_VERSION, name: cfg.name || localHostname(), root: ROOT, saveAt: s.savedAt, saveSize: s.size, exists: s.exists, tokenId: tokenId(cfg.token), ignore: ignoreSummary(), iosBuild: iosBuild ? iosBuild.capabilities() : null });
+        }
+        if (p === '/api/save/meta') { const s = readSaveInfo(); return sendJson(res, 200, { ok: true, exists: s.exists, savedAt: s.savedAt, saveTime: saveTimeOf(s), size: s.size, name: s.name, level: s.level }); }
+        if (p === '/api/save' && req.method === 'GET') {
+          const s = readSaveInfo();
+          return sendJson(res, 200, { ok: true, exists: s.exists, savedAt: s.savedAt, name: s.name, level: s.level, data: s.data });
+        }
+        if (p === '/api/save' && req.method === 'POST') {
+          const body = await readBody(req, SAVE_MAX);
+          let parsed;
+          try { parsed = JSON.parse(body.toString('utf8')); } catch (e) { return sendJson(res, 400, { ok: false, msg: '存档不是合法 JSON' }); }
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return sendJson(res, 400, { ok: false, msg: '存档必须是对象' });
+          // 不再按「谁的时间更新」拒收：发送方是明确点了「把存档送过去」的，
+          // 时间判断在自动保存频繁的游戏里没有意义。旧档永远先备份。
+          const incomingAt = Number(parsed.savedAt) || 0;
+          fs.mkdirSync(SAVE_DIR, { recursive: true });
+          const backup = backupSave();
+          fs.writeFileSync(SAVE_FILE, JSON.stringify(parsed), 'utf8');
+          // 关键：把文件修改时间对齐成存档里的 savedAt。
+          // 否则「接收时间」会变成最新时间，推送方下一次再推就会被
+          // 「对端存档更新」挡下来 —— 表现就是「同步过一次之后再也同步不过去」。
+          const at = incomingAt || Date.now();
+          try { fs.utimesSync(SAVE_FILE, at / 1000, at / 1000); } catch (e) {}
+          return sendJson(res, 200, { ok: true, savedAt: at, backup: backup ? path.basename(backup) : null });
+        }
+        if (p === '/api/manifest') {
+          return sendJson(res, 200, { ok: true, root: ROOT, entries: walk(ROOT, url.searchParams.get('hash') === '1') });
+        }
+        if (p === '/api/file' && (req.method === 'GET' || req.method === 'HEAD')) {
+          const loc = safeRelPath(url.searchParams.get('path') || '');
+          if (!loc) return sendJson(res, 400, { ok: false, msg: '路径不合法或已被忽略' });
+          let data, st;
+          try { data = fs.readFileSync(loc.abs); st = fs.statSync(loc.abs); } catch (e) { return sendJson(res, 404, { ok: false, msg: '文件不存在：' + loc.rel }); }
+          res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': data.length, 'x-ssdz-mtime': String(Math.round(st.mtimeMs)) });
+          return res.end(req.method === 'HEAD' ? undefined : data);
+        }
+        if (p === '/api/file' && req.method === 'POST') {
+          const loc = safeRelPath(url.searchParams.get('path') || '');
+          if (!loc) return sendJson(res, 400, { ok: false, msg: '路径不合法或已被忽略' });
+          const body = await readBody(req, 64 * 1024 * 1024);
+          fs.mkdirSync(path.dirname(loc.abs), { recursive: true });
+          fs.writeFileSync(loc.abs, body);
+          const mt = Number(req.headers['x-ssdz-mtime']);
+          if (Number.isFinite(mt) && mt > 0) { try { fs.utimesSync(loc.abs, mt / 1000, mt / 1000); } catch (e) {} }
+          return sendJson(res, 200, { ok: true, path: loc.rel, size: body.length });
+        }
+        return sendJson(res, 404, { ok: false, msg: '没有这个接口：' + p });
+      } catch (e) {
+        return sendJson(res, 500, { ok: false, msg: String((e && e.message) || e) });
+      }
+    }
+
+    // ---- 本机接口（只允许 127.0.0.1，游戏页面用它做「一键同步」） ----
+    if (p.startsWith('/local/')) {
+      const origin = allowedOrigin(req);
+      if (origin === undefined) return sendJson(res, 403, { ok: false, msg: '只允许来自 127.0.0.1 页面的调用' });
+      const cors = { 'access-control-allow-origin': origin || '*', 'access-control-allow-headers': 'content-type,x-ssdz-token', 'access-control-allow-methods': 'GET,POST,OPTIONS' };
+      if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
+      if (!isLoopback(req)) return sendJson(res, 403, { ok: false, msg: '只允许本机调用' }, cors);
+      try {
+        if (p === '/local/status') {
+          return sendJson(res, 200, {
+            ok: true, app: APP_TAG, name: cfg.name || localHostname(), port: cfg.port,
+            root: ROOT, save: (({ data, ...rest }) => rest)(readSaveInfo()), selfIps: zeroTierIps(), peers: cfg.peers || {},
+            /* 屏蔽标准（.gitignore）也报出去：游戏内同步面板会显示一行，
+             * 玩家能直接确认 out/ 这类本地产物没有被同步。 */
+            ignore: ignoreSummary(),
+          }, cors);
+        }
+        if (p === '/local/discover') {
+          return sendJson(res, 200, { ok: true, found: await discoverPeers() }, cors);
+        }
+        if (p === '/local/progress') {
+          return sendJson(res, 200, Object.assign({ ok: true }, jobSnapshot()), cors);
+        }
+        /* ---------- 一键拉取远端更新（游戏内「游戏更新」面板） ----------
+         * 放在同步服务里而不是只放壳里：轻壳 exe 的内置服务器要重编才有 /__update，
+         * 而这里是「本机 agent」（只允许 127.0.0.1 页面 + Origin 校验）+ Node，旧 exe 也能用。 */
+        if (p === '/local/update/check') {
+          const plat = String(url.searchParams.get('platform') || '');
+          const args = ['--mode=check'];
+          if (/^(darwin|win32|linux|android)$/.test(plat)) args.push('--platform=' + plat);
+          return sendJson(res, 200, await runUpdateHelper(args), cors);
+        }
+        if (p === '/local/update/run') {
+          if (req.method !== 'POST') return sendJson(res, 405, { ok: false, code: 'NEED_POST', msg: '更新动作只接受 POST' }, cors);
+          const mode = String(url.searchParams.get('mode') || 'auto');
+          const asset = String(url.searchParams.get('asset') || '');
+          const plat = String(url.searchParams.get('platform') || '');
+          if (!['auto', 'git', 'release'].includes(mode)) return sendJson(res, 400, { ok: false, code: 'BAD_MODE', msg: '不认识的更新方式' }, cors);
+          if (asset && !/^[A-Za-z0-9._-]{1,120}$/.test(asset)) return sendJson(res, 400, { ok: false, code: 'BAD_ASSET', msg: '资源名不合法' }, cors);
+          const args = ['--mode=' + mode, '--root=' + ROOT];
+          if (url.searchParams.get('dry') === '1') args.push('--dry');
+          if (asset) args.push('--asset=' + asset);
+          if (/^(darwin|win32|linux|android)$/.test(plat)) args.push('--platform=' + plat);
+          return sendJson(res, 200, await runUpdateHelper(args), cors);
+        }
+        /* ---------- 同步预览（游戏内二级确认弹窗的「识别」步骤） ----------
+         * 页面上点「送/取存档」「推/拉文件」时先调这两个接口看一眼会发生什么，
+         * 玩家确认之前不写任何东西：
+         *   · save/preview  → 两边的等级 / 经验 / 金松果 / 存档时间 + 谁更靠前；
+         *   · files/preview → 两个方向各自会动到的文件（数量 / 总字节 / 明细）。
+         * 老版本服务没有这两个接口 → 页面会退回「不带预览的普通确认」。 */
+        if (p === '/local/save/preview') {
+          const peer = await resolvePeer(url.searchParams.get('peer') || '');
+          const cmp = await saveComparison(peer);
+          return sendJson(res, 200, {
+            ok: true, peer: peer.name,
+            local: cmp.lp || { name: '', level: 0, exp: 0, gold: 0 }, localExists: cmp.local.exists,
+            remote: cmp.rp || { name: '', level: 0, exp: 0, gold: 0 }, remoteExists: !!(cmp.remote && cmp.remote.exists),
+            ahead: cmp.ahead,
+            /* 存档时间：优先存档内容里的 savedAt（见 saveTimeOf），和「谁更新」无关，只给玩家看个时间参考。 */
+            localSavedAt: saveTimeOf(cmp.local), remoteSavedAt: cmp.remote ? saveTimeOf(cmp.remote) : 0,
+          }, cors);
+        }
+        /* 文件预览：和 push / pull 走同一套比对（含「差异太多自动退到 sha1 内容比对」），
+         * 但**只读不写**。明细按体积降序、截断到 50 条 —— 页面把明细列全（可滚动），
+         * 再多就报个数。 */
+        if (p === '/local/files/preview') {
+          const peer = await resolvePeer(url.searchParams.get('peer') || '');
+          const plan = await collectFilePlan(peer, {});
+          const brief = (list) => {
+            const files = list.map((x) => { const e = x.e || x.r; return { p: x.p, s: e.s, m: e.m }; })
+              .sort((a, b) => (b.s - a.s) || a.p.localeCompare(b.p));
+            let bytes = 0;
+            for (const f of files) bytes += f.s;
+            return { count: files.length, bytes: bytes, files: files.slice(0, 50) };
+          };
+          return sendJson(res, 200, {
+            ok: true, peer: peer.name, host: peer.host,
+            push: brief(plan.toSend.concat(plan.onlyLocal)),   // 「推改动的文件」会写过去的
+            pull: brief(plan.toFetch.concat(plan.onlyRemote)), // 「拉改动的文件」会写到本机的
+            onlyLocal: plan.onlyLocal.length, onlyRemote: plan.onlyRemote.length,
+          }, cors);
+        }
+        const m = p.match(/^\/local\/(save|files)\/(push|pull)$/);
+        if (m && req.method === 'POST') {
+          const kind = m[1], dir = m[2];
+          /* dry=1：只比对清单、报「会传几个文件」，不写任何东西 ——
+           * 游戏里的「一键更新」用它先给玩家看一眼这次要更新多少文件。 */
+          const opts = { force: url.searchParams.get('force') === '1', dry: url.searchParams.get('dry') === '1' };
+          let peer = null;
+          try {
+            peer = await resolvePeer(url.searchParams.get('peer') || '');
+            jobReset(kind, dir, peer.name);
+            jobPhase('连接「' + peer.name + '」');
+            const info = await pingPeer(peer.host, peer.port, 8000);
+            if (!info) throw syncError('PEER_DOWN', '连不上「' + peer.name + '」(' + peer.host + ':' + peer.port + ')：对端的同步服务没在跑，或者对端防火墙没放行这个端口。');
+            const r = kind === 'save'
+              ? (dir === 'push' ? await savePush(peer, opts) : await savePull(peer, opts))
+              : await filesSync(peer, opts, dir);
+            jobFinish(!!r.ok, r.code || (r.skipped ? 'SKIPPED' : 'OK'), r.msg || '');
+            return sendJson(res, 200, Object.assign({ ok: true, peer: peer.name, job: jobSnapshot() }, r), cors);
+          } catch (e) {
+            const code = (e && e.code) || 'ERROR';
+            const msg = String((e && e.message) || e);
+            jobFinish(false, code, msg);
+            return sendJson(res, 500, { ok: false, code, msg, peer: peer && peer.name, job: jobSnapshot() }, cors);
+          }
+        }
+        return sendJson(res, 404, { ok: false, msg: '没有这个接口：' + p }, cors);
+      } catch (e) {
+        return sendJson(res, 500, { ok: false, msg: String((e && e.message) || e) }, cors);
+      }
+    }
+
+    sendJson(res, 404, { ok: false, msg: '没有这个接口：' + p });
+  });
+}
+
+function startServer(port) {
+  port = port || loadConfig().port;
+  return new Promise((resolve, reject) => {
+    const srv = createServer();
+    srv.on('error', reject);
+    srv.listen(port, '0.0.0.0', () => resolve({ srv, port }));
+  });
+}
+
+// ---------------------------------------------------------------- Windows 计划任务
+/*
+ * 为什么 Windows 上不能只靠 spawn(detached)：
+ *   从终端（尤其 Windows Terminal）里启动的进程属于那个终端所在的 Job Object，窗口一关
+ *   整个 Job 被回收，连 detached 的子进程一起被杀 ——「窗口开着好好的，一关就再也连不上」
+ *   就是这么来的。计划任务由 Task Scheduler 服务拉起，和任何终端/窗口都没关系。
+ * 所以 Windows 上启动后台服务与开机自启一律优先走计划任务，失败才退回 spawn。
+ */
+const WIN_TASK_NAME = 'SSDZ Sync';
+const WIN_HIDDEN_VBS = path.join(TOOL_DIR, 'run-hidden.vbs');   // 用隐藏窗口启动服务（桌面不留黑框）
+
+function winTaskExists() {
+  try {
+    const r = execFileSync('schtasks', ['/Query', '/TN', WIN_TASK_NAME], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 });
+    return r.includes(WIN_TASK_NAME);
+  } catch (e) { return false; }
+}
+/**
+ * Windows 计划任务的 XML 定义。为什么不用 `schtasks /SC ONLOGON` 那条简单命令：
+ *   它的默认值会坑人 —— 默认「只在交流电下启动、切到电池就停」（笔记本上会莫名被停），
+ *   默认还有 3 天运行上限。这里的设置是冲着「让它一直活着」去的：
+ *     · 每 5 分钟重复触发 → 相当于自带看门狗（serve 发现已经在跑就立刻安静退出）
+ *     · 切电池不停、不在电池上也能启动、无运行时长上限
+ *     · 崩了 1 分钟后自动重启，最多 999 次
+ *     · 同一个任务不并行跑第二个实例
+ *   触发器同时挂「登录时」，重启后也不用管。
+ */
+function winTaskXml() {
+  const p = (n) => String(n).padStart(2, '0');
+  const d = new Date(Date.now() - 2 * 60000);
+  const stamp = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':00';
+  const user = process.env.USERDOMAIN && process.env.USERNAME ? process.env.USERDOMAIN + '\\' + process.env.USERNAME : '';
+  const esc = escapeXml;
+  // 用 wscript + run-hidden.vbs 启动：计划任务在交互会话里跑，直接跑 node 会在桌面上
+  // 留一个常驻的黑窗口；包一层 VBS 就能完全隐藏（wscript 自己立刻退出）。
+  const useHidden = fs.existsSync(WIN_HIDDEN_VBS);
+  const cmd = useHidden ? (process.env.SystemRoot || 'C:\\Windows') + '\\System32\\wscript.exe' : process.execPath;
+  // 把绝对的 node 与 sync.js 路径交给 VBS，连 PATH 都不用依赖
+  const arg = useHidden
+    ? '//B //Nologo "' + WIN_HIDDEN_VBS + '" "' + process.execPath + '" "' + __filename + '"'
+    : '"' + __filename + '" serve';
+  return '<?xml version="1.0" encoding="UTF-16"?>\n' +
+    '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">\n' +
+    '  <RegistrationInfo><Description>SSDZ Sync - 松鼠大战双机同步服务</Description></RegistrationInfo>\n' +
+    '  <Triggers>\n' +
+    '    <LogonTrigger><Enabled>true</Enabled>' + (user ? '<UserId>' + esc(user) + '</UserId>' : '') + '</LogonTrigger>\n' +
+    '    <TimeTrigger><StartBoundary>' + stamp + '</StartBoundary><Enabled>true</Enabled>\n' +
+    '      <Repetition><Interval>PT5M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>\n' +
+    '    </TimeTrigger>\n' +
+    '  </Triggers>\n' +
+    '  <Principals><Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>\n' +
+    '  <Settings>\n' +
+    '    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\n' +
+    '    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\n' +
+    '    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\n' +
+    '    <AllowHardTerminate>true</AllowHardTerminate>\n' +
+    '    <StartWhenAvailable>true</StartWhenAvailable>\n' +
+    '    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>\n' +
+    '    <IdleSettings><StopOnIdleEnd>false</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle></IdleSettings>\n' +
+    '    <AllowStartOnDemand>true</AllowStartOnDemand>\n' +
+    '    <Enabled>true</Enabled>\n' +
+    '    <Hidden>false</Hidden>\n' +
+    '    <RunOnlyIfIdle>false</RunOnlyIfIdle>\n' +
+    '    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>\n' +
+    '    <RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure>\n' +
+    '  </Settings>\n' +
+    '  <Actions Context="Author">\n' +
+    '    <Exec>\n' +
+    '      <Command>' + esc(cmd) + '</Command>\n' +
+    '      <Arguments>' + esc(arg) + '</Arguments>\n' +
+    // 故意不写 <WorkingDirectory>：任务计划会拿它当进程的工作目录，而一个进程
+    // 只要把游戏目录当工作目录，Windows 就拒绝改名/移动该目录（MoveFileEx 报
+    // ERROR_ACCESS_DENIED，Explorer 显示成「文件夹正在被使用」）。这里曾经写成
+    // ROOT，导致游戏目录永远改不了名，重启也没用（任务登录即重建）。
+    // sync.js 全部路径都来自 __dirname，不依赖工作目录。
+    '    </Exec>\n' +
+    '  </Actions>\n' +
+    '</Task>\n';
+}
+function winTaskCreate() {
+  // 优先用 XML（自带看门狗 + 电池/时长设置）；XML 建不出来再退回简单命令。
+  // 两次尝试都要留住 schtasks 的报错：旧版把 XML 那次的错误吞了，只剩简单命令一句
+  // "Command failed: schtasks ..."，看不到 "Access is denied" 这类关键信息（诊断慢半拍）。
+  const attempt = (label, args) => {
+    try {
+      execFileSync('schtasks', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 });
+      return null;
+    } catch (e) {
+      const why = String((e && (e.stderr || e.message)) || e).trim().replace(/\s*\r?\n\s*/g, ' ');
+      return label + '失败：' + why;
+    }
+  };
+  const xmlPath = path.join(SAVE_DIR, 'ssdz-sync-task.xml');
+  fs.mkdirSync(SAVE_DIR, { recursive: true });
+  fs.writeFileSync(xmlPath, '\ufeff' + winTaskXml(), 'utf16le');
+  const errXml = attempt('用 XML 建任务', ['/Create', '/TN', WIN_TASK_NAME, '/XML', xmlPath, '/F']);
+  if (!errXml) return;
+  const tr = fs.existsSync(WIN_HIDDEN_VBS)
+    ? (process.env.SystemRoot || 'C:\\Windows') + '\\System32\\wscript.exe //B //Nologo "' + WIN_HIDDEN_VBS + '"'
+    : '"' + process.execPath + '" "' + __filename + '" serve';
+  const errTr = attempt('退回简单命令建任务', ['/Create', '/TN', WIN_TASK_NAME, '/TR', tr, '/SC', 'ONLOGON', '/F']);
+  if (!errTr) return;
+  throw new Error(errXml + '；' + errTr);
+}
+function winTaskRun() { execFileSync('schtasks', ['/Run', '/TN', WIN_TASK_NAME], { stdio: 'ignore', timeout: 20000 }); }
+function winTaskEnd() { try { execFileSync('schtasks', ['/End', '/TN', WIN_TASK_NAME], { stdio: 'ignore', timeout: 15000 }); } catch (e) {} }
+function winTaskDelete() { try { execFileSync('schtasks', ['/Delete', '/TN', WIN_TASK_NAME, '/F'], { stdio: 'ignore', timeout: 15000 }); } catch (e) {} }
+
+// ---------------------------------------------------------------- 后台服务管理
+
+function pingLocal(port) { return pingPeer('127.0.0.1', port, 800); }
+
+/** sync.err.log 的末尾几行。服务在计划和隐藏窗口里跑，报错只有日志里看得到 —— 失败时把线索带进报错。 */
+function errLogTail(n) {
+  try {
+    const lines = fs.readFileSync(ERR_LOG, 'utf8').split(/\r?\n/).filter((l) => l.trim());
+    return lines.slice(-n).join('\n');
+  } catch (e) { return ''; }
+}
+
+async function daemonStart(quiet) {
+  const cfg0 = ensureConfig();
+  /* 先看端口能不能绑：落在 Windows 保留段里就自动换一个（老配置里存的 8788 就是被这个坑住的）。 */
+  await ensureBindablePort(quiet);
+  const cfg = loadConfig();
+  const existing = await pingLocal(cfg.port);
+  if (existing) {
+    // 已经在跑的服务如果用的还是旧口令（老版本启动时把口令读进内存了），这里自动重启一次，
+    // 免得出现「两边 token 明明一样却同步不过去」——用户只要再跑一次 start 就自愈。
+    let codeStale = false;
+    try { codeStale = !!(existing.startedAt && fs.statSync(__filename).mtimeMs > existing.startedAt + 1000); } catch (e) {}
+    if (existing.tokenId && existing.tokenId !== tokenId(cfg.token)) {
+      if (!quiet) log('同步服务用的还是旧口令（服务指纹 ' + existing.tokenId + '，配置指纹 ' + tokenId(cfg.token) + '），自动重启一次…');
+      daemonStop();
+      await sleep(500);
+    } else if (codeStale) {
+      if (!quiet) log('检测到 sync.js 更新过（服务是旧代码），自动重启一次…');
+      daemonStop();
+      await sleep(500);
+    } else {
+      if (!quiet) log('同步服务已经在运行（' + existing.name + '，端口 ' + cfg.port + '）。');
+      return existing;
+    }
+  }
+  fs.mkdirSync(SAVE_DIR, { recursive: true });
+  if (process.platform === 'win32') {
+    // 计划任务：关掉终端、注销再登录都还在（spawn detached 会被终端所在的 Job 一起回收）
+    try {
+      if (winTaskExists()) winTaskDelete();
+      winTaskCreate();
+      winTaskRun();
+      for (let i = 0; i < 60; i++) {
+        await sleep(250);
+        const info = await pingLocal(cfg.port);
+        if (info) {
+          if (!quiet) log('同步服务已通过计划任务启动（任务名「' + WIN_TASK_NAME + '」，端口 ' + cfg.port + '，关掉窗口也不会停）。');
+          return info;
+        }
+      }
+      warn('[!] 计划任务没能把服务拉起来，改用普通后台进程。');
+    } catch (e) {
+      const msg = String((e && e.message) || e);
+      warn('[!] 建计划任务失败（' + msg + '），改用普通后台进程。');
+      // 常见且没法自助恢复的一种：旧任务是用管理员权限注册的 —— 任务文件
+      // （C:\Windows\System32\Tasks\<名字>）的 ACL 只给管理员写权限，普通权限既删不掉
+      // 也覆盖不了，于是每次 start/restart 都卡死在这里。给出一了百了的修法。
+      if (/denied|拒绝/i.test(msg)) {
+        warn('    这是旧任务「' + WIN_TASK_NAME + '」历史上用管理员权限注册留下的：任务文件只允许管理员写，');
+        warn('    普通权限删不掉、也覆盖不了。开一个【管理员】终端跑一遍（只此一次）：');
+        warn('      schtasks /Delete /TN "' + WIN_TASK_NAME + '" /F');
+        warn('    再回来重跑本命令（不需要管理员了），任务会以当前用户重建，之后就都能自愈。');
+      }
+    }
+  }
+  const out = fs.openSync(OUT_LOG, 'a'), err = fs.openSync(ERR_LOG, 'a');
+  const hidden = process.platform === 'win32' && fs.existsSync(WIN_HIDDEN_VBS);
+  // 不传 cwd：让游戏目录当工作目录会让它无法改名/移动（见上面 winTaskXml 的说明）。
+  // 起的是 sync.js 自己，它只用 __dirname，工作目录给不给都一样。
+  const child = hidden
+    ? spawn((process.env.SystemRoot || 'C:\\Windows') + '\\System32\\wscript.exe',
+        ['//B', '//Nologo', WIN_HIDDEN_VBS], { detached: true, stdio: 'ignore', windowsHide: true })
+    : spawn(process.execPath, [__filename, 'serve', '--port', String(cfg.port)], {
+        detached: true, stdio: ['ignore', out, err],
+      });
+  child.unref();
+  for (let i = 0; i < 40; i++) {
+    await sleep(250);
+    const info = await pingLocal(cfg.port);
+    if (info) { if (!quiet) log('同步服务已在后台启动（端口 ' + cfg.port + '）。'); return info; }
+  }
+  const tail = errLogTail(4);
+  throw new Error('同步服务没起来（端口 ' + cfg.port + '）。常见原因：端口被别的程序占用，或被 Windows 保留段挡住（日志里会写是哪一种）。'
+    + (tail ? '\n    最近日志（' + ERR_LOG + '）：\n    ' + tail.replace(/\r?\n/g, '\n    ') : '详细日志：' + ERR_LOG)
+    + '\n    也可以跑 node scripts/sync/sync.js doctor 看一眼自检。');
+}
+/** PID 文件可能是陈的（服务在计划任务里崩过、没来得及清，PID 又被系统复用给别的程序）。
+ *  杀进程前先确认那确实是 node：Windows 用 tasklist，macOS/Linux 用 ps。判断不了返回 null（按旧办法处理）。 */
+function pidLooksLikeNode(pid) {
+  try {
+    if (process.platform === 'win32') {
+      const r = execFileSync('tasklist', ['/FI', 'PID eq ' + pid, '/FO', 'CSV', '/NH'], { encoding: 'utf8', timeout: 8000 });
+      return /node\.exe/i.test(r);
+    }
+    const r = execFileSync('ps', ['-p', String(pid), '-o', 'comm='], { encoding: 'utf8', timeout: 8000 });
+    return /node/i.test(r);
+  } catch (e) { return null; }
+}
+function daemonStop() {
+  if (process.platform === 'win32') winTaskEnd();   // 计划任务里跑的实例也要一起收掉
+  let pid = 0;
+  try { pid = parseInt(fs.readFileSync(PID_FILE, 'utf8').trim(), 10); } catch (e) {}
+  if (pid && pid > 0) {
+    if (pidLooksLikeNode(pid) === false) {
+      try { fs.unlinkSync(PID_FILE); } catch (e) {}
+      log('PID 文件是陈的（' + pid + ' 已经不是 node 进程了，多半被系统复用），已清掉。');
+      return false;
+    }
+    try { process.kill(pid, 'SIGTERM'); } catch (e) {}
+    try { fs.unlinkSync(PID_FILE); } catch (e) {}
+    log('已停掉后台同步服务（PID ' + pid + '）。');
+    return true;
+  }
+  log('没有找到正在运行的后台同步服务。');
+  return false;
+}
+async function daemonStatus() {
+  const cfg = loadConfig();
+  let pid = 0;
+  try { pid = parseInt(fs.readFileSync(PID_FILE, 'utf8').trim(), 10); } catch (e) {}
+  return { running: !!(await pingLocal(cfg.port)), pid };
+}
+
+// ---------------------------------------------------------------- 开机自启
+
+function autostartPath() {
+  if (process.platform === 'darwin') return path.join(os.homedir(), 'Library', 'LaunchAgents', 'com.ssdz.sync.plist');
+  if (process.platform === 'win32') return path.join(process.env.APPDATA || os.homedir(), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'SSDZ-sync.vbs');
+  return path.join(os.homedir(), '.config', 'autostart', 'ssdz-sync.desktop');
+}
+function autostartInstall() {
+  ensureConfig();
+  const file = autostartPath();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  if (process.platform === 'darwin') {
+    const plist = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+      '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n' +
+      '<plist version="1.0"><dict>\n' +
+      '  <key>Label</key><string>com.ssdz.sync</string>\n' +
+      '  <key>ProgramArguments</key><array>\n' +
+      '    <string>' + escapeXml(process.execPath) + '</string>\n' +
+      '    <string>' + escapeXml(__filename) + '</string>\n' +
+      '    <string>serve</string>\n' +
+      '  </array>\n' +
+      // 同样不写 WorkingDirectory：macOS 上把游戏目录当工作目录，一样会让它没法移动/改名。
+      // sync.js 只用 __dirname，不需要工作目录。
+      '  <key>RunAtLoad</key><true/>\n' +
+      '  <key>ProcessType</key><string>Background</string>\n' +
+      '  <key>StandardOutPath</key><string>' + escapeXml(OUT_LOG) + '</string>\n' +
+      '  <key>StandardErrorPath</key><string>' + escapeXml(ERR_LOG) + '</string>\n' +
+      '</dict></plist>\n';
+    fs.writeFileSync(file, plist, 'utf8');
+    try { execFileSync('launchctl', ['unload', file], { stdio: 'ignore' }); } catch (e) {}
+    try { execFileSync('launchctl', ['load', '-w', file], { stdio: 'ignore' }); } catch (e) {}
+    log('已装好开机自启（LaunchAgent）：' + file);
+  } else if (process.platform === 'win32') {
+    // 启动文件夹里的 VBS 会被终端 Job 牵连；计划任务由 Task Scheduler 拉起，最稳
+    winTaskCreate();
+    log('已装好开机自启：计划任务「' + WIN_TASK_NAME + '」（登录即启动，关窗口/注销都不受影响）。');
+    log('想立刻启动：node scripts/sync/sync.js start');
+  } else {
+    const desk = '[Desktop Entry]\nType=Application\nName=SSDZ Sync\nExec="' + process.execPath + '" "' + __filename + '" serve\nX-GNOME-Autostart-enabled=true\n';
+    fs.writeFileSync(file, desk, 'utf8');
+    log('已装好开机自启：' + file);
+  }
+}
+function autostartRemove() {
+  const file = autostartPath();
+  if (process.platform === 'win32') { winTaskDelete(); log('已删掉计划任务「' + WIN_TASK_NAME + '」。'); return; }
+  if (process.platform === 'darwin') { try { execFileSync('launchctl', ['unload', file], { stdio: 'ignore' }); } catch (e) {} }
+  try { fs.unlinkSync(file); log('已取消开机自启。'); } catch (e) { log('本来就没有装开机自启。'); }
+}
+function escapeXml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+// ---------------------------------------------------------------- 命令行
+
+function printBanner() {
+  const cfg = ensureConfig();
+  const ips = zeroTierIps();
+  const peers = Object.keys(cfg.peers || {});
+  log(cyan('松鼠大战 · 双机同步'));
+  log('  本机名字：' + cfg.name);
+  log('  游戏目录：' + ROOT);
+  log('  监听端口：' + cfg.port);
+  log('  ZeroTier：' + (ips.length ? ips.join('、') : '（没检测到 ZeroTier 地址，确认 ZeroTier 已连接）'));
+  log('  同步口令：' + cfg.token);
+  log('  已配置对端：' + (peers.length ? peers.map((k) => k + '=' + cfg.peers[k]).join('、') : '（还没有，用 discover 自动找）'));
+}
+function parseArgs(argv) {
+  const opts = { _: [] };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--save') opts.save = true;
+    else if (a === '--files') opts.files = true;
+    else if (a === '--all') { opts.save = true; opts.files = true; }
+    else if (a === '--force') opts.force = true;
+    else if (a === '--dry') opts.dry = true;
+    else if (a === '--verify') opts.verify = true;
+    else if (a === '--delete' || a === '--mirror') opts.del = true;
+    else if (a === '--port') opts.port = Number(argv[++i]);
+    else if (a === '--peer') opts.peer = argv[++i];
+    else if (a === '--interval') opts.interval = Number(argv[++i]);
+    else opts._.push(a);
+  }
+  return opts;
+}
+/** 没给 --save/--files 时默认两个都做；只给了一个就只做那一个。 */
+function syncKinds(opts) {
+  if (opts.save && !opts.files) return { save: true, files: false };
+  if (opts.files && !opts.save) return { save: false, files: true };
+  return { save: true, files: true };
+}
+async function connectPeer(arg) {
+  const peer = await resolvePeer(arg);
+  // ZeroTier 刚上线 / 机器刚从睡眠唤醒时，头几次连接容易失败，多试几轮再报错
+  const tries = Math.max(1, Number(process.env.SSDZ_SYNC_RETRY) || 4);
+  let info = null;
+  for (let i = 0; i < tries && !info; i++) {
+    if (i) { log('第 ' + (i + 1) + ' 次尝试连接 ' + peer.host + ':' + peer.port + ' …'); await sleep(1200); }
+    info = await pingPeer(peer.host, peer.port, 3000);
+  }
+  if (!info) {
+    const tcp = await tcpProbe(peer.host, peer.port, 3000);
+    throw syncError('PEER_DOWN', '连不上「' + peer.name + '」(' + peer.host + ':' + peer.port + ')：TCP ' + tcp.reason + '\n' +
+      '    · 对端要先把同步服务开着（双击「一键同步」选「启动后台同步服务」，或跑 node scripts/sync/sync.js start）；\n' +
+      '    · 对端是 Windows 的话还要放行入站端口：node scripts/sync/sync.js prepare（会弹 UAC）；\n' +
+      '    · 两边的 ZeroTier 要在线，地址用 node scripts/sync/sync.js discover 复查；\n' +
+      '    · 两边的同步口令（token）要一样。\n' +
+      '    想知道卡在哪一步：node scripts/sync/sync.js doctor ' + peer.name);
+  }
+  // 服务在线了：先验口令，别等传到一半才报 403
+  const mine = tokenId(loadConfig().token);
+  const theirs = info.tokenId || null;
+  const st = await request(peer.host, peer.port, 'GET', '/api/status', { timeout: 5000 }).catch(() => null);
+  if (st && st.status === 403) {
+    const remoteId = (st.json && st.json.tokenId) || theirs;
+    throw syncError('TOKEN', '口令不一致，连上了但被对端拒绝：\n' +
+      '    本机「' + loadConfig().name + '」口令指纹 ' + mine + '；对端「' + (info.name || peer.name) + '」口令指纹 ' +
+      (remoteId || '（对端版本较老，没返回指纹）') + '\n' +
+      '    → 把两边 scripts/sync/sync.config.json 的 token 改成完全一样（菜单第 8 项能看本机的）。\n' +
+      '    → 改完**在对端跑一次** node scripts/sync/sync.js restart（老版本的服务启动时就把口令读进内存了，' +
+      '改文件不重启不会生效，这正是「两边 token 明明一样却同步不过去」最常见的原因）。\n' +
+      '    → 对端如果换成新版 sync.js，就不用重启了：每次请求都会重新读配置。');
+  }
+  if (theirs && theirs !== mine) {
+    throw syncError('TOKEN', '口令不一致：本机指纹 ' + mine + '，对端指纹 ' + theirs + '。\n' +
+      '    改 scripts/sync/sync.config.json 里的 token，两边改成一样即可（新版不用重启，老版本要 restart）。');
+  }
+  return { peer, info };
+}
+async function doSync(direction, opts) {
+  const { peer, info } = await connectPeer(opts.peer || opts._[1]);
+  log('对端：' + info.name + ' @ ' + peer.host + ':' + peer.port);
+  const kinds = syncKinds(opts);
+  if (kinds.save) { log(''); log(cyan('—— 存档 ——')); await (direction === 'push' ? savePush(peer, opts) : savePull(peer, opts)); }
+  if (kinds.files) { log(''); log(cyan('—— 游戏文件 ——')); await filesSync(peer, opts, direction); }
+}
+async function doWatch(opts) {
+  const { peer } = await connectPeer(opts.peer || opts._[1]);
+  const interval = Math.max(1, opts.interval || 3) * 1000;
+  log('盯着本机改动 → ' + peer.name + '（每 ' + (interval / 1000) + ' 秒扫一次，Ctrl+C 结束）');
+  let last = manifestMap(walk(ROOT));
+  let busy = false;
+  const timer = setInterval(async () => {
+    if (busy) return;
+    busy = true;
+    try {
+      const now = manifestMap(walk(ROOT));
+      const changed = [];
+      for (const [p, e] of now) {
+        const old = last.get(p);
+        if (!old || old.s !== e.s || old.m !== e.m) changed.push({ p, e });
+      }
+      last = now;
+      if (changed.length) {
+        log('改动 ' + changed.length + ' 个文件，推给 ' + peer.name + ' …');
+        await pushFiles(peer, changed, opts);
+      }
+    } catch (e) { warn('[!] ' + (e.message || e)); }
+    busy = false;
+  }, interval);
+  const bye = () => { clearInterval(timer); log('已停止监视。'); process.exit(0); };
+  process.on('SIGINT', bye); process.on('SIGTERM', bye);
+  await new Promise(() => {});
+}
+
+const HELP = `松鼠大战 · 双机同步（node scripts/sync/sync.js <命令> [选项]）
+
+  init                        生成配置，显示本机名字 / ZeroTier 地址 / 同步口令
+  serve [--port N]            前台跑接收服务（另一台机器要连的那一头）
+  start | stop | restart      后台接收服务（日志 save/sync.out.log，PID save/.sync.pid）
+  status [peer]               看本机与对端的存档时间、服务状态
+  discover                    扫 ZeroTier 网段，自动找对端
+  doctor [peer]               自检：ZeroTier / 本机服务 / 防火墙 / 对端，卡在哪一步一目了然
+  firewall                    Windows：加一条入站放行规则（弹 UAC）；macOS：只报告状态
+  port [端口]                 查看 / 修改同步端口（两台要一样；换端口后按提示重启与放行）
+  prepare                     一键准备：启动服务 + 放行防火墙 + 自检（连不上先跑这个）
+  push [peer] [选项]          本机 → 对端
+  pull [peer] [选项]          对端 → 本机
+  watch [peer] [--interval N] 盯着本地文件改动，自动推给对端
+  token [值]                  查看 / 设置同步口令（两边要一样）
+  autostart install|remove    开机自启同步服务
+
+选项：--save 只同步存档 / --files 只同步文件 / --all 两者（默认两者）
+      --force 存档比对方旧也覆盖 / --dry 只列计划 / --verify 文件用 sha1 比对
+      --delete 删除「对端没有、本机却有」的多余文件（镜像式；默认不开，先加 --dry 看一遍）
+      --peer <名字或IP> / --interval <秒>
+
+忽略规则：以仓库根的 **.gitignore** 为准（自动读取，改完不用重启服务），
+      再叠加脚本内置的同步专属规则与 sync.config.json 里的 ignore。
+      所以 references/、save/、out/、node_modules/、构建产物等都不会被同步。
+
+例子：
+  node scripts/sync/sync.js start                     # 本机开接收服务
+  node scripts/sync/sync.js discover                  # 找到对端
+  node scripts/sync/sync.js push win --save           # 把存档送到 win
+  node scripts/sync/sync.js pull win --files          # 从 win 拉取改动过的文件
+`;
+
+async function main() {
+  const argv = process.argv.slice(2);
+  const cmd = argv[0] || 'help';
+  const opts = parseArgs(argv);
+
+  if (cmd === 'help' || cmd === '--help' || cmd === '-h') { printBanner(); log(''); log(HELP); return; }
+  if (cmd === 'init') { ensureConfig(); printBanner(); log(''); log('把两边的同步口令改成一样（token），或者直接改 ' + configPath() + '。'); return; }
+  if (cmd === 'token') {
+    ensureConfig();
+    const v = argv[1];
+    if (!v) { log(loadConfig().token); return; }
+    config.token = String(v).trim(); saveConfig();
+    log('同步口令已改成：' + config.token + '（指纹 ' + tokenId(config.token) + '）');
+    log('记得把另一台机器的 scripts/sync/sync.config.json 里的 token 也改成一样。');
+    // 本机服务如果是老版本（启动时把口令读进内存），不重启就不会认新口令 —— 顺手重启掉
+    if (await pingLocal(loadConfig().port)) {
+      daemonStop();
+      await sleep(400);
+      await daemonStart(true);
+      log('本机同步服务已用新口令重启。');
+    }
+    log('对端那台如果还是老版本 sync.js，也要在对端跑一次 node scripts/sync/sync.js restart。');
+    return;
+  }
+  if (cmd === 'port') {
+    ensureConfig();
+    const cur = loadConfig().port;
+    const v = argv[1];
+    if (!v) { log('当前端口：' + cur + '（两台机器要一样）。改：node scripts/sync/sync.js port <新端口>'); return; }
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 1 || n > 65535) die('端口得是 1-65535 的整数，拿到的是「' + v + '」。');
+    if (n === cur) { log('端口本来就是 ' + n + '，没动。'); return; }
+    config.port = n; saveConfig();
+    log('同步端口已改成 ' + n + '。');
+    // 服务在跑就顺手重启到新端口（配置是每次请求热读的，但监听端口只有重启才会变）
+    if (await pingLocal(cur)) {
+      daemonStop();
+      await sleep(400);
+      await daemonStart(true);
+      log('本机同步服务已在新端口重启。');
+    }
+    log('对端那台也要改：node scripts/sync/sync.js port ' + n + '（两端必须一样，否则互相连不上）。');
+    if (process.platform === 'win32') log('Windows 换端口要重新放行防火墙：node scripts/sync/sync.js firewall（会弹 UAC）。');
+    return;
+  }
+  if (cmd === 'serve') {
+    ensureConfig();
+    /* 计划任务/隐藏窗口这条路也要自愈：老配置里的 8788 被 Windows 保留段挡着，
+     * 不自愈的话看门狗每 5 分钟拉一次、每次都 EACCES，等于服务永远不在。
+     * ⚠ 显式 --port 是调用方（daemonStart）已经挑好的，不再改。 */
+    const healed = await ensureBindablePort(true);
+    if (healed.changed) warn('[i] 端口 ' + healed.from + ' 在 Windows 保留段 ' + healed.range + ' 里，已自动改用 ' + healed.port + '（另一台机器也要 port ' + healed.port + '）。');
+    const wantPort = opts.port || loadConfig().port;
+    // 看门狗友好：计划任务每 5 分钟会再拉一次 serve，已经在跑就安静退出，什么都不动
+    const alive = await pingLocal(wantPort);
+    if (alive) { log('同步服务已经在运行（' + alive.name + '，端口 ' + wantPort + '），本次启动忽略。'); return; }
+    // 单条请求出错（客户端中断、EPIPE 之类）不该把整个服务带走：
+    // Windows 上服务一死就要等下一次计划任务才回来，宁可记一笔日志继续跑。
+    const note = (kind, e) => {
+      const line = '[' + new Date().toISOString() + '] ' + kind + '：' + ((e && (e.stack || e.message)) || e) + '\n';
+      try { fs.appendFileSync(ERR_LOG, line); } catch (_) {}
+    };
+    process.on('uncaughtException', (e) => note('uncaughtException', e));
+    process.on('unhandledRejection', (e) => note('unhandledRejection', e));
+    let srv, port;
+    try {
+      ({ srv, port } = await startServer(wantPort));
+    } catch (e) {
+      /* 起不来时常见两种，都要给人话 + 下一步（服务是隐藏窗口起的，以前这个错只写 stderr，
+       * 等于没人看得到 —— 现在写进 sync.err.log，报错里直接带修法）。 */
+      const code = (e && e.code) || 'ERROR';
+      let hint = '';
+      if (code === 'EACCES') {
+        hint = '端口 ' + wantPort + ' 被 Windows 保留段占着（Hyper-V/WSL 之类会预留端口段），非管理员绑不上。' +
+          '查保留段：netsh interface ipv4 show excludedportrange protocol=tcp；' +
+          '两条自救路：① 管理员终端跑  net stop winnat && net start winnat  之后重试（不必改配置）；' +
+          '② 换端口：node scripts/sync/sync.js port <新端口>（两台机器都要换，且要重新 firewall 放行）。';
+      } else if (code === 'EADDRINUSE') {
+        hint = '端口 ' + wantPort + ' 已被别的程序占用（netstat -ano | findstr ' + wantPort + ' 看是谁），' +
+          '或先 node scripts/sync/sync.js stop 再试。';
+      }
+      note('serve 启动失败（listen ' + code + '）', new Error(((e && e.message) || e) + (hint ? ' —— ' + hint : '')));
+      throw new Error('监听 ' + wantPort + ' 失败：' + code + (hint ? '\n      ' + hint : '') + '\n      详见 ' + ERR_LOG);
+    }
+    srv.on('clientError', (e, sock) => { note('clientError', e); try { sock.destroy(); } catch (_) {} });
+    fs.mkdirSync(SAVE_DIR, { recursive: true });
+    fs.writeFileSync(PID_FILE, String(process.pid), 'utf8');
+    printBanner();
+    log('');
+    log(green('同步服务已启动：http://0.0.0.0:' + port + '/   （Ctrl+C 结束）'));
+    const stop = () => { try { fs.unlinkSync(PID_FILE); } catch (e) {} process.exit(0); };
+    process.on('SIGINT', stop); process.on('SIGTERM', stop);
+    return;
+  }
+  if (cmd === 'start') { ensureConfig(); await daemonStart(false); return; }
+  if (cmd === 'stop') { daemonStop(); return; }
+  if (cmd === 'restart') { daemonStop(); await sleep(400); await daemonStart(false); return; }
+  if (cmd === 'status') {
+    ensureConfig();
+    const cfg = loadConfig();
+    const st = await daemonStatus();
+    const s = readSaveInfo();
+    log('本机：' + cfg.name + '（端口 ' + cfg.port + '，服务' + (st.running ? '运行中' : '未运行') + '）');
+    log('  ' + describeSave(s, '存档'));
+    log('  ZeroTier：' + (zeroTierIps().join('、') || '未检测到'));
+    let peer = null;
+    try { peer = await resolvePeer(opts.peer || opts._[1]); } catch (e) { peer = null; }
+    if (!peer) { log('对端：还没找到（用 discover 自动找）'); return; }
+    const info = await pingPeer(peer.host, peer.port, 2500);
+    if (!info) { log('对端：' + peer.name + ' @ ' + peer.host + ' —— 连不上（对端服务没开？）'); return; }
+    log('对端：' + info.name + ' @ ' + peer.host + '（服务运行中）');
+    const rm = await getJson(peer.host, peer.port, '/api/save/meta', 5000).catch(() => null);
+    log('  ' + describeSave(rm, '存档'));
+    // 和 push/pull 用同一套算法（含「差异太多就自动按内容核对」），免得两边报的数字对不上
+    try {
+      const plan = await collectFilePlan(peer, {});
+      const pushN = plan.toSend.length + plan.onlyLocal.length;
+      const pullN = plan.toFetch.length + plan.onlyRemote.length;
+      log('  文件：本机 ' + plan.local.size + ' 个 / 对端 ' + plan.remote.size + ' 个；待推送 ' + pushN +
+        ' 个、待拉取 ' + pullN + ' 个' + (pushN + pullN ? '' : '（两边一致）'));
+    } catch (e) {
+      log('  文件：对端清单取不到（' + String((e && e.message) || e) + '）');
+    }
+    return;
+  }
+  if (cmd === 'discover') {
+    ensureConfig();
+    const plan = subnetPlan();
+    log('本机 ZeroTier：' + (plan.self.join('、') || '未检测到'));
+    log('本机 ZeroTier 网段：' + (plan.ztNets.map((n) => n + '.0/24').join('、') || '（无）') +
+      (plan.extraNets.length ? '；兜底网段：' + plan.extraNets.map((n) => n + '.0/24').join('、') : ''));
+    log('正在扫描 ...（每台机器试 0.8 秒，最多几秒）');
+    const found = await discoverPeers();
+    if (!found.length) {
+      warn('没找到开着同步服务的对端。确认对面跑过 node scripts/sync/sync.js start。');
+      warn('知道对面地址的话可以直接用：node scripts/sync/sync.js push <对端IP>');
+      return;
+    }
+    log(green('找到 ' + found.length + ' 台：'));
+    const cfg = loadConfig();
+    for (const f of found) {
+      log('  ' + f.name + ' @ ' + f.host + (f.saveAt ? '（存档 ' + fmtTime(f.saveAt) + '）' : ''));
+      if (!Object.values(cfg.peers).includes(f.host)) cfg.peers[f.name || f.host] = f.host;
+    }
+    saveConfig();
+    log('已写进 ' + configPath() + ' 的 peers。');
+    return;
+  }
+  if (cmd === 'push') { await doSync('push', opts); return; }
+  if (cmd === 'pull') { await doSync('pull', opts); return; }
+  if (cmd === 'watch') { await doWatch(opts); return; }
+  if (cmd === 'doctor') { await doctor(opts); return; }
+  if (cmd === 'firewall') { ensureConfig(); firewallAdd(); return; }
+  if (cmd === 'prepare') {
+    // 一键准备：起服务 + 放行入站（Windows）+ 自检。连不上时先跑这个。
+    ensureConfig();
+    log(cyan('== 1/3 启动后台同步服务 =='));
+    await daemonStart(false);
+    log('');
+    log(cyan('== 2/3 放行入站端口 =='));
+    firewallAdd();
+    log('');
+    log(cyan('== 3/3 自检 =='));
+    await doctor(opts);
+    return;
+  }
+  if (cmd === 'autostart') {
+    const action = argv[1] || 'status';
+    if (action === 'install') autostartInstall();
+    else if (action === 'remove') autostartRemove();
+    else if (process.platform === 'win32') log('开机自启：' + (winTaskExists() ? ('计划任务「' + WIN_TASK_NAME + '」已安装') : '未安装（跑 autostart install）'));
+    else log('开机自启：' + (fs.existsSync(autostartPath()) ? autostartPath() : '未安装'));
+    return;
+  }
+  die('不认识的命令「' + cmd + '」。\n\n' + HELP);
+}
+
+main().catch((e) => {
+  console.error('');
+  console.error('[x] ' + (e && e.message ? e.message : e));
+  process.exit(1);
+});

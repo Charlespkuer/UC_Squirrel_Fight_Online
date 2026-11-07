@@ -1,0 +1,253 @@
+ssfight 参考包 —— 家族/联机证据摘录
+====================================
+
+说明：
+- 本文件是从原始文件里摘出来的“原始字符串/XML/统计”，不是二次创作。
+- 路径均相对 E:\Squirrel_Fight\references\ssfight。
+- 需要完整上下文时，按文件 + 偏移/行号回原文件复核。
+
+
+[1] 辅助工具 UC松战辅助.exe —— 家族解析器（GBK 解码，偏移 0x197F96）
+------------------------------------------------------------------
+http://ssfight.u.uc.cn/FightGame/flash/loadFamily.do
+hasFamily="
+persisDevote="
+familyId="
+name="
+exp="
+nextExp="
+amount="
+capacity="
+prestige="
+chairManName="
+declaration="
+)                  威望:
+(  LV
+家族:
+你尚未加入任何家族!
+
+紧接着（偏移 0x1980BD）：
+http://ssfight.u.uc.cn/FightGame/flash/loadMembers.do
+<member uc
+playerId="
+position="
+族长
+副族长
+护法
+族员
+perWeekDevote="
+
+家族战（偏移 0x19D89B）：
+FightGame/flash/fightFamily.do?targetId=
+
+家族日志（偏移 0x19825C / 0x198288）：
+FightGame/flash/loadLog.do?logType=0
+time="
+FightGame/flash/loadLog.do?logType=1
+
+家族页签/表头（同一字符串表）：
+家族日志|战事日志|留言板|好友验证
+祭坛|神迹|家族|幻兽|征战
+家族|ID:|族长:|人数:|威望:
+家族任务|参与|对抗BOSS-功能尚未开放|对抗
+职位|昵称|周贡献|条件|描述|操作日志
+
+注意：
+- 这是第三方辅助工具（与官方无授权关系）的解析器，不是官方源码。
+- 同一张字符串表里还有 homeLand / miracleRecord / messages / rankList 等
+  《松鼠大战》接口，可确认是 ssflight 协议，不是别的游戏。
+- 辅助工具没有“创建家族/加入家族/退出家族/解散/捐献/建设”的字符串。
+
+
+[2] 松鼠数据表.xlsx —— 其他商店 A28:A33
+------------------------------------------------------------------
+家族商店：
+26|蓝色碎片X100|家族1级;贡献消耗12|10个蓝色碎片可以随机合成更高等级的装备。
+10|力量转化丸|家族2级;贡献消耗25|用1点力量增加1点敏捷或者速度,当力量占3个属性总值25%以下时不能使用。
+46|恶魔种子|家族3级;贡献消耗25|10个种子可合成1个恶魔果实(用来遗忘旧武器或技能)。
+86|金蛋|家族4级;贡献消耗25|幻兽牧场达到4级后即可使用，使用后可获得一只3星召唤兽和一个4星合成配方！
+104|四级宝石|家族5级;贡献消耗30|镶嵌到橙装后，提升装备属性点X%，并提升附加属性效果。
+
+
+[3] 真实抓包 player.do —— 没有家族字段
+------------------------------------------------------------------
+文件：unpacked\05-服务器协议\抓包原文\关卡\003__FightGame_flash_player.do.txt
+
+<?xml version="1.0" encoding="UTF-8"?>
+<resp errorCode="0">
+   <player name="..." uzoneCoin="70367" playerId="28210670" uPoint="0"
+           maxEnergy="120" energy="50" power="61" agility="61" speed="43"
+           maxHp="425" level="38" exp="2600" nextExp="5100"
+           allWins="2324" allFails="1909" dailyWins="28" dailyFails="9"
+           arenaData="0,0" ...>
+      <master id="5670540" name="..." level="39"/>
+      <prentices class="java.util.ArrayList">
+         <prentice id="28196680" name="..." level="7"/>
+      </prentices>
+      <stages class="java.util.ArrayList">
+         <stage stageId="1" passed="true" keep="false" npcIndex="1" revive="false"/>
+         ...
+      </stages>
+   </player>
+</resp>
+
+结论：只有 master / prentices / stages，没有 familyId / familyName /
+contribution / prestige 等家族字段。
+
+
+[4] 真实抓包 check.do —— 五类消息角标
+------------------------------------------------------------------
+文件：unpacked\05-服务器协议\抓包原文\new\024__FightGame_flash_check.do_order_3.txt
+
+<resp errorCode="0" maxEnergy="120" energy="120" uc_vip="0" vip="false"
+      oldvip="false" state="0,0,0,0,0,0,0,0" arenaRank="0" push_message="">
+   <prentices class="java.util.ArrayList">
+      <prentice id="13016530" name="..." level="51"/>
+      <prentice id="33859970" name="..." level="29"/>
+   </prentices>
+   <checkMsg hasNewGeneralMessage="true" hasNewRevengeMessage="true"
+             hasNewValidateMessage="false" hasNewComment="false"
+             hasNewCopy="true"/>
+</resp>
+
+对应：普通消息 / 复仇 / 好友验证 / 留言 / 征战。
+
+
+[5] 抓包端点统计 —— 没有家族
+------------------------------------------------------------------
+文件：unpacked\05-服务器协议\抓包端点统计.tsv
+
+method  path                                          count
+GET     /FightGame/flash/player.do                    136
+GET     /FightGame/flash/messages.do                  81
+GET     /FightGame/flash/friends.do                   44
+GET     /FightGame/flash/login.do                     9
+GET     /FightGame/flash/randomfriends.do             9
+GET     /FightGame/flash/levelUp.do                   9
+GET     /FightGame/flash/checkArena.do                8
+GET     /favicon.ico                                  5
+POST    /?r=sso/login                                 4
+...（其余为静态资源/页面，共 23 个端点）
+
+没有 loadFamily.do / loadMembers.do / fightFamily.do / loadLog.do。
+
+
+[6] .halog 里的 family —— 全是 CSS font-family
+------------------------------------------------------------------
+在 15 个 .halog 中搜 ASCII "family"，命中 14 次，逐条看都是：
+
+body {
+    font-family: Verdana, Geneva, sans-serif, '宋体';
+    ...
+}
+
+例：
+ssfight\数据包\new.halog          偏移 82977
+ssfight\数据包\new2.halog         偏移 45312
+ssfight\数据包\关卡.halog          偏移 4342 / 498733
+ssfight\数据包\竞技场.halog        偏移 261158 / 296304
+
+不是业务字段，不是接口名。
+
+
+[7] 9game 页面上的“公会” —— 平台外链
+------------------------------------------------------------------
+文件：unpacked\05-服务器协议\抓包原文\9you\005__orphan-response-5_.txt
+
+<a href="http://gh.9game.cn/SearchList.Htm?text=gh_index_game_search&KeyWordType=3&KeyWord=515129"
+   data-statis="text:txt_a_detail_14sq_gh_515129" class="btn-auto-org">
+   <img src="http://image.game.uc.cn/2013/7/18/9252985.png" alt="" class="link-icon"/>
+   公会
+</a>
+
+这是九游平台自己的公会系统，不是游戏内家族。
+
+
+[8] 关键词命中统计（全参考包文本文件 + 二进制）
+------------------------------------------------------------------
+文本扫描（15454 个文本文件，UTF-8/GB18030 尝试解码）：
+
+家族      10   其中 8 处是“符号家族统计/符号家族”（文件/标题/生成脚本），
+              2 处是数据表“家族商店”（含 5 个商品行的“家族N级”）
+公会      2    全部是 9game 页面上的“公会”外链（unpacked 副本 + _tmp 副本）
+帮会      0
+帮派      0
+门派      0
+会长      0
+族长      0    （客户端文本里没有；辅助工具里有）
+贡献      8    1 处师徒日贡（text4725），7 处家族商店
+聊天      0
+私聊      0
+联机      3    全部是解包文档在描述抓包，不是游戏文案
+组队      5    征战“4人组队战斗”的 5 个副本
+
+二进制扫描：
+ssfight.swf（解压后 5,384,744 字节）：家族/公会/family/guild 全 0
+html5\ssfight.html（26,436,698 字节）：全 0
+fla\ssfight.fla（38,534,144 字节）：全 0（仅 1 处“贡献”与家族无关）
+801 个导出符号：无家族/公会
+488 个 resource\文本\*.txt：无家族/公会/族长/威望
+
+
+[9] 家族 mock 响应是空的
+------------------------------------------------------------------
+文件：viewer\game\FightGame\flash\loadFamily.do（61 字节）
+      viewer\game\FightGame\flash\loadMembers.do（61 字节）
+
+<?xml version="1.0" encoding="UTF-8"?>
+<resp errorCode="0"/>
+
+说明：查看器作者知道这两个接口存在（按接口清单建了文件），但没有字段样本，
+      只能放空成功响应。
+
+
+[10] 战斗 stub 是生成的，不是抓包
+------------------------------------------------------------------
+文件：viewer\使用说明.md:117-122
+
+| /FightGame/config1.xml、config.xml | 从 AS 内嵌表按客户端 schema 重建 | 57,041 B |
+| 9 个战斗接口 × 胜/负 = 18 份 | stage.do fight.do fightFamily.do exercise.do
+  challenge.do fighting.do joinArena.do joinCopy.do played.do | 各 ~1 KB |
+
+文件：_analysis\tools\gen_battle.py:1-35
+
+"""Generate battle end-point responses so the game plays a result animation.
+Why an empty <log>: ssfight is fully server-authoritative — the client only parses
+and replays the round log the server sends. ..."""
+
+
+[11] 房间规则原文（pubDesArray）
+------------------------------------------------------------------
+文件：unpacked\03-反编译源码\MainMovie.as:19568
+
+var pubDesArray = [
+"1.自己开局或加入他人的游戏，匹配成功后自动开始",
+"2.两人自动抛出2个骰子比大小",
+"3.点数大的一方获胜",
+"4.点数相同时，单个骰子大的一方获胜",
+"5.如两者的骰子组合完全一致，则判断不分胜负，本金返还，不产生游戏消耗",
+"6.自己开的局，自己不能参加",
+"7.每次开新局或参加他人局均以1把为限，无论输赢均会结束游戏",
+"8.每局游戏结束后，系统自动从双方投注的总额中收取一定金松果作为手续费"
+];
+
+
+[12] 征战 4 人组队原文
+------------------------------------------------------------------
+文件：unpacked\03-反编译源码\MainMovie.as:12692
+
+setText(_loc1.text3, "4人组队战斗，" + _loc2.level + "级以上可报名参加。征战奖品包括高级召唤兽、紫色装备等。");
+
+
+[13] 客户端家族零命中的复核命令
+------------------------------------------------------------------
+Get-ChildItem -LiteralPath 'E:\Squirrel_Fight\references\ssfight\unpacked\03-反编译源码' -Recurse -Filter *.as |
+  Select-String -Pattern 'family|Family|家族|公会' -CaseSensitive:$false |
+  Measure-Object
+
+预期：Count = 0
+
+Select-String -LiteralPath 'E:\Squirrel_Fight\references\ssfight\unpacked\03-反编译源码\MainMovie.as' `
+  -Pattern 'loadFamily|loadMembers|fightFamily'
+
+预期：0 条

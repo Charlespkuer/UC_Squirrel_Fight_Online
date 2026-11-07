@@ -1,0 +1,532 @@
+/* ============================================================
+ * online.css 鈥?鑱旀満鐗堟柊澧炵殑灏戦噺鏍峰紡
+ * ------------------------------------------------------------
+ * 鍙湁**鍘熺増娌℃湁瀵瑰簲绱犳潗**鐨勪氦浜掍欢鎵嶅啓鍦ㄨ繖閲岋紙鐧诲綍琛ㄥ崟銆佸鎵嬪垪琛ㄦ寜閽級銆? * 瑙嗚鍒绘剰璐磋繎缁忓吀鐣岄潰锛氱背鑹插崱绾搞€佹繁妫曡壊鎻忚竟銆佸渾瑙掋€侀噾鑹蹭富鎸夐挳锛? * 璺?`.classic-modal` 涓€濂楄壊锛屼笉鍐嶉€犵浜屽璁捐璇█銆? * ============================================================ */
+
+.online-login {
+  position: absolute;
+  top:0;right:0;bottom:0;left:0;inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  padding: 16px;
+  overflow-y: auto;
+  background: #2b2016;
+  /* 鈿?蹇呴』鏄惧紡鎵撳紑锛歚css/classic.css` 閲屾湁 `.classic-home{pointer-events:none!important}`锛?   * 鑰岀櫥褰曢〉鐨勫鍣ㄦ濂戒篃甯?`classic-home`锛堟部鐢ㄧ粡鍏告暣椤电殑瀹氫綅锛夛紱閭ｈ竟鍙粰
+   * `.classic-home button` 寮€浜?auto 鈥斺€?浜庢槸鍑虹幇銆屾寜閽兘鐐广€佸悕瀛?瀵嗙爜妗嗙偣涓嶅姩銆嶃€?   * 鐧诲綍椤典笉鏄粡鍏哥偣鍑诲眰锛屾暣妫甸兘瑕佽兘鏀朵簨浠躲€?*/
+  pointer-events: auto !important;
+}
+
+/* 鍙屼繚闄╋細鍗＄墖鍜岄噷闈㈢殑鎺т欢鑷繁鍐嶅０鏄庝竴娆★紝鍏嶅緱灏嗘潵鏈変汉缁欏鍣ㄥ姞 pointer-events銆?*/
+.online-login .online-login-card,
+.online-login .online-login-card * {
+  pointer-events: auto;
+}
+
+.online-login-backdrop { position: absolute; top:0;right:0;bottom:0;left:0;inset: 0; pointer-events: none; }
+.online-login-backdrop img { width: 100%; height: 100%; object-fit: cover; }
+
+.online-login-card {
+  position: relative;
+  z-index: 2;
+  width: min(360px, 86vw);
+  padding: 22px 22px 16px;
+  border: 3px solid #6a4a26;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #fbf0d6 0%, #f2dfb6 100%);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45), inset 0 1px 0 #fff8e6;
+  color: #4a3213;
+  font-family: inherit;
+}
+
+.online-login-title {
+  margin: 0 0 2px;
+  font-size: 22px;
+  letter-spacing: 1px;
+  text-align: center;
+  color: #6a4a26;
+}
+
+.online-login-sub {
+  margin: 0 0 14px;
+  font-size: 12px;
+  text-align: center;
+  color: #8a6a42;
+}
+
+.online-login-card label {
+  display: block;
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: #6a4a26;
+}
+
+.online-login-card input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 4px;
+  padding: 9px 10px;
+  border: 2px solid #c9a86f;
+  border-radius: 10px;
+  background: #fffdf5;
+  color: #3b2a12;
+  font: inherit;
+  font-size: 15px;
+  min-height: 44px;
+  outline: none;
+}
+
+.online-login-card input:focus {
+  border-color: #e0a63a;
+  box-shadow: 0 0 0 2px rgba(224, 166, 58, 0.28);
+}
+
+.online-login-note {
+  min-height: 18px;
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #8a6a42;
+}
+
+.online-login-note.bad { color: #b23b2e; }
+
+.online-login-hint {
+  min-height: 14px;
+  margin: 3px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: #a08356;
+}
+
+.online-login-hint.bad { color: #b23b2e; }
+
+.online-login-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.online-btn {
+  flex: 1;
+  padding: 9px 10px;
+  border: 2px solid #b98b47;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #fff6de 0%, #f0d9a9 100%);
+  color: #5a3c16;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.online-btn:hover { border-color: #e0a63a; }
+.online-btn:active { transform: translateY(1px); }
+
+.online-btn.primary {
+  border-color: #a9782c;
+  background: linear-gradient(180deg, #ffdf9c 0%, #efbd5c 100%);
+  font-weight: 700;
+}
+
+.online-login-foot {
+  margin: 12px 0 0;
+  font-size: 11px;
+  text-align: center;
+  color: #9b7b52;
+  word-break: break-all;
+}
+
+.online-player-input { width: 100%; padding: 16px; font: inherit; border: 2px solid #c9a86f; background: #fffdf5; color: #673c1a; }
+@media (max-height: 520px) { .online-login { align-items: flex-start; } .online-login-card { margin: auto 0; padding: 14px 20px; } .online-login-sub { margin-bottom: 6px; } }
+
+.online-settings-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.online-account-panel { margin-top: 22px; padding-top: 14px; border-top: 2px solid #ceb47b; }
+.online-account-panel p { margin: 8px 0 12px; }
+.online-account-heading { display: flex; align-items: center; gap: 24px; }
+.online-account-heading .classic-section-title { margin: 0; }
+.online-account-heading > b { font-size: 26px; }
+.online-account-panel .online-server-address { font-size: 18px; margin: 12px 0 0; opacity: .8; }
+.online-account-form label { display: block; }
+.online-account-form input { display: block; box-sizing: border-box; width: 100%; margin-top: 16px; padding: 14px; border: 2px solid #b39763; border-radius: 12px; background: #fffdf1; color: #715231; font: inherit; }
+/* 修改密码有三个输入框：small-modal 的 326px 正文高度会把「确认新密码」切掉，
+ * 这里把这一种弹窗的正文放宽到 520px（与常规弹窗同高），仍保留滚动兜底。 */
+.classic-modal-overlay.password-dialog>.classic-modal.small-modal{max-height:625px}
+.classic-modal-overlay.password-dialog>.classic-modal.small-modal>.modal-body{max-height:520px}
+.password-dialog .online-account-form>.small-label{font-size:18px;margin:8px 8px 0}
+.rename-dialog .online-account-form>.small-label{font-size:18px;margin:10px 8px 0;line-height:1.45}
+.online-account-error { color: #994b30; min-height: 1.4em; }
+.online-chest-page { z-index: 70; }
+.online-recover-link { display: block; margin: 12px auto 0; padding: 6px; border: 0; background: transparent; color: #79562b; text-decoration: underline; cursor: pointer; }
+.online-recovery-code { width: 100%; box-sizing: border-box; padding: 12px; color: #715231; background: #fffdf1; border: 2px solid #b39763; border-radius: 10px; font: inherit; font-size: 22px; }
+
+/* The original forum opened an external page; this in-game forum uses the classic modal.
+ * 2026-11: 论坛改成接近整屏的弹窗（1170×690 舞台内），列表行压成单行，
+ * 一页 15 帖；搜索、容量条、管理页都放在同一个滚动区外面。 */
+.classic-modal-overlay.forum-dialog > .classic-modal {
+  box-sizing: border-box;
+  width: 1132px;
+  height: 668px;
+  max-height: 668px;
+  padding: 45px 26px 12px;
+}
+.classic-modal-overlay.forum-dialog > .classic-modal > .modal-body {
+  max-height: none;
+  height: 601px;
+  padding: 0;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+.classic-modal-overlay.forum-dialog > .classic-modal > .modal-buttons { display: none; }
+
+.online-forum { display: flex; flex-direction: column; height: 100%; min-height: 0; color: #5f4328; font-size: 19px; }
+.online-forum-head { flex: 0 0 auto; }
+.online-forum-search-row { display: flex; align-items: flex-end; gap: 12px; }
+.online-forum-search { display: flex; align-items: flex-end; gap: 10px; flex: 1 1 auto; min-width: 0; }
+.online-forum-search label { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.online-forum-search label span { color: #92764f; font-size: 14px; line-height: 1.2; }
+.online-forum-search-q { flex: 1 1 260px; }
+.online-forum-search-no { flex: 0 0 124px; }
+.online-forum-search input {
+  box-sizing: border-box; width: 100%; min-height: 42px; padding: 7px 12px;
+  border: 2px solid #c9a86f; border-radius: 10px; color: #5f4328; background: #fffdf5; font: inherit; font-size: 18px;
+}
+.online-forum-search .uc-button,
+.online-forum-tools .uc-button,
+.online-forum-pager .uc-button,
+.online-forum-form .uc-button,
+.online-forum-admin-form .uc-button { min-width: 0; min-height: 42px; padding: 5px 17px; font-size: 18px; letter-spacing: 1px; }
+.online-forum-search .uc-button { margin-bottom: 1px; }
+.online-forum-search .uc-button.gold { background: linear-gradient(#fff6a1,#ffdb58 38%,#ffb62c 67%,#ec9009); }
+.online-forum-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 8px 0 6px; }
+.online-forum-quota { margin-left: auto; color: #92764f; font-size: 14px; white-space: nowrap; }
+.online-forum-cap-mini { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; color: #7c633f; font-size: 14px; white-space: nowrap; }
+.online-forum-cap-mini b { color: #5d7f2d; }
+.online-forum-cap-mini.warn b { color: #a66a15; }
+.online-forum-cap-mini.full b { color: #a23d2b; }
+.online-forum-cap-bar { display: inline-block; width: 76px; height: 10px; overflow: hidden; border: 1px solid #c9ad78; border-radius: 999px; background: #ead9b5; vertical-align: -1px; }
+.online-forum-cap-bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg,#a7d65f,#5eaa2c); }
+.online-forum-cap-bar i.warn { background: linear-gradient(90deg,#f4cb5c,#d18a1e); }
+.online-forum-cap-bar i.full { background: linear-gradient(90deg,#e48265,#b23b28); }
+.online-forum-cap-bar.big { display: block; width: 100%; height: 14px; margin: 6px 0 8px; }
+.online-forum-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 6px; overscroll-behavior: contain; }
+.online-forum-summary { color: #92764f; font-size: 15px; margin: 2px 2px 6px; }
+.online-forum-list { display: grid; gap: 5px; }
+.online-forum-row {
+  display: grid; grid-template-columns: 62px minmax(0,1fr) auto; align-items: center; gap: 10px;
+  width: 100%; min-height: 44px; padding: 6px 12px; text-align: left;
+  border: 2px solid #d7bd88; border-radius: 11px; background: #fff9e8; color: inherit; font: inherit; cursor: pointer;
+}
+.online-forum-row:hover, .online-forum-row:focus-visible { background: #f1e6c8; border-color: #a9864c; }
+.online-forum-row b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 20px; }
+.online-forum-row-meta { color: #92764f; font-size: 14px; white-space: nowrap; }
+.online-forum-no {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 54px;
+  padding: 2px 8px; border-radius: 999px; background: #ead09f; color: #7d5323;
+  font-size: 14px; font-weight: 700; line-height: 20px; white-space: nowrap;
+}
+.online-forum-badge {
+  display: inline-block; margin-left: 5px; padding: 0 6px; border: 1px solid #a9781f; border-radius: 7px;
+  background: linear-gradient(#fff3a6,#e7b42c); color: #5f3b0c; font-size: 12px; line-height: 18px;
+  font-weight: 700; white-space: nowrap; vertical-align: 1px;
+}
+.online-forum-post, .online-forum-reply { padding: 8px 14px; margin: 6px 0; border: 1px solid #dbc698; border-radius: 11px; background: #fff9e8; }
+.online-forum-post-head { display: flex; align-items: center; gap: 10px; }
+.online-forum-post-head h3 { margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: 24px; }
+.online-forum-reply-head { display: flex; align-items: center; gap: 8px; }
+.online-forum-meta { color: #92764f; font-size: 14px; }
+.online-forum-content { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; margin-top: 6px; font-size: 19px; }
+.online-forum-delete { border: 0; background: transparent; color: #9d4b31; font: inherit; font-size: 15px; cursor: pointer; padding: 2px 6px; }
+.online-forum-delete:hover { text-decoration: underline; }
+.online-forum-pager { display: flex; align-items: center; justify-content: center; gap: 12px; flex: 0 0 auto; min-height: 40px; margin: 4px 0 0; color: #92764f; font-size: 16px; }
+.online-forum-pager button:disabled { opacity: .42; cursor: default; }
+.online-forum-form label { display: block; margin: 8px 0; }
+.online-forum-form input, .online-forum-form textarea {
+  box-sizing: border-box; display: block; width: 100%; margin-top: 5px; padding: 8px 10px;
+  border: 2px solid #c9a86f; border-radius: 10px; color: #5f4328; background: #fffdf5; font: inherit;
+}
+.online-forum-form textarea { min-height: 230px; resize: vertical; }
+.online-forum-editor-title { margin: 2px 0 8px; font-size: 24px; }
+.online-forum-form-actions { display: flex; justify-content: flex-end; margin: 4px 0 0; }
+.online-forum .online-forum-error { color: #a23d2b; font-size: 16px; margin: 4px 0; min-height: 1.2em; }
+.online-forum .online-forum-hint { color: #92764f; font-size: 14px; line-height: 1.45; margin: 4px 0; }
+.online-forum .online-forum-empty { color: #92764f; text-align: center; margin: 20px 0; font-size: 18px; }
+.online-forum-loading { display: flex; align-items: center; justify-content: center; height: 100%; color: #92764f; font-size: 20px; }
+
+.online-forum-admin-head { display: flex; align-items: center; gap: 14px; }
+.online-forum-admin-head > b { font-size: 24px; }
+.online-forum-cap-panel { padding: 9px 14px; margin: 0 0 8px; border: 2px solid #d7bd88; border-radius: 12px; background: #fff9e8; }
+.online-forum-cap-panel.warn { border-color: #d8a643; }
+.online-forum-cap-panel.full { border-color: #c05a42; }
+.online-forum-cap-panel p { margin: 3px 0; font-size: 14px; line-height: 1.45; color: #7c633f; }
+.online-forum-cap-title { display: flex; align-items: center; justify-content: space-between; font-size: 18px; }
+.online-forum-cap-title span { color: #92764f; font-size: 14px; }
+.online-forum-admin-section { padding: 9px 14px; margin: 8px 0; border: 1px solid #dbc698; border-radius: 12px; background: #fff9e8; }
+.online-forum-admin-section h3 { margin: 0 0 5px; font-size: 21px; }
+.online-forum-admin-section h3 small { color: #92764f; font-size: 14px; font-weight: 400; }
+.online-forum-words { display: flex; flex-wrap: wrap; gap: 6px; margin: 5px 0; }
+.online-forum-word { display: inline-flex; align-items: center; gap: 5px; padding: 2px 5px 2px 9px; border: 1px solid #d6b97d; border-radius: 999px; background: #f6e8c5; font-size: 16px; }
+.online-forum-word small { color: #92764f; font-size: 12px; }
+.online-forum-word-del { border: 0; background: transparent; color: #9d4b31; font-size: 19px; line-height: 1; cursor: pointer; padding: 0 4px; }
+.online-forum-admin-form { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 5px; }
+.online-forum-admin-form > label { display: flex; align-items: center; gap: 6px; font-size: 15px; color: #7c633f; }
+.online-forum-admin-form input, .online-forum-admin-form select {
+  box-sizing: border-box; min-height: 36px; padding: 4px 9px; border: 2px solid #c9a86f; border-radius: 9px;
+  color: #5f4328; background: #fffdf5; font: inherit; font-size: 16px;
+}
+.online-forum-admin-form input[name="word"] { flex: 1 1 220px; }
+.online-forum-admin-form input[name="account"] { flex: 1 1 240px; }
+.online-forum-admin-form input[name="days"] { width: 82px; }
+.online-forum-admin-form .online-forum-error { flex: 1 1 100%; }
+.online-forum-admin-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; border-bottom: 1px dashed #e2ce9f; }
+.online-forum-admin-row:last-child { border-bottom: 0; }
+.online-forum-admin-name { flex: 1 1 auto; font-size: 17px; }
+.online-forum-admin-name small { color: #92764f; font-size: 13px; }
+.online-forum-link { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; border: 0; background: transparent; color: #6a4a26; font: inherit; font-size: 17px; cursor: pointer; padding: 2px 0; }
+.online-forum-link:hover { color: #a26a18; text-decoration: underline; }
+.online-forum-admin-row .online-forum-meta { flex: 0 0 auto; }
+.online-forum-admin-posts .online-forum-admin-row { min-height: 34px; }
+.online-forum-admin-log { margin: 4px 0; padding: 0; list-style: none; font-size: 14px; color: #7c633f; }
+.online-forum-admin-log li { padding: 3px 0; border-bottom: 1px dashed #e2ce9f; }
+.online-forum-admin-log li:last-child { border-bottom: 0; }
+.online-forum-admin-log b { color: #5f4328; }
+.online-forum-log-time { color: #a58a62; margin-right: 6px; }
+
+
+/* 寰佹垬鐪熶汉鍖归厤鐘舵€佹潯锛氭姤鍚嶅悗绂诲紑椤甸潰涔熻兘缁х画绛夛紱杩欓噷鍙礋璐ｅ湪褰撳墠椤垫樉绀鸿繘搴﹀拰鍙栨秷銆?*/
+.online-campaign-status {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  z-index: 6;
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 2px solid #6a4a26;
+  border-radius: 12px;
+  background: rgba(43, 32, 22, 0.88);
+  color: #fbf0d6;
+  font-size: 12px;
+  line-height: 1.4;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+}
+.online-campaign-status b { color: #ffd76a; font-weight: 700; }
+.online-campaign-status span { white-space: nowrap; }
+.online-campaign-status .online-campaign-cancel {
+  margin-left: 2px;
+  padding: 2px 8px;
+  border: 1px solid #c9a86f;
+  border-radius: 8px;
+  background: #f2dfb6;
+  color: #5a3a18;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.online-campaign-status .online-campaign-cancel:hover { background: #ffe7ae; }
+
+/* 寰佹垬鎶ュ悕锛氭鏂囧帇灏忥紝涓や釜鎸夐挳淇濇寔涓€琛岋紱鍚﹀垯 modal-buttons 鐨?flex-wrap 浼氭妸
+   绗簩涓寜閽姌鍒板脊绐楀闈€?*/
+.campaign-match-dialog .modal-body p {
+  font-size: 24px;
+  line-height: 1.45;
+  margin: 12px 4px;
+}
+.campaign-match-dialog .modal-buttons {
+  flex-wrap: nowrap;
+  gap: 14px;
+  margin-top: 18px;
+}
+.campaign-match-dialog .modal-buttons .uc-button {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: none;
+  padding-left: 10px;
+  padding-right: 10px;
+  font-size: 28px;
+  white-space: nowrap;
+}
+.campaign-match-dialog .classic-modal.small-modal {
+  min-height: 0;
+}
+
+/* 征战结果：只有一颗「确定」，按用户 2026-11 截图口径放大并下移；
+ * 与报名弹窗的两颗小键区分开，避免同一套 modal-buttons 尺寸互相牵制。 */
+.classic-modal-overlay.campaign-result-dialog>.classic-modal.small-modal {
+  max-height: 560px;
+}
+.campaign-result-dialog .modal-buttons {
+  margin-top: 44px;
+}
+.campaign-result-dialog .modal-buttons .uc-button {
+  min-width: 300px;
+  min-height: 88px;
+  padding: 12px 40px;
+  font-size: 42px;
+  border-width: 4px;
+}
+
+/* 鏀惧簳閮ㄦ寜閽笂鏂癸紝閬垮厤鍘嬩綇椤堕儴鈥滃緛鎴樺紑鏀炬椂闂粹€濇爣棰樸€?*/
+.online-campaign-status {
+  left: 50%;
+  top: auto;
+  bottom: 96px;
+  transform: translateX(-50%);
+  max-width: calc(100% - 24px);
+}
+
+/* 娓告垙鍏憡锛氱粡鍏稿脊绐楃毊 + 鍙炕椤垫鏂囷紱鐧诲綍椤甸娆¤繘鍏ユ椂鏄剧ず鍦ㄧ櫥褰曢〉涔嬩笂銆?*/
+.game-notice-overlay { z-index: 90; }
+.game-notice { padding: 0 6px; }
+.game-notice-kicker { font-size: 20px; color: #a08356; letter-spacing: .5px; }
+.game-notice-title { font-size: 32px; color: #8a5a26; margin: 6px 0 12px; }
+.game-notice-text { font-size: 24px; line-height: 1.6; color: #6f4e2d; }
+.game-notice-text p { margin: 10px 0; }
+.game-notice-text ul { margin: 8px 0 8px 26px; padding: 0; }
+.game-notice-text li { margin: 6px 0; }
+.game-notice-text b { color: #a06f1d; }
+.game-notice-text .small-label { margin-top: 16px; }
+.game-notice-pager { display: flex; justify-content: center; align-items: center; gap: 18px; margin-top: 18px; }
+.game-notice-pager .uc-button { min-width: 120px; min-height: 42px; font-size: 22px; padding: 4px 16px; }
+.game-notice-pager .uc-button:disabled { opacity: .45; cursor: default; }
+.game-notice-page { font-size: 22px; color: #8d6c42; min-width: 64px; text-align: center; }
+.game-notice-overlay .modal-buttons { margin-top: 12px; }
+
+.help-notice-footer { margin: 22px 0 4px; padding-top: 16px; border-top: 2px dashed #d8c18d; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.help-notice-footer .small-label { margin: 0; }
+
+/* 鍘熺増 4406銆屽叕鍛娿€嶏細SVG 搴曟澘 + 鍙犲湪搴曟澘鍐呯殑鍙粴鍔ㄦ鏂囷紱3152 缁胯壊鎸夐挳鍙犮€屽叧闂€嶃€?*/
+.online-notice-original { position: absolute; top:0;right:0;bottom:0;left:0;inset: 0; z-index: 30; visibility: visible !important; pointer-events: auto !important; background: transparent !important; }
+.online-notice-original * { pointer-events: auto; }
+.online-notice-original-body {
+  position: absolute;
+  z-index: 2;
+  box-sizing: border-box;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px 8px 8px;
+  color: #5a3a18;
+  line-height: 1.5;
+  scrollbar-width: thin;
+  scrollbar-color: #c9a86f #f3e3bf;
+}
+.online-notice-original-body::-webkit-scrollbar { width: 8px; }
+.online-notice-original-body::-webkit-scrollbar-thumb { background: #c9a86f; border-radius: 4px; }
+.online-notice-original-body::-webkit-scrollbar-track { background: #f3e3bf; }
+.online-notice-original-kicker { color: #a08356; font-size: .78em; margin: 0 0 4px; }
+.online-notice-original-body h3 { margin: 8px 0 4px; font-size: 1.08em; color: #8a5a26; }
+.online-notice-original-body p { margin: 4px 0; }
+.online-notice-original-body ul { margin: 3px 0 5px 1.25em; padding: 0; }
+.online-notice-original-body li { margin: 2px 0; }
+.online-notice-original-body b { color: #a06f1d; }
+.online-notice-original-body hr { border: 0; border-top: 1px dashed #d8c18d; margin: 8px 0; }
+.online-notice-original-body .small-label { color: #a08356; }
+
+
+
+/* 原版 3152「确定」的透明点击热区：不改画稿，只保证点击不被底板吃掉。 */
+.online-notice-original-hit {
+  position: absolute;
+  z-index: 4;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+
+/* ============================================================
+ * 村庄右上角的「远方的无尽之塔」石板小径
+ * ------------------------------------------------------------
+ * 画在村庄页同一棵 SVG 里（舞台坐标 320×196），随页面一起缩放。
+ * 只有石板与缝隙，没有塔 / 旗 / 路牌；悬停 / 按下反馈复用 SfUiFeedback。
+ * ========================================================== */
+.sf-tower-path {
+  transform-box: fill-box;
+  transform-origin: center;
+  cursor: pointer;
+  pointer-events: auto;
+  /* 点击时不要浏览器默认的黑色焦点框 / 移动端 tap 高亮；
+   * 键盘 Tab 的黄色焦点环仍由下面的 :focus-visible 保留。 */
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.sf-tower-path .tp-band {
+  transition: filter .16s ease-out;
+}
+.sf-tower-path .tp-seam {
+  transition: stroke-opacity .16s ease-out;
+}
+.sf-tower-path .tp-shadow {
+  transition: opacity .16s ease-out;
+}
+.sf-tower-path.sf-hover .tp-band,
+.sf-tower-path:hover .tp-band {
+  filter: brightness(1.12) saturate(1.03);
+}
+.sf-tower-path.sf-hover .tp-shadow,
+.sf-tower-path:hover .tp-shadow {
+  opacity: .32;
+}
+.sf-tower-path.pressed .tp-band {
+  filter: brightness(1.22);
+}
+.sf-tower-path.pressed .tp-seam {
+  stroke-opacity: .95;
+}
+.sf-tower-path:focus-visible {
+  outline: 2px solid #ffe27a;
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sf-tower-path .tp-band,
+  .sf-tower-path .tp-seam,
+  .sf-tower-path .tp-shadow { transition: none; }
+}
+
+/* 设置 → 开发者同步：预览「将同步的文件」清单。 */
+.online-owner-panel .owner-sync-files {
+  max-height: 52vh;
+  overflow: auto;
+  margin: 8px 0;
+  padding: 6px 10px;
+  border-radius: 12px;
+  background: rgba(255, 248, 223, .72);
+  box-shadow: inset 0 0 0 1px rgba(163, 112, 29, .18);
+}
+.online-owner-panel .owner-sync-file {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px dashed rgba(163, 112, 29, .18);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.online-owner-panel .owner-sync-file:last-child { border-bottom: 0; }
+.online-owner-panel .owner-sync-file code {
+  flex: 1 1 auto;
+  min-width: 0;
+  word-break: break-all;
+  color: #6b4a24;
+  font-size: 12px;
+}
+.online-owner-panel .owner-sync-file .st {
+  flex: 0 0 auto;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.online-owner-panel .owner-sync-file .st.added { color: #2e7d32; }
+.online-owner-panel .owner-sync-file .st.changed { color: #a3701d; }
+.online-owner-panel .owner-sync-file .st.removed { color: #b23b2e; }
+.online-owner-panel .owner-sync-file > span:last-child {
+  flex: 0 0 auto;
+  color: #9b7b51;
+  white-space: nowrap;
+}

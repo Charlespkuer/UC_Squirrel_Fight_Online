@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<base href="/">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>松鼠大战 Online</title>
+<style>
+/* iOS / 安卓 WebView 的触摸约定，与单机版 scripts/index.html 完全一致。 */
+@supports (-webkit-touch-callout: none) {
+  html, body { -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
+  body { -webkit-touch-callout: none; }
+  button, input { touch-action: manipulation; }
+}
+@supports not (-webkit-touch-callout: none) {
+  #app, #app * { touch-action: manipulation; }
+}
+</style>
+<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/classic.css">
+<link rel="stylesheet" href="css/classic-extras.css">
+<link rel="stylesheet" href="css/classic-fusion.css">
+<link rel="stylesheet" href="css/battle-drops.css">
+<link rel="stylesheet" href="css/classic-refine.css">
+<!-- 无尽塔的局内窄屏样式（增益 / 商店 / 结算 / 战报）；只从村庄小径进入 -->
+<link rel="stylesheet" href="css/tower.css">
+<!-- 联机版新增的少量交互件（登录表单 / 对手列表）：原版没有对应素材 -->
+<link rel="stylesheet" href="css/online.css">
+<script>
+/* 联机标记必须在任何游戏脚本之前置位：js/state.js 靠它决定「只经典 + 不落本地存档」。
+   ⚠ 不要在单机版 scripts/index.html 里写这一行。 */
+window.__SSDZ_ONLINE__ = true;
+window.__errs = [];
+window.addEventListener('error', function (e) {
+  window.__errs.push((e.message || '') + ' @ ' + (e.filename || '') + ':' + (e.lineno || 0));
+});
+window.addEventListener('unhandledrejection', function (e) {
+  window.__errs.push('Promise: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason));
+});
+</script>
+</head>
+<body>
+<div id="app">
+  <canvas id="stage"></canvas>
+  <div id="ui"></div>
+  <div id="boot-note">正在连接服务器…</div>
+</div>
+
+<!-- ============ 数据与内核 ============ -->
+<!-- 昵称长度规则：注册页 / 修改昵称 / 服务端 auth 共用同一份 7 个汉字口径 -->
+<script src="js/nickname.js"></script>
+<!-- 征战静态表（首领 / 门票 / 奖励池）：浏览器与服务端共用同一份 -->
+<script src="js/campaign-data.js"></script>
+<!-- 原版数据：武器/技能/道具字典 + 素材清单 + 动画帧表 -->
+<script src="js/gamedict.js"></script>
+<script src="js/engine.js"></script>
+<script src="js/gamedata.js"></script>
+<!-- 无尽塔：数值表是纯数据；联机版只开放经典的常规无尽塔（零局外奖励） -->
+<script src="js/tower-data.js"></script>
+<script src="js/state.js"></script>
+<script src="js/sim.js"></script>
+<script src="js/tower-hero.js"></script>
+<script src="js/tower.js"></script>
+<script src="js/battle.js"></script>
+<script src="js/battle-drops.js"></script>
+
+<!-- ============ 联机层 ============ -->
+<!-- net.js：唯一的网络出口（令牌 / 超时 / 串行队列） -->
+<script src="js/net.js"></script>
+<!-- online.js：权威镜像 + 动作流水线 + State 口子收口 -->
+<script src="js/online.js"></script>
+<!-- 无尽塔的本机对局存档：服务端存档里没有 tower / endless，塔也不发局外奖励 -->
+<script src="js/tower-online.js"></script>
+
+<!-- ============ 经典界面（ssfight 原版数据渲染） ============ -->
+<script src="js/ssfight/render.js"></script>
+<script src="js/ssfight/ui-main.js"></script>
+<script src="js/ssfight/ui-feedback.js"></script>
+<script src="js/ssfight/ui-levelup.js"></script>
+<script src="js/ssfight/ui-guide.js"></script>
+<script src="js/ssfight/ui-village.js"></script>
+<script src="js/ssfight/ui-status.js"></script>
+<script src="js/ssfight/ui-compose.js"></script>
+<script src="js/ssfight/ui-prop-use.js"></script>
+<script src="js/ssfight/ui-challenge.js"></script>
+<!-- 村庄右上角的「远方小径」矢量入口：复用原版 4421 确认框 -->
+<script src="js/ssfight/ui-tower-path.js"></script>
+<script src="js/ssfight/ui-message.js"></script>
+<script src="js/ssfight/ui-fight-result.js"></script>
+<script src="js/ssfight/ui-fight.js"></script>
+
+<!-- ============ 界面外壳 ============ -->
+<!-- ui.js 只提供 UI 基础件（toast / runAction / hitRegion / 图标）；联机版的页面一律走经典帧 -->
+<script src="js/ui.js"></script>
+<script src="js/classic-ui.js"></script>
+<script src="js/classic-extras.js"></script>
+<script src="js/classic-fusion.js"></script>
+<!-- 无尽塔：剧情播片机 + 经典界面页（只从村庄小径进入） -->
+<script src="js/tower-plot.js"></script>
+<script src="js/tower-ui.js"></script>
+
+<!-- ============ 联机流程与新增界面 ============ -->
+<script src="js/online-battle.js"></script>
+<script src="js/online-notice.js"></script>
+<script src="js/online-ui.js"></script>
+<script src="js/online-update.js"></script>
+
+<script src="js/main.js"></script>
+<script src="js/touch-fallback.js"></script>
+</body>
+</html>

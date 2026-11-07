@@ -1,0 +1,284 @@
+#!/usr/bin/env node
+/* ============================================================
+ * scripts/serve.js — 本地静态服务器（零依赖）
+ *
+ * 用法: node scripts/serve.js [端口] [--no-save]
+ * 然后浏览器打开 http://127.0.0.1:8080
+ *
+ * 说明：直接双击 index.html（file://）也能玩，但部分浏览器会
+ * 拦截本地文件读取，用这个服务器最稳。
+ *
+ * 存档文件（可选）：游戏会把存档同时写一份到 <游戏目录>/save/progress.json，
+ * 既可当本地备份，也是接「自建同步服务」的接口层。
+ * 接口只监听 127.0.0.1，加 --no-save 可整体关闭。
+ *
+ * POST /__update?mode=check|git|release|auto[&dry=1]  ——「一键拉取远端更新」。
+ *   真正干活的是 scripts/update-game.js（零依赖），这里只做参数白名单 + 把它的
+ *   stdout JSON 原样回给前端；动作是写死的，不接受客户端传命令或 URL。
+ * ============================================================ */
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const { execFile } = require('child_process');
+
+const ROOT = path.resolve(__dirname, '..');   // serve.js 在 scripts/ 里，游戏根是上一层
+const ARGS = process.argv.slice(2);
+// 端口可以写在任意位置：node scripts/serve.js --no-save 8080
+// 显式传 0 = 让系统分配一个空闲端口（自动化测试用；启动日志里会打印真实端口）。
+const PORT_ARG = ARGS.find((a) => /^[0-9]+$/.test(a));
+const PORT = PORT_ARG === undefined ? 8080 : Number(PORT_ARG);
+
+/** 当前正式存档里的等级 / 历史最高等级水位线（导入前确认、界面显示用）。 */
+function readSaveLevel() {
+  try { const d = JSON.parse(fs.readFileSync(SAVE_FILE, 'utf8')); return Number(d && d.level) || 0; } catch (e) { return 0; }
+}
+/** 双界面独立存档：水位线要看两个槽位的最高等级，不能只看顶层当前界面。
+ *  否则「经典 1 级 / 现代 32 级」时，切到经典后写 1 级档会被水位线误判成空档覆盖。 */
+function saveMaxLevel(obj) {
+  if (!obj || typeof obj !== 'object') return 0;
+  let lv = Number(obj.level) || 0;
+  if (obj.__dualOther && typeof obj.__dualOther === 'object') lv = Math.max(lv, Number(obj.__dualOther.level) || 0);
+  if (obj.__dualSaves && typeof obj.__dualSaves === 'object') {
+    for (const slot of Object.values(obj.__dualSaves)) {
+      if (slot && typeof slot === 'object') lv = Math.max(lv, Number(slot.level) || 0);
+    }
+  }
+  return lv;
+}
+function readMinLevel() {
+  try { return Number(fs.readFileSync(path.join(SAVE_DIR, '.min-level'), 'utf8')) || 0; } catch (e) { return 0; }
+}
+/** 是不是「刚建的新档」：1 级、没打过胜仗、没通关、也不是转生。
+ *  ⚠ 转生果会把等级降回 1（reborn>0），那是合法存档，不能被当成空档拦下。 */
+function isFreshSave(obj) {
+  if (!obj || typeof obj !== 'object') return false;
+  if (saveMaxLevel(obj) > 1) return false;
+  if (Number(obj.reborn) > 0) return false;
+  if (Number(obj.allWins) > 0) return false;
+  if (obj.stages && typeof obj.stages === 'object' && Object.keys(obj.stages).length) return false;
+  return true;
+}
+/* ---------- /__save：存档文件读写（本地备份 / 自建同步服务的接口层） ---------- */
+const NO_SAVE = process.argv.includes('--no-save');
+const SAVE_DIR = path.join(ROOT, 'save');
+/* 首页 index.html 住在 scripts/ 里。浏览器地址仍然是 http://host:port/ （或 /index.html），
+ * 页面里的 css/js/images/audio 都是相对 URL 根解析的，所以 html 里一个引用都不用改。 */
+const ENTRY_REL = ['scripts/index.html', 'index.html'].find((f) => fs.existsSync(path.join(ROOT, f))) || 'index.html';
+const SAVE_FILE = path.join(SAVE_DIR, 'progress.json');
+const SAVE_MAX = 4 * 1024 * 1024;      // 存档上限 4 MB
+
+function saveStat() {
+  try { const st = fs.statSync(SAVE_FILE); return { exists: true, savedAt: Math.round(st.mtimeMs), size: st.size }; }
+  catch (e) { return { exists: false, savedAt: 0, size: 0 }; }
+}
+function readBody(req, limit) {
+  return new Promise((resolve, reject) => {
+    let size = 0; const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limit) { reject(new Error('too large')); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+function json(res, code, body) {
+  res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+  res.end(JSON.stringify(body));
+}
+async function handleSaveApi(req, res, url) {
+  if (NO_SAVE) return json(res, 503, { ok: false, msg: '服务器以 --no-save 启动，存档文件同步已关闭' });
+  if (req.method === 'GET') {
+    const st = saveStat();
+    /* meta 里带上**自己的游戏目录**：启动器据此判断「端口上那个服务器还是不是这个文件夹的」——
+     * 文件夹被改名/移动之后，旧服务器仍然占着端口，但它的根目录已经失效（页面全 404）。 */
+    if (url.searchParams.get('meta')) {
+      let maxLevel = readSaveLevel(), reborn = 0;
+      try {
+        const cur = JSON.parse(fs.readFileSync(SAVE_FILE, 'utf8'));
+        maxLevel = saveMaxLevel(cur);
+        reborn = Number(cur.reborn) || 0;
+      } catch (e) {}
+      return json(res, 200, { ok: true, root: ROOT, exists: st.exists,
+        savedAt: st.savedAt, size: st.size, level: readSaveLevel(), maxLevel, reborn, minLevel: readMinLevel() });
+    }
+    if (!st.exists) return json(res, 200, { ok: true, exists: false, savedAt: 0, data: null });
+    try { return json(res, 200, { ok: true, exists: true, savedAt: st.savedAt, data: fs.readFileSync(SAVE_FILE, 'utf8') }); }
+    catch (e) { return json(res, 500, { ok: false, msg: '读取存档失败：' + e.message }); }
+  }
+  if (req.method === 'POST') {
+    let body;
+    try { body = await readBody(req, SAVE_MAX); }
+    catch (e) { return json(res, 413, { ok: false, msg: '存档太大或读取中断' }); }
+    let parsed;
+    try { parsed = JSON.parse(body); } catch (e) { return json(res, 400, { ok: false, msg: '不是合法 JSON' }); }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return json(res, 400, { ok: false, msg: '存档必须是对象' });
+    /* 防呆：拒绝用「全新空档」覆盖磁盘上已有的正式存档。
+     * 触发场景：浏览器里那份 1 级空档在自动保存时把几十级的存档盖掉（已经发生过两次）。
+     * 需要真的重置时，用 ?force=1（调试面板的「彻底重置账号」会带）。
+     * ⚠ 不能用「等级比水位线低」一刀切：转生果会把等级合法地降回 1（reborn>0）。
+     * 只拦「全新 1 级档」，且要求磁盘上确实已有进度。 */
+    const force = url.searchParams.get('force') === '1';
+    const MARK = path.join(SAVE_DIR, '.min-level');
+    const readMark = () => { try { return Number(fs.readFileSync(MARK, 'utf8')) || 0; } catch (e) { return 0; } };
+    const writeMark = (lv) => { try { fs.mkdirSync(SAVE_DIR, { recursive: true }); fs.writeFileSync(MARK, String(lv), 'utf8'); } catch (e) {} };
+    if (!force && fs.existsSync(SAVE_FILE)) {
+      try {
+        const cur = JSON.parse(fs.readFileSync(SAVE_FILE, 'utf8'));
+        const curLv = saveMaxLevel(cur), newLv = saveMaxLevel(parsed);
+        const curReborn = Number(cur.reborn) || 0, newReborn = Number(parsed.reborn) || 0;
+        /* 新档比磁盘档低，默认是旧兜底档/初始档回来了；唯一合法的降级是转生（reborn 增加）。 */
+        if (newLv < curLv && newReborn <= curReborn) {
+          const what = isFreshSave(parsed) ? '全新的 1 级空档' : (newLv + ' 级旧档');
+          return json(res, 409, { ok: false, msg: '磁盘上已有 ' + curLv + ' 级存档，已拒绝用' + what + '覆盖（如确需重置：调试面板「彻底重置账号」，或加 ?force=1）' });
+        }
+      } catch (e) { /* 旧存档读不出来就不拦，照常写（主文件仍保留，交给导入/备份） */ }
+    }
+    try {
+      fs.mkdirSync(SAVE_DIR, { recursive: true });
+      fs.writeFileSync(SAVE_FILE, JSON.stringify(parsed), 'utf8');
+      writeMark(Math.max(readMark(), saveMaxLevel(parsed)));
+      return json(res, 200, { ok: true, savedAt: saveStat().savedAt, maxLevel: saveMaxLevel(parsed) });
+    } catch (e) { return json(res, 500, { ok: false, msg: '写入存档失败：' + e.message }); }
+  }
+  return json(res, 405, { ok: false, msg: '只支持 GET / POST' });
+}
+
+/* ---------- /__save/backup：把当前正式存档留一份快照到 save/backup/ ----------
+ * 「导入存档」「用另一个档覆盖」这类操作前先调它，玩家随时能退回上一份进度。
+ * 文件名沿用 README 里写的 progress-YYYYMMDD-HHMMSS.json；同一秒内重复调用只留一份。 */
+function handleBackupApi(req, res) {
+  if (NO_SAVE) return json(res, 503, { ok: false, msg: '服务器以 --no-save 启动，存档文件同步已关闭' });
+  const st = saveStat();
+  if (!st.exists) return json(res, 200, { ok: true, skipped: true, msg: '还没有正式存档，不用备份' });
+  const dir = path.join(SAVE_DIR, 'backup');
+  const p2 = (n) => String(n).padStart(2, '0');
+  const d = new Date();
+  const stamp = '' + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) + '-' + p2(d.getHours()) + p2(d.getMinutes()) + p2(d.getSeconds());
+  const target = path.join(dir, 'progress-' + stamp + '.json');
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    if (!fs.existsSync(target)) fs.copyFileSync(SAVE_FILE, target);
+  } catch (e) { return json(res, 500, { ok: false, msg: '写备份失败：' + e.message }); }
+  return json(res, 200, { ok: true, backup: path.relative(ROOT, target).split(path.sep).join('/'), savedAt: st.savedAt, level: readSaveLevel() });
+}
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.mp3': 'audio/mpeg',
+  '.mp4': 'video/mp4',
+  '.json': 'application/json; charset=utf-8',
+  '.ico': 'image/x-icon',
+};
+
+http.createServer((req, res) => {
+  let rel, url;
+  try {
+    url = new URL(req.url, 'http://127.0.0.1');
+    rel = decodeURIComponent(url.pathname);
+  } catch (_) { res.writeHead(400); res.end('400'); return; }
+  if (rel === '/__save/backup') { try { handleBackupApi(req, res); } catch (e) { json(res, 500, { ok: false, msg: '备份失败：' + e.message }); } return; }
+  if (rel === '/__save') { handleSaveApi(req, res, url).catch(() => json(res, 500, { ok: false, msg: '服务器内部错误' })); return; }
+  /* ---------- /__update：「一键拉取远端更新」（参数白名单，动作写死） ----------
+   * 真正干活的是 scripts/update-game.js；这里只负责：
+   *   · 校验参数（mode 白名单、asset 只允许普通文件名、dry 只允许 0/1）
+   *   · 用**当前 Node** 跑那个脚本，把 stdout 最后一行 JSON 原样回给前端
+   * 于是浏览器 / 壳 / 便携版走的是同一份逻辑，也不用给壳单独写一套下载+解压。 */
+  if (rel === '/__update') {
+    const mode = String(url.searchParams.get('mode') || 'auto');
+    const asset = String(url.searchParams.get('asset') || '');
+    const platform = String(url.searchParams.get('platform') || '');
+    const dry = url.searchParams.get('dry') === '1';
+    if (!['auto', 'check', 'git', 'release'].includes(mode)) { json(res, 400, { ok: false, code: 'BAD_MODE', msg: '不认识的更新方式：' + mode }); return; }
+    if (asset && !/^[A-Za-z0-9._-]{1,120}$/.test(asset)) { json(res, 400, { ok: false, code: 'BAD_ASSET', msg: '资源名不合法' }); return; }
+    if (platform && !['darwin', 'win32', 'linux', 'android'].includes(platform)) { json(res, 400, { ok: false, code: 'BAD_PLATFORM', msg: '平台参数不合法' }); return; }
+    if (mode !== 'check' && req.method !== 'POST') { json(res, 405, { ok: false, code: 'NEED_POST', msg: '更新动作只接受 POST' }); return; }
+    const script = path.join(ROOT, 'scripts', 'update-game.js');
+    if (!fs.existsSync(script)) { json(res, 501, { ok: false, code: 'NO_HELPER', msg: '这个包里没有 scripts/update-game.js，无法一键更新' }); return; }
+    const argv = [script, '--json', '--mode=' + mode, '--root=' + ROOT];
+    if (dry) argv.push('--dry');
+    if (asset) argv.push('--asset=' + asset);
+    if (platform) argv.push('--platform=' + platform);
+    execFile(process.execPath, argv, { timeout: 1800000, maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
+      const text = String(stdout || '').trim();
+      const last = text.split('\n').filter(Boolean).pop() || '';
+      let parsed = null;
+      try { parsed = JSON.parse(last); } catch (e) { parsed = null; }
+      if (parsed) {
+        parsed.log = String(stderr || '').trim().split('\n').filter(Boolean).slice(-8);
+        json(res, 200, parsed);
+      } else {
+        json(res, 500, { ok: false, code: 'HELPER_FAILED', msg: ((err && err.message) || '更新脚本没有返回结果') + (stderr ? '：' + String(stderr).trim().slice(-300) : '') });
+      }
+    });
+    return;
+  }
+  /* 存档列表 / 读取：给「从存档列表导入」用（不依赖系统文件选择器，桌面壳里也能用）。 */
+  if (rel === '/__saves' || rel.startsWith('/__saves/get')) {
+    const SAVE_DIR = path.join(ROOT, 'save');
+    const listOne = (abs, rel2, kind) => {
+      try {
+        const st = fs.statSync(abs);
+        if (!st.isFile() || !abs.endsWith('.json')) return null;
+        let level = null, name = null;
+        try { const d = JSON.parse(fs.readFileSync(abs, 'utf8')); level = d && d.level; name = d && d.name; } catch (e) { return null; }
+        if (typeof name !== 'string' || !Number.isFinite(level)) return null;
+        return { rel: rel2, level, name, size: st.size, at: st.mtimeMs, kind: kind || 'backup' };
+      } catch (e) { return null; }
+    };
+    if (rel.startsWith('/__saves/get')) {
+      const want = url.searchParams.get('rel') || '';
+      const abs = path.resolve(ROOT, want);
+      if (!abs.startsWith(SAVE_DIR + path.sep) || !abs.endsWith('.json')) { json(res, 403, { ok: false, msg: '只允许读取 save/ 下的存档' }); return; }
+      fs.readFile(abs, (err, data) => {
+        if (err) { json(res, 404, { ok: false, msg: '读不到这个存档' }); return; }
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(data);
+      });
+      return;
+    }
+    const out = [];
+    for (const rel2 of fs.readdirSync(SAVE_DIR)) {
+      if (rel2 === 'backup') continue;
+      const it = listOne(path.join(SAVE_DIR, rel2), 'save/' + rel2, rel2 === 'progress.json' ? 'current' : 'backup');
+      if (it) out.push(it);
+    }
+    const bk = path.join(SAVE_DIR, 'backup');
+    if (fs.existsSync(bk)) for (const f of fs.readdirSync(bk)) { const it = listOne(path.join(bk, f), 'save/backup/' + f); if (it) out.push(it); }
+    out.sort((a, b) => b.at - a.at);
+    json(res, 200, { ok: true, saves: out });
+    return;
+  }
+  if (rel === '/' || rel === '' || rel === '/index.html') rel = '/' + ENTRY_REL;
+  const file = path.join(ROOT, rel);
+  if (file !== ROOT && !file.startsWith(ROOT + path.sep)) { res.writeHead(403); res.end('403'); return; }
+  fs.readFile(file, (err, data) => {
+    if (err) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }); res.end('404 ' + rel); return; }
+    res.writeHead(200, {
+      'content-type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
+      // no-store：开发期改完 CSS/JS 一刷新就是新的（no-cache 在部分浏览器里仍会拿旧文件）
+      'cache-control': 'no-store, must-revalidate',
+    });
+    res.end(data);
+  });
+}).listen(PORT, '127.0.0.1', function () {
+  const st = saveStat();
+  const realPort = this.address().port;     // PORT=0 时这里是系统分配的真实端口
+  console.log('松鼠大战 · 怀旧复刻版');
+  console.log('目录: ' + ROOT);
+  console.log('地址: http://127.0.0.1:' + realPort + '/');
+  console.log('自检: http://127.0.0.1:' + realPort + '/index.html?test=1');
+  console.log('战斗观察: http://127.0.0.1:' + realPort + '/index.html?test=2');
+  console.log(NO_SAVE
+    ? '存档文件: 已关闭（--no-save）'
+    : '存档文件: save/progress.json' + (st.exists ? '（已有存档 ' + new Date(st.savedAt).toLocaleString() + '）' : '（还没有，游戏保存后自动出现）'));
+});

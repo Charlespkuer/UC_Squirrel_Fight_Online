@@ -1,0 +1,37 @@
+[package]
+name = "ssdz-online"
+version = "1.0.50"
+description = "松鼠大战 Online 客户端"
+authors = ["ssdz-online"]
+edition = "2021"
+rust-version = "1.90"
+
+[[bin]]
+name = "squirrel_fight_online"
+path = "src/main.rs"
+
+[lib]
+name = "ssdz_online_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", default-features = false, features = ["wry", "common-controls-v6", "compression"] }
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = "0.55"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
+

@@ -1,0 +1,92 @@
+{
+  "version": 2,
+  "comment": "服务端动作白名单（唯一真值）：server/game/actions.js 直接读它，客户端从 /api/meta 拿同一份。mode：async=含随机数或需要服务端权威结果，客户端必须 await；sync=确定性动作，客户端可先本地预测、服务端仍会重算并回 patch；local=纯界面状态，不上行。args 是位置参数类型表，多传的参数一律拒绝。",
+  "modes": {
+    "async": "含随机数或需要服务端权威结果，客户端必须 await",
+    "sync": "确定性动作，客户端可先本地预测；服务端仍会重算并返回 patch",
+    "local": "只影响界面偏好/只读镜像，不上行"
+  },
+  "actions": {
+    "buyProp":            { "mode": "sync",  "args": ["int", "int"] },
+    "rankBuy":            { "mode": "async", "args": ["int"] },
+    "useProp":            { "mode": "async", "args": ["int", "any"] },
+    "usePropMany":        { "mode": "async", "args": ["int", "int"] },
+    "sellProp":           { "mode": "sync",  "args": ["int", "int"] },
+    "sellGear":           { "mode": "sync",  "args": ["str"] },
+    "openChestProp":      { "mode": "async", "args": ["int"] },
+    "buyVip":             { "mode": "sync",  "args": ["int"] },
+
+    "doUpgrade":          { "mode": "async", "args": ["str", "int"] },
+    "wear":               { "mode": "sync",  "args": ["str"] },
+    "unwear":             { "mode": "sync",  "args": ["str"] },
+    "toggleGearStar":     { "mode": "sync",  "args": ["str"] },
+    "composeGear":        { "mode": "async", "args": ["int"] },
+    "mergeGears":         { "mode": "async", "args": ["keys", "any"] },
+    "grantStarterGear":   { "mode": "async", "args": [] },
+    "setTutorialStep":    { "mode": "sync", "args": ["int"] },
+    "socketGem":          { "mode": "sync",  "args": ["str", "int"] },
+    "unsocketGem":        { "mode": "sync",  "args": ["str"] },
+    "mergeGems":          { "mode": "async", "args": ["int"] },
+
+    "chooseWS":           { "mode": "sync",  "args": ["str", "int"] },
+    "chooseWSRandom":     { "mode": "async", "args": [] },
+    "fruitOptions":       { "mode": "async", "args": ["int"] },
+    "applyFruitChoice":   { "mode": "async", "args": ["int", "str", "int"] },
+    "composeSeed":        { "mode": "sync",  "args": ["int"] },
+    "composeConvertPill": { "mode": "async", "args": [] },
+
+    "allocatePoint":      { "mode": "sync",  "args": ["str"] },
+    "allocateEvenly":     { "mode": "sync",  "args": [] },
+    "undoPoint":          { "mode": "sync",  "args": [] },
+
+    "hatchPet":           { "mode": "async", "args": [] },
+    "setPetTeam":         { "mode": "sync",  "args": ["keys"] },
+    "feedPet":            { "mode": "sync",  "args": ["str", "keys"] },
+    "evolvePet":          { "mode": "async", "args": ["str", "keys"] },
+
+    "upgradeBuilding":    { "mode": "async", "args": ["str"] },
+    "claimBuildingBuff":  { "mode": "sync",  "args": ["str"] },
+
+    "claimDaily":         { "mode": "async", "args": [] },
+    "lotteryDraw":        { "mode": "async", "args": ["int"] },
+    "claimQuest":         { "mode": "sync",  "args": ["int"] },
+
+    "beginChest":         { "mode": "async", "args": ["int"] },
+    "confirmChest":       { "mode": "async", "args": [] },
+    "reopenChest":        { "mode": "async", "args": [] },
+
+    "abandonStageRun":    { "mode": "sync",  "args": ["int"] },
+    "markMessagesSeen":   { "mode": "sync",  "args": [] },
+
+    "setSettings":        { "mode": "local", "args": ["any"] },
+    "supportPromptTake":  { "mode": "sync",  "args": [], "note": "30 级支持作者提示的“已提示”必须落服务端；联机版 save() 是空操作，放 local 会导致每次同步/开背包都重弹" },
+    "tickEnergy":         { "mode": "local", "args": [] }
+  },
+  "serverOnly": [
+    "save", "load", "newGame", "switchMode", "prepareImport", "verifyImport", "importFingerprint",
+    "importFileRaw", "readFileRaw", "fileProbe", "fileLoad", "fileWrite", "fileWriteNow",
+    "flushFileWrite", "setSaveTransport",
+    "clearDebugGains", "debugSnapshot", "debugRecordDiff", "debugForgetWS", "debugLedgerSummary",
+    "grantEndlessBlackCard", "applyBlackCard", "applyBlackGearBox", "grantVip",
+    "gainRandomWS", "learnSkill", "setWS", "forgetWS", "setWeapon", "setSkill", "forgetWeapon", "forgetSkill",
+    "gainExp", "gainExpWithBoost", "addGold", "fightReward", "revengeReward", "recordBattle",
+    "recordWoodBattle", "noteChallengeClear", "markRevenged", "noteRevenge",
+    "beginStageBattle", "finishStageBattle", "interruptStageBattle", "stagePrenticeLost",
+    "setStageProgress", "settlePendingChest", "bumpDaily", "tickPropStates",
+    "grantPet",
+    "tickVipDaily", "syncBlackCardsWeek", "markLocalFresh", "ensureYesterdayEarnings", "trackEarn",
+    "addFriend", "removeFriend", "leaveFriendMessage", "setMaster", "clearMaster", "kickPrentice",
+    "addPrentice", "removePrentice", "claimApprenticeExp", "beginRecruitChallenge",
+    "cancelRecruitChallenge", "finishRecruitChallenge"
+  ],
+  "battle": {
+    "kinds": ["random", "rank", "stage", "arena", "friend"]
+  },
+  "limits": {
+    "maxArgs": 6,
+    "maxStringLength": 64,
+    "maxArrayLength": 32,
+    "maxObjectKeys": 24,
+    "maxObjectDepth": 3
+  }
+}
