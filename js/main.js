@@ -557,12 +557,17 @@
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = '#22303a';
     ctx.fillRect(0, 0, W, H);
-    const sh = Engine.SHEETS['loadingp'];
-    if (sh) {
-      const w = 640, h = 640 * (sh.img.height / sh.img.width);
-      ctx.drawImage(sh.img, (W - w) / 2, (H - h) / 2 - 40, w, h);
-    } else {
-      ctx.fillStyle = '#2d1f10';
+    /* 加载屏只用经典素材：原版 3182 载入图（松鼠小屋）到位后铺满。
+     * ⚠ 不要再画 `loadingp`：那是一张 **sprite 图集**（绿圆盘 + 旋转环 + 两只现代松鼠头像），
+     *   整张 `drawImage` 会把这几个元素一起摆到屏幕中央，玩家看到的就是「现代模式的松鼠
+     *   造型闪过去」（2026-11 用户实测）。联机版只有经典界面，单机现代模式也早已不走这条
+     *   加载页，所以两档统一用原版底图。 */
+    if (mainBgSsfight && mainBgSsfight.complete && mainBgSsfight.naturalWidth) {
+      const iw = mainBgSsfight.naturalWidth, ih = mainBgSsfight.naturalHeight;
+      const k = Math.max(W / iw, H / ih);
+      const w = iw * k, h = ih * k;
+      ctx.drawImage(mainBgSsfight, (W - w) / 2, (H - h) / 2, w, h);
+      ctx.fillStyle = 'rgba(0,0,0,.16)';
       ctx.fillRect(0, 0, W, H);
     }
     // 进度条（原版 tanchutiao 素材）
@@ -640,9 +645,13 @@
     setStatus('加载背景…');
     // 主界面背景：用原版 main.jpg（868×512，比例与原设计空间一致）。
     // 加载失败时退回自绘村庄，保证离线也能显示。
-    /* 两张底图并行拉：主图失败才退 village.svg（退回本身要等主图结果，所以放在 then 里）。 */
+    /* 两张底图并行拉：主图失败才退 village.svg（退回本身要等主图结果，所以放在 then 里）。
+     * 联机版只有经典界面，首页底图固定走 ssfight 的 3182 —— 现代模式那张 `main.jpg`
+     * （现代重绘村庄）根本不加载，省一次 471 KB 下载/解码，也不会在启动阶段碰到现代素材。 */
     const [mainImg, ssfImg] = await Promise.all([
-      Engine.loadImage('images/ui/screens/main.jpg').then((img) => img || Engine.loadImage('images/ui/screens/village.svg')),
+      window.__SSDZ_ONLINE__
+        ? Promise.resolve(null)
+        : Engine.loadImage('images/ui/screens/main.jpg').then((img) => img || Engine.loadImage('images/ui/screens/village.svg')),
       Engine.loadImage('images/ssfight/ui/bitmap/3182_0.hd.jpg'),
     ]);
     mainBg = mainImg || null;
@@ -650,6 +659,11 @@
     mainBgSsfight = ssfImg || null;
     drawLoading(0.25, '正在加载角色素材…');
     setStatus('加载角色素材…');
+    /* 联机版只有经典界面：首屏/登录/村庄全部走 SfRender（ssflight 素材包 + images/ui 里的
+     * 图标/立绘），**一张现代界面图集都不需要**。经典战斗 / 无尽塔用到 Engine 图集时
+     * 各自会 `Engine.loadSheets()` 按需拉（见 ui-fight.js、tower-ui.js），所以这里只等
+     * 原版进度条那一张，别再预载现代首页的 50 多张图集（约 20 MB 解码）。
+     * 单机版仍按原清单预载（现代界面首页要用）。 */
     const coreSheets = ['SQ_01', 'SQ_02', 'weaponAttack', 'throwweaponAttack', 'main_e1', 'main_e2', 'main_e3',
       'wuqi', 'wuqi2', 'jineng', 'daoju', 'jinbeidaoju', 'tudi', 'go', 'starter_effect', 'loadingp',
       'fightNum_r', 'fightNum_g', 'fightNum_y', 'tilishuzi', 'energyNum', 'expNum', 'jingyanshuzi', 'num_28', 'num_36',
@@ -658,7 +672,7 @@
       'new', 'shengbai', 'tanchutiao', 'loadingShadow', 'substarate', 'substarate0', 'draw', 'activity', 'plus', 'minus'];
     /* 只有「首屏 + 首页」这批必须等。战斗图集（BATTLE_SHEETS）不在这里等 ——
      * 经典界面不用它，现代界面等首页挂好后由 `scheduleBattleAssets()` 空闲补拉。 */
-    await Engine.loadSheets(coreSheets);
+    await Engine.loadSheets(window.__SSDZ_ONLINE__ ? ['tanchutiao'] : coreSheets);
     drawLoading(0.85, '正在加载界面素材…');
     setStatus('加载界面素材…');
     // 角色/特效图集必须优先于场景图集，否则同名标签会被场景图元抢走
@@ -1216,7 +1230,9 @@
       if (window.SfFight && SfFight.ready()
         && UI.currentUiMode && UI.currentUiMode() === 'classic') return SfFight;
     } catch (e) {}
-    return Battle;
+    /* 联机版不打包/不加载现代 canvas 战斗（js/battle.js 不进联机包），`Battle` 不存在；
+     * 现代界面只在单机版存在。 */
+    return window.Battle || null;
   }
   /** 跑一场：先试当前模式该走的渲染器，抛错就退回 canvas 再跑一次。
    *  征战动物 boss 在现代模式也借用 SfFight：它们只有经典 6833 矢量素材，
@@ -1224,12 +1240,15 @@
   async function runBattle(opts) {
     const first = opts && opts.classicFight && window.SfFight && SfFight.ready()
       ? SfFight : battleRenderer();
-    if (first === Battle) return Battle.run(opts);
+    if (!first) throw new Error('没有可用的战斗渲染器');
+    if (first === window.Battle) return window.Battle.run(opts);
     try {
       return await SfFight.run(opts);
     } catch (error) {
       if (window.__errs) window.__errs.push('SfFight: ' + (error && error.message));
-      return Battle.run(opts);
+      /* 联机版只有经典战斗：SfFight 失败就把错误抛给调用方提示，不许退回现代 canvas。 */
+      if (window.__SSDZ_ONLINE__ || !window.Battle) throw error;
+      return window.Battle.run(opts);
     }
   }
   // ---------- 战斗调度 ----------

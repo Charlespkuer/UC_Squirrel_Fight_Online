@@ -21,11 +21,24 @@ if (!['http:', 'https:'].includes(api.protocol) || api.username || api.password 
 
 const allowed = ['js', 'css', 'audio', 'images', 'shared'];
 const excluded = /(?:^|\/)(?:_reference|references|\.bak-upscale|node_modules|\.git|out)(?:\/|$)|(?:\.bak|\.log|\.sqlite(?:-wal|-shm)?|\.db|\.local\.json|\.p12|\.mobileprovision)$/i;
+/* 联机版只有经典界面：单机版的现代界面素材与只服务现代模式的脚本**不进联机包**
+ * （仓库里仍保留给 `scripts/index.html` 单机网页版与 GitHub Pages 用）。
+ *   · images/ui/screens —— 现代首页底图 / 加载图 / 战果图 / 新手提示等屏幕图；
+ *   · images/battle/bg —— 现代 canvas 战斗的场地背景（经典战斗用 ssfight 元件）；
+ *   · js/battle.js —— 现代 canvas 战斗；联机战斗一律走 SfFight；
+ *   · js/debug.js / css/debug.css / js/tauri-bridge.js —— 单机页面才加载。
+ * 这些路径同时参与 `--web` 快照的指纹，删/加要一起改。 */
+const ONLINE_EXCLUDED_FILES = new Set(['js/battle.js', 'js/debug.js', 'js/tauri-bridge.js', 'css/debug.css']);
+const ONLINE_EXCLUDED_DIRS = ['images/ui/screens/', 'images/battle/bg/'];
+function onlineExcluded(name) {
+  if (ONLINE_EXCLUDED_FILES.has(name)) return true;
+  return ONLINE_EXCLUDED_DIRS.some((prefix) => name === prefix.slice(0, -1) || (name + '/').startsWith(prefix));
+}
 const sources = [];
 function collect(dir, rel = '') {
   for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
     const name = rel ? rel + '/' + ent.name : ent.name;
-    if (excluded.test(name) || ent.name === 'AGENTS.md' || ent.name === 'AGENT.md') continue;
+    if (excluded.test(name) || onlineExcluded(name) || ent.name === 'AGENTS.md' || ent.name === 'AGENT.md') continue;
     if (ent.isSymbolicLink()) throw new Error('Refusing symlink in client assets: ' + name);
     if (ent.isDirectory()) collect(path.join(dir, ent.name), name);
     else if (ent.isFile()) sources.push(name);
