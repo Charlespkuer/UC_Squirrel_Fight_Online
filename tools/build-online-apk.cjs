@@ -23,13 +23,22 @@ function batch(file, args, cwd = ROOT, options = {}) {
   return run(process.env.ComSpec || 'cmd.exe', ['/d', '/c', file, ...args], cwd, options);
 }
 const apiArgs = process.argv.slice(2);
+/* 目标 ABI：默认 arm64（正式包）；`SSDZ_ONLINE_ABI=x86_64` 出模拟器测试包
+ * （本机 Android 模拟器都是 x86_64 镜像，装不了 arm64-only 的正式包）。 */
+const ABI = String(process.env.SSDZ_ONLINE_ABI || 'arm64').toLowerCase();
+const ABI_PROFILES = {
+  arm64: { rust: 'aarch64-linux-android', tauri: 'aarch64', jni: 'arm64-v8a', task: 'assembleArm64Release', out: 'arm64', label: 'arm64' },
+  x86_64: { rust: 'x86_64-linux-android', tauri: 'x86_64', jni: 'x86_64', task: 'assembleX86_64Release', out: 'x86_64', label: 'x86_64' },
+};
+const PROFILE = ABI_PROFILES[ABI];
+if (!PROFILE) throw new Error('Unsupported SSDZ_ONLINE_ABI=' + ABI + '（支持 arm64 / x86_64）');
 run(process.execPath, [path.join(ROOT, 'tools', 'build-online-app.cjs'), '--web', ...apiArgs]);
 const cli = path.join(TAURI, 'node_modules', '@tauri-apps', 'cli', 'tauri.js');
 if (!fs.existsSync(cli)) throw new Error('Install Online CLI first: cd src-tauri && npm install');
 if (!fs.existsSync(path.join(ANDROID, 'gradlew.bat'))) run(process.execPath, [cli, 'android', 'init', '--ci'], TAURI);
-const so = path.join(TAURI, 'target', 'aarch64-linux-android', 'release', 'libssdz_online_lib.so');
+const so = path.join(TAURI, 'target', PROFILE.rust, 'release', 'libssdz_online_lib.so');
 const started = Date.now();
-const built = spawnSync(process.execPath, [cli, 'android', 'build', '--apk', '--target', 'aarch64', '--ci'],
+const built = spawnSync(process.execPath, [cli, 'android', 'build', '--apk', '--target', PROFILE.tauri, '--ci'],
   { cwd: TAURI, env, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
 const output = String(built.stdout || '') + String(built.stderr || '');
 process.stdout.write(output);
@@ -40,8 +49,15 @@ if (built.status !== 0) {
   const fresh = fs.existsSync(so) && fs.statSync(so).mtimeMs >= started - 2000;
   if (!denied || !fresh) throw new Error('Rust/Tauri failed; refusing to package a stale Online library');
 }
-run(process.execPath, [path.join(ROOT, 'tools', 'check-android-package.cjs'), '--library', so, 'arm64-v8a']);
-const jni = path.join(ANDROID, 'app', 'src', 'main', 'jniLibs', 'arm64-v8a');
+run(process.execPath, [path.join(ROOT, 'tools', 'check-android-package.cjs'), '--library', so, PROFILE.jni]);
+const jniRoot = path.join(ANDROID, 'app', 'src', 'main', 'jniLibs');
+/* 只留本次目标 ABI：以前打过 x86_64 测试包后，正式 arm64 包会把两个 .so 一起打进去（包体翻倍）。 */
+if (fs.existsSync(jniRoot)) {
+  for (const dir of fs.readdirSync(jniRoot)) {
+    if (dir !== PROFILE.jni) fs.rmSync(path.join(jniRoot, dir), { recursive: true, force: true, maxRetries: 3 });
+  }
+}
+const jni = path.join(jniRoot, PROFILE.jni);
 fs.mkdirSync(jni, { recursive: true });
 const jniSo = path.join(jni, 'libssdz_online_lib.so');
 if (fs.existsSync(jniSo) && fs.lstatSync(jniSo).isSymbolicLink()) fs.unlinkSync(jniSo);
@@ -76,23 +92,27 @@ const androidIcons = path.join(TAURI, 'icons', 'android');
 if (fs.existsSync(androidIcons)) fs.cpSync(androidIcons, path.join(ANDROID, 'app', 'src', 'main', 'res'), { recursive: true });
 const buildTask = path.join(ANDROID, 'buildSrc', 'src', 'main', 'java', 'com', 'ssdz', 'online', 'kotlin', 'BuildTask.kt');
 let task = fs.readFileSync(buildTask, 'utf8');
-if (!task.includes('Online prebuilt JNI')) task = task.replace('fun assemble() {', `fun assemble() {
-        // Online prebuilt JNI was compiled and ELF-checked immediately before Gradle.
-        if (target == "aarch64" && File(project.projectDir, "src/main/jniLibs/arm64-v8a/libssdz_online_lib.so").isFile) return
-`);
+const prebuiltLine = 'if (File(project.projectDir, "src/main/jniLibs/" + (if (target == "aarch64") "arm64-v8a" else target) + "/libssdz_online_lib.so").isFile) return';
+if (task.includes('Online prebuilt JNI')) {
+  /* 旧补丁只认 aarch64；换成按 target 取 ABI 目录，x86_64 测试包也能跳过重复的 Rust 编译。 */
+  task = task.replace(/if \(target == "aarch64" [^\n]*libssdz_online_lib\.so"\)\.isFile\) return/, prebuiltLine);
+} else {
+  task = task.replace('fun assemble() {', 'fun assemble() {\n        // Online prebuilt JNI was compiled and ELF-checked immediately before Gradle.\n        ' + prebuiltLine + '\n');
+}
 fs.writeFileSync(buildTask, task);
 // Only the Rust library embeds the web snapshot; no second copy under assets/.
 const cliVersion = JSON.parse(fs.readFileSync(path.join(TAURI, 'tauri.conf.json'), 'utf8')).version;
 fs.writeFileSync(path.join(ANDROID, 'app', 'tauri.properties'), 'tauri.android.versionName=' + cliVersion + '\ntauri.android.versionCode=' +
   cliVersion.split('.').reduce((n, v) => n * 1000 + Number(v), 0) + '\n');
-batch('gradlew.bat', ['assembleArm64Release', '--console=plain'], ANDROID);
-const unsigned = path.join(ANDROID, 'app', 'build', 'outputs', 'apk', 'arm64', 'release', 'app-arm64-release-unsigned.apk');
+batch('gradlew.bat', [PROFILE.task, '--console=plain'], ANDROID);
+const unsigned = path.join(ANDROID, 'app', 'build', 'outputs', 'apk', PROFILE.out, 'release',
+  'app-' + PROFILE.out + '-release-unsigned.apk');
 if (!fs.existsSync(unsigned)) throw new Error('Unsigned Online APK missing');
 const bt = fs.readdirSync(path.join(SDK, 'build-tools')).sort((a,b) => b.localeCompare(a, undefined, { numeric: true }))[0];
 const tools = path.join(SDK, 'build-tools', bt), dist = path.join(TAURI, 'dist'); fs.mkdirSync(dist, { recursive: true });
 const aligned = path.join(dist, 'online-aligned-unsigned.apk');
 const pending = path.join(dist, 'online-pending.apk');
-const apk = path.join(dist, 'squirrel_fight_online-' + cliVersion + '-arm64.apk');
+const apk = path.join(dist, 'squirrel_fight_online-' + cliVersion + '-' + PROFILE.label + '.apk');
 run(path.join(tools, 'zipalign.exe'), ['-P', '16', '-f', '4', unsigned, aligned]);
 const keys = path.join(TAURI, 'keys'); fs.mkdirSync(keys, { recursive: true });
 const secret = path.join(keys, 'signing.local.json'), keystore = path.join(keys, 'online-release.jks');
@@ -115,14 +135,14 @@ const badging = run(path.join(tools, 'aapt2.exe'), ['dump', 'badging', pending],
 const versionCode = cliVersion.split('.').reduce((n, v) => n * 1000 + Number(v), 0);
 if (!badging.includes("package: name='com.ssdz.online'") || !badging.includes("versionName='" + cliVersion + "'")
     || !badging.includes("versionCode='" + versionCode + "'") || !/(?:minSdkVersion|sdkVersion):'24'/i.test(badging)
-    || !badging.includes("native-code: 'arm64-v8a'"))
+    || !badging.includes("native-code: '" + PROFILE.jni + "'"))
   throw new Error('Online APK package, version, minimum SDK, or ABI mismatch');
 if (/uses-permission:.*(?:WRITE_EXTERNAL_STORAGE|READ_EXTERNAL_STORAGE)/.test(badging))
   throw new Error('Online APK unexpectedly requests offline storage permissions');
-console.log('PASS Online Android identity, version, SDK24+, arm64 and permissions');
+console.log('PASS Online Android identity, version, SDK24+, ' + PROFILE.label + ' and permissions');
 fs.unlinkSync(aligned);
 run(process.execPath, [path.join(ROOT, 'tools', 'build-online-app.cjs'), '--web', '--check', ...apiArgs]);
 fs.copyFileSync(pending, apk); fs.unlinkSync(pending);
 /* 发布物保留策略：dist 只留最近两版 APK（旧包不会越堆越多，见 tools/prune-dist.cjs）。 */
 try { require('./prune-dist.cjs').prune({ keep: 2 }); } catch (e) { console.warn('[prune-dist] ' + (e && e.message)); }
-console.log('Online arm64 APK ready (not installed): ' + apk);
+console.log('Online ' + PROFILE.label + ' APK ready (not installed): ' + apk);

@@ -1,3 +1,7 @@
 # Android 15+ may use 16 KiB memory pages. NDK r27 otherwise links at 4 KiB.
+# aarch64 = 正式 APK；x86_64 = 本机模拟器测试包（tools/build-online-apk.cjs 的 SSDZ_ONLINE_ABI）。
 [target.aarch64-linux-android]
+rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384", "-C", "link-arg=-Wl,-z,common-page-size=16384"]
+
+[target.x86_64-linux-android]
 rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384", "-C", "link-arg=-Wl,-z,common-page-size=16384"]
