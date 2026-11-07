@@ -26,9 +26,9 @@ const path = require('node:path');
 const ROOT = path.resolve(__dirname, '..');
 const DIST = path.join(ROOT, 'src-tauri', 'dist');
 
-/** 从文件名拆版本：squirrel_fight_online-1.0.50-arm64.apk(.idsig) → [1,0,50]。 */
+/** 从文件名拆版本：`squirrel_fight_online-1.0.50-arm64.apk` / `..._ios_unsigned.ipa` → [1,0,50]。 */
 function versionOf(name) {
-  const m = /^squirrel_fight_online-(\d+(?:\.\d+)*)(?:-[A-Za-z0-9_]+)?\.(?:apk|ipa)(?:\.idsig)?$/.exec(name);
+  const m = /^squirrel_fight_online-(\d+(?:\.\d+)*)(?:[-_][A-Za-z0-9_]+)?\.(?:apk|ipa)(?:\.idsig)?$/.exec(name);
   return m ? m[1].split('.').map(Number) : null;
 }
 function cmpVersion(a, b) {
