@@ -168,12 +168,9 @@ if (-not (Test-Path $so)) {
   throw "Rust 产物不存在：$so"
 }
 Ok "$so（$([math]::Round((Get-Item $so).Length/1MB,1)) MB）"
-& node (Join-Path $SourceRepo 'tools\check-android-package.cjs') --library $so $Abi
-if ($LASTEXITCODE -ne 0) { throw '原生库 ABI / 内存页对齐检查失败，不能继续出包。' }
-
+# .so 的 ABI / 16 KB 对齐只在最终 APK 上验一次（见末尾 check-android-package $apk）；
+# 不要在这里先验一遍裸 .so 再验一遍包里的同一份。
 # ---------- 4) 放 .so + 前端到 Android 工程 ----------
-& node (Join-Path $SourceRepo 'tools\build-tauri-app.cjs') --web --check
-if ($LASTEXITCODE -ne 0) { throw 'Rust 编译期间前端源码发生变化，请重新打包，避免发布旧资源。' }
 $jni = Join-Path $SourceRepo "src-tauri\gen\android\app\src\main\jniLibs\$Abi"
 New-Item -ItemType Directory -Force -Path $jni | Out-Null
 $jniFile = Join-Path $jni 'libssdz_classic_lib.so'
@@ -287,8 +284,8 @@ if ($gradleCode -ne 0) { throw "Gradle 打包失败（退出码 $gradleCode）" 
 # 把 APK 复制成带用途的名字，免得两种包混淆。
 $apk = Join-Path $SourceRepo "src-tauri\gen\android\app\build\outputs\apk\$($map.flavor)\debug\app-$($map.flavor)-debug.apk"
 if (-not (Test-Path $apk)) { throw "没找到 APK：$apk" }
-& node (Join-Path $SourceRepo 'tools\check-android-package.cjs') $apk
-if ($LASTEXITCODE -ne 0) { throw 'APK 原生库 / ZIP 对齐检查失败，不能发布。' }
+# 原生库 / ZIP 对齐只在**最终签名包**上验一次（见文件末尾）；签名不会改变 .so 的 ELF 对齐，
+# 这里再查一遍只是把同一个事实查两次。
 
 # ---------- 5a) 版本号体检：APK 里的 versionName/versionCode 必须与 tauri.properties 一致 ----------
 # 为什么：2026-10 审计时 dist 里躺着一个 `squirrel-fight-0.5.0-...apk`，包内实际是

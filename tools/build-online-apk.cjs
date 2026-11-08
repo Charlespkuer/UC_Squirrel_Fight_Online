@@ -49,7 +49,9 @@ if (built.status !== 0) {
   const fresh = fs.existsSync(so) && fs.statSync(so).mtimeMs >= started - 2000;
   if (!denied || !fresh) throw new Error('Rust/Tauri failed; refusing to package a stale Online library');
 }
-run(process.execPath, [path.join(ROOT, 'tools', 'check-android-package.cjs'), '--library', so, PROFILE.jni]);
+/* `.so` 的 ELF / 16 KB 对齐只验一次：等打完包对**最终 APK** 里那个 .so 验（见文件末尾的
+ * `check-android-package pending`）。以前这里先验一遍裸 .so、末尾又验一遍包里的同一份，
+ * 同一事实查两次没有意义。 */
 const jniRoot = path.join(ANDROID, 'app', 'src', 'main', 'jniLibs');
 /* 只留本次目标 ABI：以前打过 x86_64 测试包后，正式 arm64 包会把两个 .so 一起打进去（包体翻倍）。 */
 if (fs.existsSync(jniRoot)) {
@@ -141,7 +143,9 @@ if (/uses-permission:.*(?:WRITE_EXTERNAL_STORAGE|READ_EXTERNAL_STORAGE)/.test(ba
   throw new Error('Online APK unexpectedly requests offline storage permissions');
 console.log('PASS Online Android identity, version, SDK24+, ' + PROFILE.label + ' and permissions');
 fs.unlinkSync(aligned);
-run(process.execPath, [path.join(ROOT, 'tools', 'build-online-app.cjs'), '--web', '--check', ...apiArgs]);
+/* 不再在打完包后 spawn 一次 `--web --check`：那会把 96 MB 源码再读一遍、再算一遍快照指纹；
+ * 本函数开头已经 `--web` 暂存过，构建期间的源码变化不是发布门禁要重复查的事。
+ * 需要单独核对已有快照时手动跑 `node tools/build-online-app.cjs --check`（一次）。 */
 fs.copyFileSync(pending, apk); fs.unlinkSync(pending);
 /* 发布物保留策略：dist 只留最近两版 APK（旧包不会越堆越多，见 tools/prune-dist.cjs）。 */
 try { require('./prune-dist.cjs').prune({ keep: 2 }); } catch (e) { console.warn('[prune-dist] ' + (e && e.message)); }

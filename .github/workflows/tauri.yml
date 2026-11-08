@@ -46,10 +46,11 @@ jobs:
 
       # 只有**安装包**需要把前端嵌进去（轻壳版直接读游戏目录）。
       # 这里临时生成 src-tauri/web，并用 tauri.bundle.conf.json 把 frontendDist 指过去。
-      - name: 暂存前端文件并校验快照
+      # `--web` 成功即代表快照与指纹已写好；紧跟着再 `--web --check` 只是把同一份源码
+      # 再读一遍、再算一遍哈希，属于重复验证，已删除（要单独检查已有快照时手动跑一次）。
+      - name: 暂存前端文件
         run: |
           node tools/build-tauri-app.cjs --web
-          node tools/build-tauri-app.cjs --web --check
 
       - name: 安装 Tauri CLI
         working-directory: src-tauri

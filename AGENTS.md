@@ -43,6 +43,11 @@ node server/index.js
 **出 EXE**：`node tools/build-online-app.cjs`（先 `--web` 只打前端快照）。
 改服务器地址：`--api https://example.com` 或改 `src-tauri/online-api.json` 的 `base` / `fallbacks`。
 
+> **构建只做一次验证**：`--web` 已经算过的快照指纹与逐文件 sha256 必须复用，不许构建完再
+> spawn 一次 `--check`（同一份 96 MB 源码再读一遍）；`.so` 的 ABI / 16 KiB 对齐只在最终 APK
+> 上验一次；签名 / badging / zipalign 各一次。`--check` 只用于单独检查已有快照。
+> 细则见 `tools/AGENTS.md` 第 8 条 —— 不要为“保险”重复跑等价验证。
+
 **部署服务端**：`docs/服务器与部署.md` §3（打包上传 → `ssdz-deploy.sh` → 自检 `/api/health`）。
 ⚠ 服务端也要 `js/`（它把 `js/*.js` 当游戏内核加载），客户端与服务端必须**同版本**一起更新。
 

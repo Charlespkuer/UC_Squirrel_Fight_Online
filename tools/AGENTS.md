@@ -31,6 +31,20 @@
    LF 变成 CRLF，行尾多出来的 `\r` 会让锚定正则全部打空 —— 这是「本机绿、Windows 红」的经典
    原因（2026-10 `需求71` 就这么挂过一次）。另外清临时目录的 `fs.rmSync` 记得带
    `maxRetries`：Windows 上刚退出的子进程可能还占着文件。
+8. **同一次构建里，同一份内容只算一次哈希、只验一次。** 构建脚本里重复的“保险”验证不算稳健，
+   只是白烧 CPU / I/O：
+   - `build-online-app.cjs` 的 `fingerprint()` 已经逐文件读过 buffer，`web-manifest.json` 直接
+     复用这份 `size + sha256`，**不要**再去遍历暂存目录重读一遍（96 MB）；
+   - 构建成功后**不要**再 spawn `--check` / `--web --check`：同一份源码再读一遍、再算一遍指纹，
+     属于重复验证。`--check` 只保留给「单独检查已有快照」的手动/CI 场景，一次即可；
+   - `.so` 的 ELF / ABI / 16 KiB 对齐只在**最终 APK** 上验一次；不要先验裸 `.so`、再验包里
+     的同一份；
+   - 签名（`apksigner verify`）、`aapt2 badging`、`zipalign -c` 各保留一次；只有检查**不同事实**
+     的才允许并存（例：zipalign 查 ZIP、ELF 检查查 LOAD 段 —— 它们不重复）。
+   - 判据：删掉的是「验证同一事实的第二次调用」，不是发布前唯一的那道门禁。
+   - 反例（2026-11 已删）：`build-apk.ps1` 编译后 + 发布前各跑一次 `--web --check`；`tauri.yml`
+     里 `--web` 后面紧跟 `--web --check`；`build-online-apk.cjs` 先 `check-android-package --library`
+     再对最终 APK 跑一次。
 
 ## 新增脚本的门槛（三条都满足才留下）
 

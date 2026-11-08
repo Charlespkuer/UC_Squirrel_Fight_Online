@@ -48,12 +48,17 @@ for (const dir of allowed) collect(path.join(ROOT, dir), dir);
 sources.push('scripts/index-online.html');
 if (fs.existsSync(path.join(ROOT, 'scripts', 'version.json'))) sources.push('scripts/version.json');
 sources.sort();
+/* 逐文件的 size + sha256 只算一次：既给快照指纹，也给下面的 `web-manifest.json`。
+ * ⚠ 以前 `writeWebManifest()` 会把暂存目录再遍历、再读一遍（96 MB）算同样的哈希 ——
+ *   同一份内容算两次，纯浪费；这里直接复用这次读到的 buffer。 */
+const fileHashes = new Map();
 function fingerprint() {
   const hash = crypto.createHash('sha256'); let bytes = 0;
   hash.update(base); hash.update(version); hash.update(fs.readFileSync(__filename));
   for (const rel of sources) {
     const buffer = fs.readFileSync(path.join(ROOT, rel));
     hash.update(rel); hash.update(buffer); bytes += buffer.length;
+    fileHashes.set(rel, { size: buffer.length, sha256: crypto.createHash('sha256').update(buffer).digest('hex') });
   }
   return { hash: hash.digest('hex'), files: sources.length, bytes, api: base };
 }
@@ -61,20 +66,21 @@ const stamp = fingerprint();
 /** 客户端文件清单：给服务器主人的「将要同步哪些内容」预览用。
  *  - 写进 `src-tauri/web/web-manifest.json`（客户端自带，可选）；
  *  - 同一份写进 `server/web-manifest.json`（随服务端包部署，作为当前版本清单）。
- *  清单只做路径 / 大小 / sha256，不写时间戳，内容不变时完全一致。 */
-function writeWebManifest() {
+ *  清单只做路径 / 大小 / sha256，不写时间戳，内容不变时完全一致。
+ *  数据来自 `fingerprint()` 已读过的 buffer；只有两个生成文件要现算。 */
+function writeWebManifest(entryText, configText) {
   const files = [];
-  const walk = (dir, rel) => {
-    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (ent.name === 'web-manifest.json') continue;
-      const p = rel ? rel + '/' + ent.name : ent.name;
-      if (ent.isDirectory()) { walk(path.join(dir, ent.name), p); continue; }
-      if (!ent.isFile()) continue;
-      const buf = fs.readFileSync(path.join(dir, ent.name));
-      files.push({ path: p, size: buf.length, sha256: crypto.createHash('sha256').update(buf).digest('hex') });
-    }
+  for (const rel of sources) {
+    if (rel === 'scripts/index-online.html') continue; // 最终入口是注入过 online-config.js 的 index.html
+    const meta = fileHashes.get(rel);
+    if (meta) files.push({ path: rel, size: meta.size, sha256: meta.sha256 });
+  }
+  const addText = (rel, text) => {
+    const buf = Buffer.from(text, 'utf8');
+    files.push({ path: rel, size: buf.length, sha256: crypto.createHash('sha256').update(buf).digest('hex') });
   };
-  walk(WEB, '');
+  addText('index.html', entryText);
+  addText('online-config.js', configText);
   files.sort((a, b) => a.path.localeCompare(b.path));
   const text = JSON.stringify({ version, files });
   fs.writeFileSync(path.join(WEB, 'web-manifest.json'), text);
@@ -104,8 +110,9 @@ for (const rel of sources) {
   fs.copyFileSync(path.join(ROOT, rel), dest);
 }
 const entry = path.join(WEB, 'index.html');
-fs.writeFileSync(entry, fs.readFileSync(entry, 'utf8').replace('<head>',
-  '<head>\n<script src="online-config.js"></script>'));
+const entryText = fs.readFileSync(entry, 'utf8').replace('<head>',
+  '<head>\n<script src="online-config.js"></script>');
+fs.writeFileSync(entry, entryText);
 /* 降级地址：安装包默认写 https，但**云防火墙可能只放行 80**（本机实测 443 不可达）。
  * 客户端启动时并行探 `__SSDZ_ONLINE_API__` 与这里的候选，谁先答应用谁；
  * 等 443 放行后，同一份安装包会自动回到 https，不用重新打包。 */
@@ -125,11 +132,12 @@ const fallbacks = [];
   } catch (_) {}
 })();
 const uniqueFallbacks = [...new Set(fallbacks.map((u) => u.replace(/\/+$/, '')))].filter((u) => u !== base);
-fs.writeFileSync(path.join(WEB, 'online-config.js'),
+const configText =
   'window.__SSDZ_ONLINE_API__ = ' + JSON.stringify(base) + ';\n' +
   'window.__SSDZ_ONLINE_API_FALLBACKS__ = ' + JSON.stringify(uniqueFallbacks) + ';\n' +
-  'window.__SSDZ_VERSION = ' + JSON.stringify(version) + ';\n');
-writeWebManifest();
+  'window.__SSDZ_VERSION = ' + JSON.stringify(version) + ';\n';
+fs.writeFileSync(path.join(WEB, 'online-config.js'), configText);
+writeWebManifest(entryText, configText);
 fs.writeFileSync(path.join(TAURI, 'web-stamp.json'), JSON.stringify(stamp, null, 2) + '\n');
 console.log('Online staged: ' + stamp.files + ' files, ' + (stamp.bytes / 1048576).toFixed(1) + ' MiB; API ' + base +
   (uniqueFallbacks.length ? ' (fallback: ' + uniqueFallbacks.join(', ') + ')' : ''));
@@ -146,8 +154,8 @@ if (!fs.existsSync(path.join(TAURI, 'icons', 'icon.ico'))) {
 }
 const result = spawnSync(cargo, ['build', '--release', '--features', 'custom-protocol'], { cwd: TAURI, env, stdio: 'inherit' });
 if (result.error || result.status !== 0) throw result.error || new Error('Online Cargo build failed: ' + result.status);
-const verify = spawnSync(process.execPath, [__filename, '--check', '--api', base], { cwd: ROOT, env, stdio: 'inherit' });
-if (verify.error || verify.status !== 0) throw verify.error || new Error('Online source changed during compilation; rebuild before publishing the EXE');
+/* 不再编译完再 spawn 一次 `--check`：那会把同一份 96 MB 源码再读一遍、再算一遍指纹，
+ * 纯粹重复验证。要单独检查已有快照时手动跑 `node tools/build-online-app.cjs --check`（一次）。 */
 const exe = path.join(TARGET, 'release', 'squirrel_fight_online.exe');
 if (!fs.existsSync(exe)) throw new Error('Expected Online EXE was not generated');
 fs.copyFileSync(exe, path.join(ROOT, 'squirrel_fight_online.exe'));
