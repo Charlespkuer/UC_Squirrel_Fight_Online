@@ -13,10 +13,15 @@
 
 | 平台 | 文件 | 说明 |
 |---|---|---|
-| Windows | `squirrel_fight_online.exe` | 完整包，前端已编进程序，裸机可跑 |
-| Android | `squirrel_fight_online-<版本>-arm64.apk` | 真机安装包（arm64-v8a） |
+| Windows | `squirrel_fight_online-1.0.56.exe` | 完整包，前端已编进程序，裸机可跑 |
+| Android | `squirrel_fight_online-1.0.56-arm64.apk` | 真机安装包（arm64-v8a） |
 
-安装包统一从服务器下载页取：**http://140.143.142.110:5896/download**
+两个入口，文件同源：
+
+- **GitHub Releases**：<https://github.com/Charlespkuer/UC_Squirrel_Fight_Online/releases/tag/v1.0.56>
+- **服务器下载页**：<http://140.143.142.110:5896/download>
+
+安卓安装时若提示「未知来源 / 未经认证」，按系统提示允许本次安装即可。
 
 > 下载页与游戏联机都走 HTTP（服务器未启用 HTTPS）。用 `https://` 打开会连不上，浏览器也会拦下
 > 混合内容；要换地址就改 `online-config.js` 或客户端的服务器设置。
