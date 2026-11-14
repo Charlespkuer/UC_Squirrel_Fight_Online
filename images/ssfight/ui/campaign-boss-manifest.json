@@ -1,0 +1,18 @@
+{
+ "generator": "tools/gen-ssfight-ui.cjs --campaign-boss",
+ "source": "reference/ssfight/ssfight/ssfight/html5/ssfight.html",
+ "sourceBytes": 26436698,
+ "sourceSha256": "c01b24dc33ccbae4e104983d54e14ff41f018458b10dc983f5bb5f3c78b39abb",
+ "roots": {
+  "campaignBoss": "6833"
+ },
+ "count": 1403,
+ "bitmaps": [],
+ "missingIds": [],
+ "sharedWithFight": 972,
+ "frames": {
+  "6833": "副本角色所有（1 狡兔 / 2 狼王 / 3 妖狐 / 4 猿将 / 5 豹王锁定 / 6 蜥蜴 / 7 野猪）"
+ },
+ "how": "自包含征战包：SfFight / 塔预告只 loadExtra(\"tags-campaign-boss.json\") 即可；buildFighter 把 6833 挂到 playerMc，按 foe.campaign.mcFrame 拨动物形态；动作走 Animals.as。",
+ "sha256": "689593c4e540af552f8e327b311be1ca8e199d05438c7c61a3f146bd74c3685d"
+}

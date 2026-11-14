@@ -1,0 +1,9 @@
+# 运行 / 编辑产物与系统垃圾
+node_modules/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+
+# 联机版不落本地存档；留一条防误放
+save/

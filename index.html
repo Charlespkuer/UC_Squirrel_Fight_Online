@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<script src="online-config.js"></script>
+<meta charset="UTF-8">
+<base href="/">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>松鼠大战 Online</title>
+<style>
+/* iOS / 安卓 WebView 的触摸约定，与单机版 scripts/index.html 完全一致。 */
+@supports (-webkit-touch-callout: none) {
+  html, body { -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
+  body { -webkit-touch-callout: none; }
+  button, input { touch-action: manipulation; }
+}
+@supports not (-webkit-touch-callout: none) {
+  #app, #app * { touch-action: manipulation; }
+}
+</style>
+<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/classic.css">
+<link rel="stylesheet" href="css/classic-extras.css">
+<link rel="stylesheet" href="css/classic-fusion.css">
+<link rel="stylesheet" href="css/battle-drops.css">
+<link rel="stylesheet" href="css/classic-refine.css">
+<!-- 联机版新增的少量交互件（登录表单 / 对手列表）：原版没有对应素材 -->
+<link rel="stylesheet" href="css/online.css">
+<!-- 联机标记必须先于任何游戏脚本置位：state.js 靠它决定「只经典 + 不落本地存档」。 -->
+<script>
+window.__SSDZ_ONLINE__ = true;
+window.__errs = [];
+window.addEventListener('error', function (e) {
+  window.__errs.push((e.message || '') + ' @ ' + (e.filename || '') + ':' + (e.lineno || 0));
+});
+window.addEventListener('unhandledrejection', function (e) {
+  window.__errs.push('Promise: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason));
+});
+</script>
+</head>
+<body>
+<div id="app">
+  <canvas id="stage"></canvas>
+  <div id="ui"></div>
+  <div id="boot-note">正在连接服务器…</div>
+</div>
+
+<!-- 昵称长度：注册页 / 修改昵称 / 服务端 auth 共用同一份 7 个汉字口径 -->
+<script src="js/nickname.js"></script>
+<!-- 征战静态表（首领 / 门票 / 奖励池）：浏览器与服务端共用 -->
+<script src="js/campaign-data.js"></script>
+<script src="js/gamedict.js"></script>
+<script src="js/engine.js"></script>
+<script src="js/gamedata.js"></script>
+<!-- 无尽塔周奖励公式（浏览器与服务端共用）；其余塔脚本首次进塔时按需加载 -->
+<script src="js/tower-rewards.js"></script>
+<script src="js/tower-loader.js"></script>
+<script src="js/state.js"></script>
+<script src="js/sim.js"></script>
+<script src="js/battle-drops.js"></script>
+
+<script src="js/net.js"></script>
+<script src="js/online.js"></script>
+
+<script src="js/ssfight/render.js"></script>
+<script src="js/ssfight/ui-main.js"></script>
+<script src="js/ssfight/ui-feedback.js"></script>
+<script src="js/ssfight/ui-levelup.js"></script>
+<script src="js/ssfight/ui-guide.js"></script>
+<script src="js/ssfight/ui-village.js"></script>
+<script src="js/ssfight/ui-status.js"></script>
+<script src="js/ssfight/ui-compose.js"></script>
+<script src="js/ssfight/ui-prop-use.js"></script>
+<script src="js/ssfight/ui-challenge.js"></script>
+<!-- 村庄右上角的「远方小径」矢量入口：复用原版 4421 确认框 -->
+<script src="js/ssfight/ui-tower-path.js"></script>
+<script src="js/ssfight/ui-message.js"></script>
+<script src="js/ssfight/ui-fight-result.js"></script>
+<script src="js/ssfight/ui-fight.js"></script>
+
+<script src="js/ui-base.js"></script>
+<script src="js/classic-ui.js"></script>
+<script src="js/classic-extras.js"></script>
+<script src="js/classic-fusion.js"></script>
+
+<script src="js/online-battle.js"></script>
+<script src="js/online-notice.js"></script>
+<script src="js/online-ui.js"></script>
+<script src="js/online-campaign.js"></script>
+<script src="js/online-social.js"></script>
+<script src="js/online-settings.js"></script>
+<script src="js/online-update.js"></script>
+
+<script src="js/main.js"></script>
+<script src="js/touch-fallback.js"></script>
+</body>
+</html>
