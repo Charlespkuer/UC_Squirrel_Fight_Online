@@ -391,7 +391,8 @@ record('安卓快速连点：换页后的第二下不再落到新页面（touch-
 });
 
 record('安卓设备标识：ANDROID_ID 不可用时退回持久安装标识，不阻断注册', () => {
-  const kt = fs.readFileSync(path.join(ROOT, 'src-tauri', 'android', 'MainActivity.kt'), 'utf8');
+  // Windows 检出会把 LF 转成 CRLF；这段断言按字符数算跨度，必须先归一行尾。
+  const kt = fs.readFileSync(path.join(ROOT, 'src-tauri', 'android', 'MainActivity.kt'), 'utf8').replace(/\r\n/g, '\n');
   assert.match(kt, /getSharedPreferences\("ssdz_device_identity"[\s\S]{0,320}?SecureRandom/,
     '安装标识要在本机持久保存，不能每次启动重新生成');
   assert.match(kt, /9774d56d682e549c/, '全服共享的旧 ANDROID_ID 必须走兜底，不能当成设备唯一值');
