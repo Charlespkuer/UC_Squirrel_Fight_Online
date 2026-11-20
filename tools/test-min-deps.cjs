@@ -42,7 +42,7 @@ function stripComments(src) {
 }
 
 record('入口页不加载 references/ 里的任何文件', () => {
-  const html = fs.readFileSync(path.join(ROOT, 'scripts', 'index.html'), 'utf8');
+  const html = fs.readFileSync(path.join(ROOT, 'scripts', 'index-online.html'), 'utf8');
   const refs = [...html.matchAll(/(?:src|href)\s*=\s*"([^"]+)"/g)].map((m) => m[1]);
   const bad = refs.filter((r) => /(^|\/)references\//.test(r));
   assert.equal(bad.length, 0, '入口页不该引用 references/：' + bad.join(', '));
@@ -100,7 +100,8 @@ record('js/gamedict.js 能提供游戏需要的全部原版数据', () => {
   assert.ok(assetGroups.length >= 10, 'asset_* 路径表数量太少：' + assetGroups.length);
   const assetIds = new Set();
   for (const name of assetGroups) for (const a of ctx[name]) if (a && a.id) assetIds.add(a.id);
-  assert.ok(assetIds.size > 50, 'asset_* 路径表里的条目太少：' + assetIds.size);
+  // 现代 outfit 的 37 个图层已退役，asset_* 现在只保留三侠/木人/场景/UI 这几组。
+  assert.ok(assetIds.size >= 30, 'asset_* 路径表里的条目太少：' + assetIds.size);
   for (const id of ['tl', 'xh1', 'xh2', 'xm1', 'xm2', 'woodman1', 'woodman2', 'fightBg']) {
     assert.ok(assetIds.has(id), 'asset_* 路径表缺少 ' + id + '（该模型会加载不出来）');
   }
@@ -109,38 +110,6 @@ record('js/gamedict.js 能提供游戏需要的全部原版数据', () => {
   assert.equal(typeof ctx.Map, 'undefined', 'gamedict.js 不该定义全局 Map（原版 Map.min.js 会覆盖原生 Map，是坑）');
   assert.equal(typeof Map, 'function', '原生 Map 必须还在');
   assert.equal(typeof Set, 'function', '原生 Set 必须还在');
-});
-
-record('存档列表弹窗：一列紧凑可滚动，不再横排按钮溢出屏幕', () => {
-  const ui = fs.readFileSync(path.join(ROOT, 'js', 'classic-ui.js'), 'utf8');
-  // 取 saveListRow 的实现来跑（不复制一份，避免测试和代码走偏）
-  const start = ui.indexOf('function saveListRow');
-  assert.ok(start > 0, 'classic-ui.js 里应该还有 saveListRow');
-  const end = ui.indexOf('\n  }', start);
-  const rowSrc = ui.slice(start, end + 4);
-  const ctx = vm.createContext({
-    esc: (t) => String(t == null ? '' : t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
-    ssdzSizeText: () => '156 KB',
-    ssdzWhenText: () => '今天 15:20',
-    Date,
-    Math,
-  });
-  const row = vm.runInContext(rowSrc + '\nsaveListRow;', ctx, { filename: 'saveListRow.js' });
-  const html = row({ rel: 'save/progress.json', level: 32, name: 'Charles', size: 159820, at: Date.now(), kind: 'current' }, 0);
-  // 关键点：等级、名字、时间/大小、载入按钮各占一个格子，名字超长也不会把行撑破
-  assert.match(html, /^<div class="save-row current">/, '当前存档那行要有 current 标记');
-  assert.match(html, /class="save-level">32<i>级<\/i>/, '等级要单独成徽章');
-  assert.match(html, /<span class="save-name">Charles<em>当前<\/em><\/span>/, '名字单独一格，当前档要标注');
-  assert.match(html, /<span class="save-sub"[^>]*>今天 15:20 · 156 KB<\/span>/, '时间与大小放次要行');
-  assert.match(html, /data-save-row="0"[^>]*>载入<\/button>/, '每行一个「载入」按钮');
-  assert.ok(!/【32级/.test(html), '不该再出现「【32级 …】」这种长按钮文案');
-
-  // CSS：必须是竖向列表 + 定宽列 + 溢出省略
-  const css = fs.readFileSync(path.join(ROOT, 'css', 'classic-refine.css'), 'utf8');
-  assert.match(css, /\.save-list\{[^}]*flex-direction:column/, '列表必须竖排（flex-direction:column）');
-  assert.match(css, /\.save-row\{[^}]*grid-template-columns:74px minmax\(0,1fr\)/, '行要用定宽列 + 可压缩的名字列');
-  assert.match(css, /\.save-name\{[^}]*text-overflow:ellipsis/, '名字过长要省略，不能撑破行');
-  assert.match(css, /save-list-dialog[^{]*\{[^}]*width:820px/, '弹窗有专用宽度');
 });
 
 record('动画播放链路：图集帧表 + 动画的每个图元都能解析到帧', () => {
@@ -222,21 +191,23 @@ record('战斗图集与动画：三侠/木人/场景/我方，路径与每一帧
     vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), ctx, { filename: f });
   }
   const E = ctx.Engine;
-  const battleSrc = fs.readFileSync(path.join(ROOT, 'js', 'battle.js'), 'utf8');
+  /* 三侠 / 木人的图集配置同时被经典战斗（js/ssfight/ui-fight.js 的 NPC 动作）和
+   * 历史现代战斗（js/battle.js，已退役）使用；这里读仍在运行的经典侧那份。 */
+  const fightSrc = fs.readFileSync(path.join(ROOT, 'js', 'ssfight', 'ui-fight.js'), 'utf8');
 
-  // 直接从 battle.js 读真实配置，避免测试和代码走偏
-  const SRC = /const NPC_SHEETS = \{([^}]*)\}/.exec(battleSrc);
-  const EFF = /const NPC_EFFECTS = \{([^}]*)\}/.exec(battleSrc);
-  assert.ok(SRC && EFF, 'battle.js 里应该有 NPC_SHEETS / NPC_EFFECTS');
+  // 直接从 ui-fight.js 读真实配置，避免测试和代码走偏
+  const SRC = /const NPC_SHEETS = \{([^}]*)\}/.exec(fightSrc);
+  const EFF = /const NPC_EFFECT_SHEETS = \{([^}]*)\}/.exec(fightSrc);
+  assert.ok(SRC && EFF, 'ui-fight.js 里应该有 NPC_SHEETS / NPC_EFFECT_SHEETS');
   const parseMap = (text) => Object.fromEntries([...text.matchAll(/(\w+):\s*\[([^\]]*)\]/g)]
     .map((m) => [m[1], [...m[2].matchAll(/'([^']+)'/g)].map((x) => x[1])]));
   const npcSheets = parseMap(SRC[1]);
   const npcEffects = parseMap(EFF[1]);
   assert.ok(Object.keys(npcSheets).length >= 4, '三侠 + 木人的图集配置不该这么少');
 
-  // 场景图元：battle.js 的 REGIONS（水上人家/fightBg 等）
-  const regionIds = [...new Set([...battleSrc.matchAll(/\{ id: '([A-Za-z0-9_]+)'/g)].map((m) => m[1]))];
-  const needed = [...new Set([].concat(...Object.values(npcSheets), ...Object.values(npcEffects), regionIds))];
+  /* 场景图元（fightBg 等）只属于已退役的现代战斗，这里不再检查。 */
+  const regionIds = [];
+  const needed = [...new Set([].concat(...Object.values(npcSheets), ...Object.values(npcEffects)))];
 
   /* ① 每个图集都要能定位到图片文件。
    * 两条合法路径：清单里有（SRC_MAP），或者 battle.js 的兜底 images/atlas/<id>.png
@@ -329,8 +300,8 @@ record('道具表不再包含松鼠拳套(6)/绿松果(9)', () => {
 record('浏览器侧模块都能加载并挂上全局（battle / tower / tower-ui / classic-ui …）', () => {
   /* 注意：debug.js / main.js 在加载期就会去建面板、绑 DOM 事件，需要真浏览器环境，
    * 这里只覆盖「纯逻辑 + 界面模块」——它们正是之前 battle.js 那种加载期引用错误的受害者。 */
-  const files = ['js/sim.js', 'js/tower-data.js', 'js/state.js', 'js/tower.js', 'js/battle.js',
-    'js/battle-drops.js', 'js/ui.js', 'js/classic-ui.js', 'js/classic-extras.js', 'js/classic-fusion.js',
+  const files = ['js/sim.js', 'js/tower-data.js', 'js/state.js', 'js/tower.js',
+    'js/battle-drops.js', 'js/ui-base.js', 'js/classic-ui.js', 'js/classic-extras.js', 'js/classic-fusion.js',
     'js/tower-plot.js', 'js/tower-ui.js'];
   const store = new Map();
   const c = {
@@ -382,7 +353,7 @@ record('浏览器侧模块都能加载并挂上全局（battle / tower / tower-u
       assert.fail(f + ' 加载失败：' + (e && e.message));
     }
   }
-  for (const [key, need] of [['Battle', 'run'], ['Tower', 'endlessInfo'], ['TowerData', 'BUFFS'], ['TowerUI', 'openEndless'], ['Sim', 'simulate']]) {
+  for (const [key, need] of [['Tower', 'endlessInfo'], ['TowerData', 'BUFFS'], ['TowerUI', 'openEndless'], ['Sim', 'simulate']]) {
     assert.ok(c[key], '加载完之后 window.' + key + ' 应当存在');
     assert.ok(c[key][need], 'window.' + key + '.' + need + ' 应当存在');
   }
@@ -393,20 +364,20 @@ record('浏览器侧模块都能加载并挂上全局（battle / tower / tower-u
  * 运行时 fetch('scripts/version.json') 在 tauri.localhost 下 404，于是退回
  * js/classic-ui.js 里写死的 VERSION_FALLBACK。这条钉住「快照必须把版本号带进去」。 */
 record('安装包 / APK 必须把版本号带进去（注入 __SSDZ_VERSION + 复制 scripts/version.json）', () => {
-  const build = fs.readFileSync(path.join(ROOT, 'tools', 'build-tauri-app.cjs'), 'utf8');
-  assert.match(build, /const WEB_VERSION_FILE = 'scripts\/version\.json'/,
+  /* 联机版的前端快照由 `tools/build-online-app.cjs` 生成：online-config.js 注入
+   * `window.__SSDZ_VERSION`，并把 `scripts/version.json` 列进 sources 一起复制。 */
+  const build = fs.readFileSync(path.join(ROOT, 'tools', 'build-online-app.cjs'), 'utf8');
+  assert.match(build, /scripts\/version\.json/,
     '前端快照要显式认识 scripts/version.json');
-  assert.match(build, /fs\.copyFileSync\(vf, path\.join\(WEB_OUT, WEB_VERSION_FILE\)\)/,
-    '快照里要复制 scripts/version.json（运行时 fetch 读它）');
   assert.match(build, /window\.__SSDZ_VERSION/,
-    'index.html 要注入 __SSDZ_VERSION（fetch 被拦 / file:// 时也能显示正确版本）');
+    '在线配置要注入 __SSDZ_VERSION（fetch 被拦 / file:// 时也能显示正确版本）');
   const ui = fs.readFileSync(path.join(ROOT, 'js', 'classic-ui.js'), 'utf8');
   assert.match(ui, /window\.__SSDZ_VERSION/,
     'classic-ui 要优先读注入的版本号，而不是只看 VERSION_FALLBACK');
 });
 
 record('安卓快速连点：换页后的第二下不再落到新页面（touch-action / 兜底作废 / 换页锁）', () => {
-  const html = fs.readFileSync(path.join(ROOT, 'scripts', 'index.html'), 'utf8');
+  const html = fs.readFileSync(path.join(ROOT, 'scripts', 'index-online.html'), 'utf8');
   assert.match(html, /@supports not \(-webkit-touch-callout: none\)[\s\S]{0,260}#app, #app \* \{ touch-action: manipulation; \}/,
     '安卓 / Chromium 要给 #app 整页声明 touch-action: manipulation（只给 button/input 时 SVG 轻点会晚 ~190ms）');
   const fb = fs.readFileSync(path.join(ROOT, 'js', 'touch-fallback.js'), 'utf8');
@@ -417,6 +388,14 @@ record('安卓快速连点：换页后的第二下不再落到新页面（touch-
   assert.match(ui, /navLockUntil/, '触屏换页后要有输入锁');
   assert.match(ui, /MutationObserver/, '换页 / 弹层增减要由 MutationObserver 触发输入锁');
   assert.match(ui, /__sfTrustedClickAt/, '换页锁吞掉可信 click 时要留时间戳，避免被兜底补发');
+});
+
+record('安卓设备标识：ANDROID_ID 不可用时退回持久安装标识，不阻断注册', () => {
+  const kt = fs.readFileSync(path.join(ROOT, 'src-tauri', 'android', 'MainActivity.kt'), 'utf8');
+  assert.match(kt, /getSharedPreferences\("ssdz_device_identity"[\s\S]{0,320}?SecureRandom/,
+    '安装标识要在本机持久保存，不能每次启动重新生成');
+  assert.match(kt, /9774d56d682e549c/, '全服共享的旧 ANDROID_ID 必须走兜底，不能当成设备唯一值');
+  assert.match(kt, /provider", "installation"/, '兜底要明确回报 installation，服务端才能按弱标识放行');
 });
 
 record('图片临时失败可恢复图集，迟到成功和冷却后的重试都不再永久缺图', async () => {

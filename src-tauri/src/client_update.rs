@@ -129,6 +129,12 @@ mod imp {
     }
 
     pub fn apply(url: &str, version: &str) -> Result<(), String> {
+        /* 轻壳读的是仓库里的 js/css/images，整包替换会把它换回完整包 ——
+         * 开发机反而丢了「改代码立刻生效」。要出完整包请用 dist 那份，或改走
+         * 设置 →「一键打包并重启」。 */
+        if cfg!(feature = "thin-shell") {
+            return Err("当前是开发轻壳（页面直接读仓库），不能整包替换；请用「一键打包并重启」，或下载 dist 里的完整包".to_string());
+        }
         validate_url(url)?;
         let version = safe_version(version)?;
         let target = std::env::current_exe().map_err(|e| format!("找不到当前客户端路径：{}", e))?;

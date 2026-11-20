@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 'use strict';
-// Local operator only: never expose this command or a developer credential over HTTP.
 const fs = require('node:fs');
 const crypto = require('node:crypto');
 const path = require('node:path');
@@ -9,18 +8,8 @@ const db = require('./db');
 const runtime = require('./game/runtime');
 const { propEntriesOf, rewardSuffix } = require('./game/mail-reward');
 
-/* 全服奖励邮件（本机 CLI）：只写**待领取**的邮件，不直接改存档。
- *   · 金松果（gold）/ 金杯（cup）/ 道具（props = { 道具id: 数量 }）
- *   · 写一条 kind=announcement、payload.claimable=true 的消息；
- *   · 玩家在消息页点这条邮件 → 小弹窗列出奖励 → 点「领取」才由
- *     `POST /api/messages/claim` 入账（同一封只能领一次）。
- * 同一编号同内容重试不重复写邮件；同编号不同内容拒绝。
- *
- * 原版消息页（`MainMovie.as` 的 getMessages / doShowNormalMsg）没有奖励附件；
- * 这是联机版新增的「公告 + 待领取」口径，老公告（无 claimable）仍然只是通知。
- * 奖励字段的校验与正文后缀在 `server/game/mail-reward.js`（与按等级自动投递的
- * `server/game/server-mail.js` 共用一份口径）。
- */
+// 全服奖励邮件（本机 CLI）：只写待领取的邮件，不直接改存档。
+// 奖励字段的校验与正文后缀在 `server/game/mail-reward.js`（与按等级自动投递的
 function validate(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw Error('需要 JSON 对象');
   const id = String(input.id || '');
@@ -32,8 +21,7 @@ function validate(input) {
   if (!Number.isSafeInteger(gold) || gold < 0 || gold > 100000) throw Error('gold 须为 0–100000 的整数');
   if (!Number.isSafeInteger(cup) || cup < 0 || cup > 100000) throw Error('cup 须为 0–100000 的整数');
   const entries = propEntriesOf(input);
-  /* 老的金松果公告 payload 保持 {id,text,gold} 的字段顺序和形状：
-   * 线上已有的活动编号重试时 digest 不会因为这次升级而变。 */
+  // 老的金松果公告 payload 保持 {id,text,gold} 的字段顺序和形状：
   const payload = { id, text, gold };
   if (cup) payload.cup = cup;
   if (entries.length) payload.props = Object.fromEntries(entries.map(([pid, count]) => [pid, count]));
@@ -55,7 +43,7 @@ function broadcast(input) {
     const claimable = !!(payload.gold || payload.cup || entries.length);
     for (const row of recipients) {
       const accountId = Number(row.id);
-      /* 只写邮件，不碰存档：等玩家在消息页点开并确认「领取」再入账。 */
+      // 只写邮件，不碰存档：等玩家在消息页点开并确认「领取」再入账。
       const messageId = 'broadcast:' + payload.id + ':' + accountId;
       const message = '【全服公告】' + payload.text + rewardSuffix(payload, entries);
       const messagePayload = { broadcastId: payload.id, gold: payload.gold };

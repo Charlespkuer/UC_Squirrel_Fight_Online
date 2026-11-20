@@ -1,5 +1,4 @@
 'use strict';
-// Device headers are client claims, not hardware attestation. Store only hashes.
 const crypto = require('node:crypto');
 const db = require('./db');
 const { config } = require('./config');
@@ -17,12 +16,14 @@ function fromRequest(req) {
     throw fail('DEVICE_UNSUPPORTED', '设备标识格式不受支持，请更新客户端');
   }
   const weak = platform === 'browser' || provider === 'installation';
+  // 安卓客户端在 ANDROID_ID 不可用时退回本安装随机标识：仍按原生设备处理，
+  // 不能因为服务端关了浏览器设备就把它一起拒绝（否则那批玩家无法登录）。
+  const nativeFallback = platform === 'android' && provider === 'installation';
   const hash = crypto.createHash('sha256').update(platform + '\0' + id).digest('hex');
-  /* 创作者设备（服务器主人）：允许浏览器/安装标识，也允许一个设备持多个测试号。
-   * 只按设备指纹认，不按 IP —— IP 会被 NAT/动态地址影响，无法保证“只有我的设备”。 */
+
   const creator = config.creatorDevices.includes(hash);
   if (!creator && ((platform === 'browser' && provider !== 'installation')
-    || (!weak && PROVIDERS[platform] !== provider) || (weak && !config.allowBrowserDevices))) {
+    || (!weak && PROVIDERS[platform] !== provider) || (weak && !config.allowBrowserDevices && !nativeFallback))) {
     throw fail('DEVICE_UNSUPPORTED', '请使用新版原生客户端登录，此服务器不接受浏览器安装标识');
   }
   return { hash, platform, provider, weak, creator };
@@ -38,8 +39,7 @@ function audit(event, outcome, { accountId, device, ip, reason } = {}) {
 function bind(accountId, device, ip) {
   const id = Number(accountId), ts = Date.now();
   if (device.creator) {
-    /* 创作者设备允许“一台设备多个测试号”：不抢绑、不报 DEVICE_BOUND；
-     * 如果这个账号原本就绑在这台设备上，照常刷新 last_seen / last_ip。 */
+
     const own = db.get('SELECT account_id FROM account_devices WHERE device_hash = ? AND account_id = ?', device.hash, id);
     if (own) db.run('UPDATE account_devices SET last_seen = ?, last_ip = ? WHERE device_hash = ? AND account_id = ?',
       ts, String(ip || ''), device.hash, id);
@@ -51,8 +51,8 @@ function bind(accountId, device, ip) {
       ts, String(ip || ''), device.hash, id);
     return;
   }
-  /* 登录已有账号不占“创建额度”，所以这里只登记设备-账号关系，不再拦 DEVICE_BOUND；
-   * 注册时的 3 账号上限在 `server/api/account.js` 按 accounts.reg_device_hash 统计。 */
+  // 登录已有账号不占“创建额度”，所以这里只登记设备-账号关系，不再拦 DEVICE_BOUND；
+  // 注册时的 3 账号上限在 `server/api/account.js` 按 accounts.reg_device_hash 统计。
   db.run('INSERT OR IGNORE INTO account_devices(device_hash,account_id,platform,provider,weak,bound_at,last_seen,last_ip) VALUES (?,?,?,?,?,?,?,?)',
     device.hash, id, device.platform, device.provider, device.weak ? 1 : 0, ts, ts, String(ip || ''));
   audit('device_bind', 'ok', { accountId: id, device, ip });
@@ -83,8 +83,6 @@ function whenText(ms) {
   }
 }
 
-/** 登录前查：这台设备 / 这个 IP 以前是否在这个账号上出现过。
- *  `accounts.reg_*` 是不会被保留期清掉的注册锚点；历史表用来判断“最近是否见过”。 */
 function knownLogin(accountId, device, ip) {
   const id = Number(accountId);
   const d = device || {};
@@ -99,8 +97,7 @@ function knownLogin(accountId, device, ip) {
   };
 }
 
-/** 新设备/新地点登录：写一条未读的 `login_alert` 消息，客户端登录后弹一次。
- *  这里只提醒，不阻止登录；同一台设备/同一个 IP 第二次不会重复提醒。 */
+// 新设备/新地点登录：写一条未读的 `login_alert` 消息，客户端登录后弹一次。
 function alertLogin(accountId, device, ip, flags) {
   const f = flags || {};
   if (!f.newDevice && !f.newIp) return null;
@@ -128,7 +125,6 @@ function alertLogin(accountId, device, ip, flags) {
   return { id, text, payload };
 }
 
-/** 未读登录提醒（给 /api/state 随登录一起下发）。 */
 function unreadAlerts(accountId) {
   const rows = db.all(
     `SELECT id, text, payload, created_at FROM messages
@@ -143,13 +139,7 @@ function unreadAlerts(accountId) {
   });
 }
 
-/* `authorize()` 在**每个已登录请求**上都会跑。以前它无条件做三组写入：
- *  · account_devices.last_seen / last_ip（每次请求）
- *  · account_ips 的 upsert（每次请求）
- *  · accounts.ip（每次请求）
- * 设备绑定在登录时已经验证过，IP 也不该因为「同一个 IP 发了两条请求」而反复落库。
- * 现在只在「会话没有设备绑定（旧令牌迁移）」或「IP 真的变了」时写；
- * 同一 IP 的 `last_seen` 最多 6 小时刷新一次，保留审计价值但不再放大 WAL。 */
+// 现在只在「会话没有设备绑定（旧令牌迁移）」或「IP 真的变了」时写；
 const IP_REFRESH_MS = 6 * 60 * 60 * 1000;
 const ipSeen = new Map();
 
@@ -162,12 +152,8 @@ function shouldRefreshIp(accountId, ip, ts) {
   return refresh;
 }
 
-/** 会话校验 + 设备迁移。规则（2026-11 用户口径）：
- *  · 同一账号可以在新手机/新网络登录，不再返回 DEVICE_MISMATCH；
- *  · 新设备未绑定任何账号 → 绑定到当前账号并发一条登录提醒；
- *  · 同一设备可以登录多个账号（注册额度由 api/account.js 按 3 个/设备、3 个/IP 限制）；
- *  · IP 变化只提醒，不阻止。
- * 旧会话（没有 device_hash）仍按「迁移到当前设备」处理。 */
+// · 新设备未绑定任何账号 → 绑定到当前账号并发一条登录提醒；
+// 旧会话（没有 device_hash）仍按「迁移到当前设备」处理。
 function authorize(req, session, account, ip) {
   let device;
   try {
@@ -198,7 +184,7 @@ function authorize(req, session, account, ip) {
       }
       if (ipChanged) {
         observeIp(id, device, ip, false);
-        /* 只对「这个账号从没见过的 IP」提醒；同一地点网络抖动不反复弹。 */
+
         if (!seenIp) {
           alert = alert || { newDevice: false, newIp: false };
           alert.newIp = true;
@@ -217,11 +203,12 @@ function authorize(req, session, account, ip) {
 
 function policy() {
   return {
-    version: 2,
+    version: 3,
     required: true,
     allowBrowserDevices: config.allowBrowserDevices,
     nativeRequired: !config.allowBrowserDevices,
-    /* 2026-11：账号可跨设备/跨网络登录；同一设备最多创建 3 个账号。 */
+    androidInstallation: true,
+
     crossDeviceLogin: 'allowed-with-alert',
     oneAccountPerDevice: false,
     accountsPerDevice: config.accountsPerDevice,

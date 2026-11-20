@@ -1,25 +1,7 @@
 'use strict';
-/* ============================================================
- * server/api/forum.js — 松鼠论坛 HTTP 路由
- * ------------------------------------------------------------
- * 规则（违禁词 / 管理员 / 每日额度 / 容量 / 清理）在
- * `server/game/forum.js`，这里只做参数校验、分页、SQL 与响应。
- *
- * 公开给登录玩家的接口：
- *   GET    /api/forum/posts?page=&q=&no=     列表 / 关键词 / 帖子编号搜索
- *   POST   /api/forum/posts                  发帖（requestKey 幂等）
- *   GET    /api/forum/posts/:id              详情 + 回复
- *   POST   /api/forum/posts/:id/replies      回复（requestKey 幂等）
- *   DELETE /api/forum/posts/:id              作者或管理员删帖
- *   DELETE /api/forum/replies/:id            作者或管理员删回复
- * 管理员：
- *   GET    /api/forum/admin/overview         容量 / 词库 / 管理员 / 最近操作 / 最新帖子
- *   POST   /api/forum/admin/words            添加违禁词
- *   POST   /api/forum/admin/words/delete     删除违禁词
- *   POST   /api/forum/admin/admins           授予管理员
- *   POST   /api/forum/admin/admins/delete    撤销管理员
- *   POST   /api/forum/admin/prune            清理 N 天前的旧帖
- * ============================================================ */
+// server/api/forum.js — 松鼠论坛 HTTP 路由
+// `server/game/forum.js`，这里只做参数校验、分页、SQL 与响应。
+// 公开给登录玩家的接口：
 
 const db = require('../db');
 const auth = require('../auth');
@@ -52,7 +34,7 @@ function keyOf(value) {
 function escapeLike(value) {
   return String(value).replace(/[\\%_]/g, (ch) => '\\' + ch);
 }
-/** 同时支持关键词与帖子编号；编号是精确匹配，优先于关键词。 */
+
 function searchOf(query) {
   const q = String((query && query.q) || '').trim();
   if (Array.from(q).length > 50) throw fail('BAD_REQUEST', '搜索关键词最多 50 字');
@@ -225,7 +207,7 @@ module.exports = {
     return { ok: true, admin: admin && !mine };
   },
 
-  /* ---------------- 管理员 ---------------- */
+
   overview(ctx) {
     forum.bootstrap();
     const actor = requireAdmin(ctx);

@@ -2,11 +2,13 @@
 /* ============================================================
  * tools/test-tower-buff-rules.cjs — 无尽塔增益数值 / 商店售卖规则回归
  *
- * 覆盖本轮三条可感知规则：
+ * 覆盖本轮四条可感知规则：
  *   ① 增幅水晶（C15）同名多张**加算**（1 + 0.3×张数），且与水晶铭文（C60）加算；
  *   ② 门庭若市（C59）的描述是「进入商店」，不是「进入试炼商店」；
  *   ③ 战利品账本（C25）同店卖旧买新时，新账本按 50 起价，不继承旧账本累计，
- *      卖掉新账本也不会清掉另一本的累计。
+ *      卖掉新账本也不会清掉另一本的累计；
+ *   ④ 替换弹窗的「取消」不会被二次 bind 覆写；卡面类型标签覆盖所有 buff kind（铭文不能是 undefined）。
+ *   ⑤ 20 层只有隐藏永久增益（C32/C33/C63）时跳过放弃阶段，不再无限重画塔页。
  *
  * 用法：node tools/test-tower-buff-rules.cjs
  * ============================================================ */
@@ -178,6 +180,29 @@ test('献祭窗在换页重画时复位，但同一轮重画只开一层', () =>
     '建弹层前先置位，挡住同一轮重画造成的第二层');
 });
 
+test('20 层只有隐藏永久增益时跳过放弃阶段，不会反复重画', () => {
+  const c = setup(), T = c.Tower;
+  const run = T._debugRun('endless');
+  run.permanent = []; run.limited = []; run.phase = 'shop'; run.shop = {};
+  assert.ok(T.addBuff(run, 'C32').ok, '拿到隐藏永久增益 C32');
+  assert.equal(T.sacrificeCandidatesOf().length, 0, 'C32 不进放弃候选');
+  const next = T.continueFromShop();
+  assert.equal(next.ok, true);
+  assert.equal(run.phase, null, '没有候选时不能留在 sacrifice');
+  assert.equal(run.layer, 21, '应当直接推进到 21 层');
+  /* 旧档：phase 已经是 sacrifice 且没有候选 → 一次调用收口，界面不再循环重画。 */
+  run.layer = 20; run.phase = 'sacrifice';
+  const skipped = T.skipEmptySacrifice();
+  assert.equal(skipped.ok, true);
+  assert.equal(run.phase, null);
+  assert.equal(run.layer, 21);
+  /* 界面侧也必须收口：空候选时只 openEndless() 会排回同一个函数、无限重画。 */
+  const ui = fs.readFileSync(path.join(ROOT, 'js', 'tower-ui.js'), 'utf8').replace(/\r\n/g, '\n');
+  const seg = ui.slice(ui.indexOf('  function openPermSacrifice()'), ui.indexOf('  function openCheckpoint()'));
+  assert.match(seg, /if \(!candsAll\.length\) \{[\s\S]{0,500}Tower\.skipEmptySacrifice/,
+    '空候选时界面必须先调用 skipEmptySacrifice 再重画');
+});
+
 test('限次列表把渴血之剑置顶，王者之剑使用传奇金色外观', () => {
   const ui = fs.readFileSync(path.join(ROOT, 'js/tower-ui.js'), 'utf8').replace(/\r\n/g, '\n');
   const css = fs.readFileSync(path.join(ROOT, 'css/tower.css'), 'utf8').replace(/\r\n/g, '\n');
@@ -189,6 +214,95 @@ test('限次列表把渴血之剑置顶，王者之剑使用传奇金色外观',
     'HB04 王者之剑要加 legendary 卡面类');
   assert.ok(/\.limit-tag\.legendary\s*\{[^}]*linear-gradient/.test(css),
     'legendary 限次卡要有金色渐变外观');
+});
+
+hr('4. 界面接线：替换弹窗的取消键 / 铭文卡面标签');
+test('替换弹窗二次 bind 之后「取消」仍可点，替换行也照常绑上', () => {
+  const cu = fs.readFileSync(path.join(ROOT, 'js', 'classic-ui.js'), 'utf8').replace(/\r\n/g, '\n');
+  const start = cu.indexOf('  function bind(root, actions) {');
+  const end = cu.indexOf('  function goldIcon(', start);
+  assert.ok(start > 0 && end > start, 'classic-ui 里应当能切出 bind()');
+  const ctx = { popTap: (el, fn) => fn(), console };
+  vm.createContext(ctx);
+  /* 复刻真实顺序：modal() 先给底部「取消」挂好 onclick，随后 tower-ui 再 bind 弹窗补列表行。 */
+  vm.runInContext(cu.slice(start, end) +
+    '\nvar fired = [];' +
+    '\nvar cancel = { dataset: { action: "0" }, classList: { contains: function () { return false; } }, onclick: function () { fired.push("cancel"); } };' +
+    '\nvar row = { dataset: { action: "rp0" }, classList: { contains: function () { return false; } }, onclick: null };' +
+    '\n$$ = function () { return [cancel, row]; };' +
+    '\nbind({}, { rp0: function () { fired.push("row"); } });' +
+    '\ncancel.onclick(); row.onclick();' +
+    '\nglobalThis.__out = fired.join(",");', ctx);
+  assert.equal(ctx.__out, 'cancel,row', '取消键与替换行都要能点：' + ctx.__out);
+});
+
+test('增益卡面的类型标签覆盖每种 kind（铭文不再显示 undefined）', () => {
+  const c = setup();
+  const ui = fs.readFileSync(path.join(ROOT, 'js', 'tower-ui.js'), 'utf8').replace(/\r\n/g, '\n');
+  const scopeLine = /const SCOPE = \{[^}]*\};/.exec(ui);
+  assert.ok(scopeLine, 'tower-ui 里应当有 SCOPE 卡面类型表');
+  const ctx = {};
+  vm.createContext(ctx);
+  vm.runInContext(scopeLine[0] + '\nglobalThis.__SCOPE = SCOPE;', ctx);
+  for (const b of c.TowerData.BUFFS) {
+    assert.ok(ctx.__SCOPE[b.kind], b.id + '（kind=' + b.kind + '）的卡面类型标签缺失，界面上会画出 undefined');
+  }
+});
+
+hr('5. 涅槃：回合耗尽也会先复活，本层剩余次数要如实记账并显示');
+test('60 手打满时先复活加时；失败也扣本层次数；悬停按真实剩余显示', () => {
+  const c = setup();
+  const T = c.Tower, Sim = c.Sim;
+  /* —— ① Sim：玩家 10% 血、双方都打不死对方 → 60 手按血量比例判负；
+   *       带涅槃时先复活（回 50%）并开下一个 60 手窗口，而不是直接结束。 —— */
+  const mk = (mods) => ({ name: 'p', level: 70, power: 1, agility: 1, speed: 1, maxHp: 10000, hp: 1000,
+    baseStats: { power: 1, agility: 1, speed: 1 }, weapons: [], skills: [], wears: [], effects: {}, masterLevel: 0, mods });
+  const foe = () => ({ name: 'e', level: 70, power: 1, agility: 1, speed: 1, maxHp: 10000, hp: 10000,
+    baseStats: { power: 1, agility: 1, speed: 1 }, weapons: [], skills: [], wears: [], effects: {}, masterLevel: 0 });
+  const plain = Sim.simulate(mk(null), foe());
+  assert.equal(plain.winner, 1, '没有涅槃：60 手后按血量比例判负');
+  assert.equal(plain.rounds.length, 60, '没有涅槃就是正常的 60 手');
+  const saved = Sim.simulate(mk({ deathSaves: [{ healPct: 0.5, statMul: 0.5, revive: 1 }] }), foe());
+  const revives = (saved.rounds || []).filter((r) => r.timeoutRevive);
+  assert.equal(revives.length, 1, '回合耗尽时涅槃应当先救一次，不是直接判负');
+  assert.ok(revives[0].deathSave && revives[0].revive, '这一拍要带 deathSave/revive 标记，塔侧才会计数');
+  assert.ok(revives[0].hpAfter[0] >= 5000, '复活后回到 50% 生命：' + revives[0].hpAfter[0]);
+  assert.ok(saved.rounds.length > 60, '复活后要开新的 60 手窗口继续打：' + saved.rounds.length);
+
+  /* —— ② 塔侧：失败（含巡逻失败）也要扣本层次数；剩 0 时悬停不能再写「1 次」。—— */
+  T._debugSetEndlessLayer(7);
+  const run = T._debugRun('endless');
+  run.permanent = [{ id: 'C14', stacks: 1 }];
+  run.choices = null; run.phase = null; run.env = []; run.noEnvRoll = true;
+  const infoBefore = T.reviveInfoOf(run);
+  assert.ok(infoBefore && infoBefore.perLayer === 1 && infoBefore.used === 0 && infoBefore.left === 1,
+    '开战前本层还有 1 次：' + JSON.stringify(infoBefore));
+  const nx = T.nextBattle('endless');
+  assert.ok(nx && nx.ok !== false, '应当能开战：' + ((nx && nx.msg) || ''));
+  const me = { name: 'p', level: 70, power: 100, agility: 100, speed: 100, maxHp: 1000, hp: 1000,
+    baseStats: { power: 100, agility: 100, speed: 100 }, weapons: [], skills: [], wears: [], effects: {}, masterLevel: 0 };
+  nx.adjustMe(me);
+  assert.equal((me.mods.deathSaves || []).filter((s) => s.revive).length, 1, '开战时发 1 次复活');
+  T._debugRun('endless').retryToken = 1;            // 让失败结算留在局内，好检查计数
+  T.reportBattle('endless', nx.token, false, 0, me.maxHp, { rounds: [{ deathSave: true, revive: 1, timeoutRevive: 1 }] });
+  const after = T._debugRun('endless');
+  assert.equal(after.reviveUsed, 1, '失败 / 回合耗尽判负用掉的涅槃也要记（以前只在胜利分支数）');
+  const infoAfter = T.reviveInfoOf(after);
+  assert.ok(infoAfter && infoAfter.perLayer === 1 && infoAfter.used === 1 && infoAfter.left === 0,
+    '用掉之后本层剩 0 次：' + JSON.stringify(infoAfter));
+
+  /* 悬停必须问 reviveInfoOf（写死 b.stacks 会一直显示「1 次」） */
+  const ui = fs.readFileSync(path.join(ROOT, 'js', 'tower-ui.js'), 'utf8').replace(/\r\n/g, '\n');
+  const at = ui.indexOf('本层复活机会');
+  assert.ok(at > 0, '塔页悬停里应当有「本层复活机会」这一行');
+  const tip = ui.slice(Math.max(0, at - 500), at + 300);
+  assert.ok(/Tower\.reviveInfoOf/.test(tip), '悬停要按真实剩余次数算');
+  assert.ok(!/本层复活机会：' \+ Math\.max\(1, Math\.floor\(Number\(b\.stacks\)/.test(tip), '不能再用叠层数当剩余次数');
+
+  /* 经典回放：加时那一拍要把剩余回合重置回满格（否则「回合 0 了还在打」） */
+  const fight = fs.readFileSync(path.join(ROOT, 'js', 'ssfight', 'ui-fight.js'), 'utf8').replace(/\r\n/g, '\n');
+  assert.ok(/if \(rec\.rounds\[i\] && rec\.rounds\[i\]\.timeoutRevive\) \{\s*\n\s*rec\.roundsLeft = Math\.max\(1, Math\.floor\(Number\(o\.maxRounds\) \|\| 60\)\);/.test(fight),
+    '加时要把经典 HUD 的剩余回合重置回满格');
 });
 
 console.log('\n塔增益规则回归：' + pass + ' 通过 / ' + fail + ' 失败');

@@ -1,13 +1,7 @@
 'use strict';
-/* ============================================================
- * server/game/actions.js — 动作白名单 + 服务端执行器
- * ------------------------------------------------------------
- * 客户端只发「动作名 + 参数」，服务端在自己的权威存档上跑同一个 `State` API，
- * 再把**变更 patch** 发回去。三条保证它当得了权威：
- *  1. 白名单：`shared/actions.json` 是唯一真值，客户端从 `/api/meta` 拿同一份；
- *  2. 参数校验：只接受原语/小数组/浅对象，超限直接拒；
- *  3. 同步执行：载入 → 跑 → 写回 中间**不能 await**（`State` 是模块级单例）。
- * ============================================================ */
+// server/game/actions.js — 动作白名单 + 服务端执行器
+// 客户端只发「动作名 + 参数」，服务端在自己的权威存档上跑同一个 `State` API，
+// 1. 白名单：`shared/actions.json` 是唯一真值，客户端从 `/api/meta` 拿同一份；
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -22,17 +16,16 @@ const ACTIONS = DEFS.actions;
 const SERVER_ONLY = new Set(DEFS.serverOnly || []);
 const LIMITS = DEFS.limits || {};
 
-/* 金宝箱三连：读档时必须保留 `chestPending`，否则 `reopenChest` 永远拿不到箱子，
- * 联机版 10 次重开上限也就不可达。见 `runtime.withState` 的 `deferSettle`。 */
-const CHEST_PENDING_ACTIONS = new Set(['beginChest', 'reopenChest', 'confirmChest', 'openChestProp']);
+// 金宝箱 begin/confirm：读档时必须保留 `chestPending`，否则确认前那次读档会先把结果自动入账。
+const CHEST_PENDING_ACTIONS = new Set(['beginChest', 'confirmChest', 'openChestProp']);
 
-/** 会改变战斗面板的动作：跑完保证「当前等级」有一条 is_current 快照。 */
+// 会改变战斗面板的动作：跑完保证「当前等级」有一条 is_current 快照。
 const LOADOUT_TOUCHING = new Set([
   'doUpgrade', 'wear', 'unwear', 'composeGear', 'mergeGears', 'socketGem', 'unsocketGem',
   'mergeGems', 'chooseWS', 'chooseWSRandom', 'gainRandomWS', 'applyFruitChoice', 'learnSkill',
-  'setWS', 'forgetWS', 'composeSeed', 'allocatePoint', 'allocateEvenly',
-  'undoPoint', 'hatchPet', 'setPetTeam', 'feedPet', 'evolvePet', 'buyProp', 'rankBuy', 'useProp', 'usePropMany',
-  'openChestProp', 'confirmChest', 'reopenChest', 'miracleRecord', 'claimQuest', 'claimDaily',
+  'setWS', 'forgetWS', 'composeSeed',
+  'hatchPet', 'setPetTeam', 'feedPet', 'evolvePet', 'buyProp', 'rankBuy', 'useProp', 'usePropMany',
+  'openChestProp', 'confirmChest', 'miracleRecord', 'claimQuest', 'claimDaily',
   'upgradeBuilding', 'claimBuildingBuff', 'sellGear', 'lotteryDraw', 'grantStarterGear', 'buyVip',
 ]);
 
@@ -45,7 +38,6 @@ function actionDef(name) {
   return def;
 }
 
-/* ---------------- 参数校验 ---------------- */
 function checkValue(value, depth) {
   if (depth > (LIMITS.maxObjectDepth || 3)) return false;
   const t = typeof value;
@@ -90,7 +82,7 @@ function coerce(type, value) {
     }
     case 'any':
     default: {
-      if (value === undefined) return null; // useProp 的可选第二参数。
+      if (value === undefined) return null;
       if (!checkValue(value, 0)) throw bad('参数结构不合法');
       return value;
     }
@@ -108,8 +100,7 @@ function coerceArgs(def, args) {
   return spec.map((type, i) => coerce(type, list[i]));
 }
 
-/* ---------------- 执行 ---------------- */
-/** 果实候选只由服务器抽取并随权威存档持久化，重复打开不能重抽。 */
+// 果实候选只由服务器抽取并随权威存档持久化，重复打开不能重抽。
 function invokeAction(api, save, name, args) {
   const id = args[0];
   if (name === 'applyFruitChoice') {
@@ -124,6 +115,14 @@ function invokeAction(api, save, name, args) {
     }
     return value;
   }
+  if (name === 'cancelFruitChoice') {
+    // 取消这次随机结果：果实照常消耗，服务端把它记进 fruitSeen（下一次不重复给）。
+    const pending = save.__onlineFruitChoices && save.__onlineFruitChoices[id];
+    if (!pending || !Array.isArray(pending.options) || !pending.options.length) {
+      const e = new Error('这次随机结果已经结算过了'); e.code = 'BAD_REQUEST'; throw e;
+    }
+    return api.cancelFruitChoice(...args);
+  }
   if (['fruitOptions', 'useProp', 'usePropMany'].includes(name) && (id === 47 || id === 48)) {
     if (!(save.props[id] > 0)) return name === 'fruitOptions' ? null : { ok: false, msg: '没有该道具' };
     const choices = { ...save.__onlineFruitChoices };
@@ -132,19 +131,50 @@ function invokeAction(api, save, name, args) {
       return name === 'fruitOptions' ? null : { ok: false, msg: '没有可选择的武器或技能' };
     }
     choices[id] = pending;
-    save.__onlineFruitChoices = choices; // 不修改 runOnSave 用来计算 diff 的旧档嵌套对象。
+    save.__onlineFruitChoices = choices;
     return name === 'fruitOptions' ? pending : {
-      ok: false, needsFruitChoice: true, fruit: id, mode: pending.mode, options: pending.options, msg: '请从三个里选一个',
+      ok: false, needsFruitChoice: true, fruit: id, mode: pending.mode, options: pending.options, msg: '请确认这次随机结果',
     };
+  }
+  // 无尽塔结算：塔对局在本机，服务端只收「通过层数 + 结算时铸币数 + 对局编号」。
+  // 周上限是经济闸门（最多 10 张/周，通过 >=100 层每周另加 2 张），同一 runId 重复提交幂等。
+  // 第 4 个参数只为兼容仍带结局标记的旧客户端；百层奖励在 TowerRewards.settle 里按层数判定。
+  if (name === 'claimEndlessTower') {
+    const rewards = globalThis.TowerRewards;
+    if (!rewards || typeof rewards.settle !== 'function') {
+      const e = new Error('无尽塔奖励模块未加载'); e.code = 'SERVER_ERROR'; throw e;
+    }
+    const runId = String(args[2] || '').slice(0, 64);
+    if (!/^[A-Za-z0-9:_-]{4,64}$/.test(runId)) {
+      const e = new Error('对局编号不合法'); e.code = 'BAD_REQUEST'; throw e;
+    }
+    // 塔内过程只在客户机，服务端无法复算；这里只拒绝「层数/铸币明显对不上」的提交，
+    // 真正的经济闸门仍是周上限（见 tower-rewards 的 WEEK_CAP）。
+    if (typeof rewards.plausible === 'function' && !rewards.plausible(args[0], args[1])) {
+      const e = new Error('无尽塔结算数据不合理，已拒绝'); e.code = 'BAD_REQUEST'; throw e;
+    }
+    const out = rewards.settle({
+      box: save.towerWeek,
+      // 传当前时刻，不走 `weekKey()` 的 5 秒缓存：周一 0 点后的第一笔结算要立刻换周。
+      week: settlement.weekKey(Date.now()),
+      layer: args[0],
+      mint: args[1],
+      runId,
+    });
+    save.towerWeek = out.box;
+    // 同一 runId 的重试只返回上次结果：duplicate 时不能再往背包加一遍。
+    if (!out.result.duplicate && out.result.granted > 0) {
+      if (!save.props || typeof save.props !== 'object' || Array.isArray(save.props)) save.props = {};
+      save.props[50] = Math.max(0, Math.floor(Number(save.props[50]) || 0)) + out.result.granted;
+    }
+    out.result.ticketsTotal = Math.max(0, Math.floor(Number(save.props && save.props[50]) || 0));
+    return out.result;
   }
   const fn = api[name];
   if (typeof fn !== 'function') throw new Error('State 里没有这个动作：' + name);
   return fn.apply(api, args);
 }
 
-/**
- * @returns {{ok:boolean, result:any, rev:number, patch:object|null, summary:object}}
- */
 function execute({ accountId, name, args, rev, ip }) {
   if (!Number.isSafeInteger(rev) || rev <= 0) {
     const e = new Error('rev 必须是正整数，请重新同步存档'); e.code = 'BAD_REQUEST'; throw e;
@@ -172,8 +202,7 @@ function execute({ accountId, name, args, rev, ip }) {
   let out;
   try {
     out = store.runOnSave(accountId, ({ api, save }) => {
-      /* 天梯商店按积分限购：积分真值在 ratings（每周一重置），存档镜像可能落后。
-       * 行动前先对齐，避免拿旧档的分数通过积分门槛。 */
+      // 天梯商店按积分限购：积分真值在 ratings（每周一重置），存档镜像可能落后。
       if (name === 'rankBuy') save.integral = settlement.ratingOf(accountId);
       const value = invokeAction(api, save, name, callArgs);
       return value === undefined ? null : value;

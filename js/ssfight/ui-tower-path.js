@@ -1,14 +1,4 @@
-/* ============================================================
- * ui-tower-path.js — 村庄右上角的「远方的无尽之塔」蜿蜒石板小径
- * ------------------------------------------------------------
- * 用户口径（2026-11）：不要塔元素，只要一小段**从宽到窄的蜿蜒石板路**；
- * 整体偏水平，不能遮住「征战」。点击后复用原版 4421 确认框
- * （取消在左、确定在右），确认进入无尽塔。
- *
- * 复用链：`SfChallenge.openOriginalConfirm` → 原版 4421 确认框
- * （tags-social-dialog.json；按钮 4399 / 4419 自带米色 / 绿色悬停两帧，
- *   点击反馈走 wireClickable）。这里只负责画石板与接动作。
- * ============================================================ */
+// ui-tower-path.js — 村庄右上角的「远方的无尽之塔」蜿蜒石板小径
 (function () {
   'use strict';
 
@@ -24,7 +14,7 @@
     return node;
   }
 
-  /** Catmull-Rom 采样：给蜿蜒中心线一组平滑的采样点。 */
+
   function sampleCurve(points, per) {
     const out = [];
     const ps = [points[0]].concat(points, [points[points.length - 1]]);
@@ -51,7 +41,7 @@
     return { p: center[i], tx: dx / len, ty: dy / len, nx: -dy / len, ny: dx / len };
   }
 
-  /** 沿中心线扩出一条带宽可变的带状底；路基与整段路的外轮廓共用。 */
+
   function ribbon(center, widthAt) {
     const left = [], right = [];
     for (let i = 0; i < center.length; i++) {
@@ -78,13 +68,13 @@
     ], { small: true });
   }
 
-  /** 联机版无尽塔 20 级解锁：点击小径先问 Tower，未到等级只提示、不弹确认框。 */
+
   function endlessLock() {
     const T = window.Tower;
     if (!T || typeof T.endlessUnlocked !== 'function') return { ok: true };
     return T.endlessUnlocked();
   }
-  /** 等级不够时走临时飘字（与征战等限制同一观感），不要弹窗挡住村庄页。 */
+  // 等级不够时走临时飘字（与征战等限制同一观感），不要弹窗挡住村庄页。
   function showLocked(message) {
     if (window.UI && typeof UI.toast === 'function') { UI.toast(message); return; }
     if (window.UI && UI.classic && typeof UI.classic.toast === 'function') { UI.classic.toast(message); return; }
@@ -97,11 +87,10 @@
         return Promise.resolve(SfChallenge.openOriginalConfirm({
           owner,
           label: '远方的无尽之塔',
-          /* 取消在左、确定在右：只交换原版两颗按钮的 x，语义仍绑在原 clip 上。
-           * extraGap 再把这组键向左右各推开一半，避免两颗键贴得太近。 */
+
           swapButtons: true,
           extraGap: 26,
-          text: '将前往远方的无尽之塔\n此去只问能走多远，不产出任何局外奖励。',
+          text: '蜿蜒的石板小径，道路尽头的远方若隐若现着无尽之塔。\n挑战与财富在塔中呼唤着你，要动身前往吗？',
           accept: run,
         })).catch(() => fallbackModal(run));
       } catch (e) {
@@ -113,7 +102,7 @@
     return null;
   }
 
-  /** 蜿蜒石板路：舞台坐标（320×196），近端宽、远端窄，整体接近水平。 */
+
   function paint(root) {
     const need = (window.Tower && window.Tower.ENDLESS_UNLOCK_LEVEL) || 20;
     const label = '无尽塔入口（' + need + ' 级解锁）';
@@ -124,22 +113,21 @@
       'aria-label': label,
       'data-tower-path': '1',
     });
-    /* 不挂 <title>：浏览器原生悬停提示会冒出「远方的无尽之塔」。
-     * 可访问名仍由 aria-label 提供；鼠标悬停只保留 SfUiFeedback 的视觉反馈。 */
 
-    /* 热区只盖路本身，顶边避开「征战」标签（标签顶边约 y=87）。 */
+
+
     g.appendChild(el('rect', {
       x: 232, y: 59, width: 68, height: 27,
       fill: '#000', 'fill-opacity': '0.001', 'pointer-events': 'all',
     }));
 
-    /* 近处路口较宽，路面向右上方蜿蜒并收束；地面仍贴着村庄草地。 */
+
     const center = sampleCurve([
       [242.2, 82], [243.7, 79], [248, 75], [255, 74], [262, 79],
       [267, 82], [272, 79], [276, 72], [280, 69], [285, 72],
       [289, 73], [292, 69], [295, 64],
     ], 18);
-    /* 分段透视：转弯时近侧迅速收窄，出弯略微展开，再继续向远处汇聚。 */
+
     const widths = [[0, 15.85], [0.08, 14.2], [0.20, 6.7], [0.29, 4.0],
       [0.36, 4.6], [0.47, 3.0], [0.56, 3.7], [0.67, 2.1],
       [0.77, 2.4], [0.88, 1.25], [1, 0.8]];
@@ -154,7 +142,7 @@
       return widths[widths.length - 1][1];
     };
     const base = ribbon(center, (t) => widthAt(t) + 1.1);
-    /* 路肩压进草地的暗影，近处可见厚度，远处自然收细。 */
+
     g.appendChild(el('path', {
       d: ribbonPath(base), fill: '#344b30', 'fill-opacity': '0.42',
       transform: 'translate(0,0.8)', 'pointer-events': 'none',
@@ -168,7 +156,7 @@
       d: ribbonPath(ribbon(center, (t) => widthAt(t))),
       fill: '#a39879', 'fill-opacity': '0.92', 'pointer-events': 'none',
     }));
-    /* 断续的边石沿两侧转弯，色调更沉，每块带一点向下的厚度。 */
+
     for (const side of [-1, 1]) {
       for (let i = 0; i < 17; i++) {
         const u = (i + 0.45) / 17, t = 1 - Math.pow(1 - u, 1.5);
@@ -187,7 +175,7 @@
           'stroke-width': (0.22 * scale).toFixed(2), 'stroke-linejoin': 'round', 'pointer-events': 'none' }));
       }
     }
-    /* 远处先画、近处后画。各行按投影距离挤密，石面、石缝和厚度一起递减。 */
+
     const colors = ['#d8d0ae', '#c8c5a6', '#d5c4a0', '#bfc4a6', '#e1d5b4'];
     const rows = 28;
     for (let row = rows - 1; row >= 0; row--) {
@@ -242,7 +230,7 @@
     if (mounted && mounted.parentNode) mounted.parentNode.removeChild(mounted);
     const g = paint(view.g);
     mounted = g;
-    /* 路径拦截 pointermove 时，村庄路由不会收到离开建筑的移动事件。 */
+    // 路径拦截 pointermove 时，村庄路由不会收到离开建筑的移动事件。
     const clearVillageHover = () => {
       const router = view.g && view.g.__sfRouter;
       if (router && router.clear) router.clear();
@@ -266,12 +254,28 @@
     };
     const fire = (ev) => {
       if (ev && ev.stopPropagation) ev.stopPropagation();
-      /* 点完把焦点放掉：`:focus-visible` 的黄色描边只留给键盘操作。 */
+
       try { if (g.blur) g.blur(); } catch (e) {}
       try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch (e) {}
-      const lock = endlessLock();
-      if (!lock.ok) { showLocked(lock.msg); return; }
-      openConfirm(owner || (window.document && document.querySelector('#ui .ssfight-home')), run);
+      const proceed = () => {
+        const lock = endlessLock();
+        if (!lock.ok) { showLocked(lock.msg); return; }
+        openConfirm(owner || (window.document && document.querySelector('#ui .ssfight-home')), run);
+      };
+      if (!window.Tower && window.TowerLoader) {
+        let tip = null;
+        try { if (window.UI && UI.toast) tip = UI.toast('正在加载无尽塔…'); } catch (e) {}
+        window.TowerLoader.ensure().then(() => {
+          if (tip && tip.remove) tip.remove();
+          proceed();
+        }).catch((e) => {
+          if (tip && tip.remove) tip.remove();
+          if (window.__errs) window.__errs.push('tower load: ' + (e && e.message));
+          showLocked('无尽塔加载失败，请刷新后重试。');
+        });
+        return;
+      }
+      proceed();
     };
     for (const type of ['pointerdown', 'pointerup', 'pointermove', 'click']) {
       g.addEventListener(type, (ev) => { if (ev && ev.stopPropagation) ev.stopPropagation(); });

@@ -1,7 +1,4 @@
 'use strict';
-/* ============================================================
- * server/api/social.js — 消息 / 好友 / 留言板 / 师徒
- * ============================================================ */
 
 const crypto = require('node:crypto');
 const db = require('../db');
@@ -10,13 +7,14 @@ const store = require('../game/store');
 const snapshots = require('../game/snapshot');
 const settlement = require('../game/settlement');
 const fight = require('../game/fight');
+const vip = require('../game/vip');
 const serverMail = require('../game/server-mail');
 const { fail, rateLimit, clientIp } = require('../http');
 const { config } = require('../config');
 
-/* 奖励邮件（全服公告 / `server/game/server-mail.js` 的模板邮件）：奖励是「领取才入账」，
- * 与旧的「发放即到账」公告区分。只认服务端自己写进 messages.payload 的 claimable 标记；
- * 老公告没有这个标记，不会因为新版领取接口上线而被重复发一次。 */
+// 奖励邮件（全服公告 / `server/game/server-mail.js` 的模板邮件）：奖励是「领取才入账」，
+// 与旧的「发放即到账」公告区分。只认服务端自己写进 messages.payload 的 claimable 标记；
+// 老公告没有这个标记，不会因为新版领取接口上线而被重复发一次。
 const PROP_HARD_CAP = 9999;
 function mailRewards(payload) {
   const gold = Math.max(0, Math.min(100000, Math.floor(Number(payload && payload.gold) || 0)));
@@ -38,11 +36,31 @@ function publicFrom(accountId) {
   return row ? { accountId: Number(row.id), playerId: Number(row.player_id), name: String(row.name), tag: String(row.tag), display: String(row.name) } : null;
 }
 
+// 开发者礼包：服务端模板邮件（`servermail:`）与全服公告（`broadcast:`）。
+// 未领取前固定在最前；领取后 payload.claimedAt 出现，自动回到普通时间排序。
+function isDeveloperGift(row) {
+  const id = String((row && row.id) || '');
+  const kind = String((row && row.kind) || '');
+  return id.startsWith('servermail:') || id.startsWith('broadcast:') || kind === 'welcome' || kind === 'opening_gift';
+}
+function pinnedMail(row, payload) {
+  let p = payload;
+  if (p === undefined) {
+    try { p = JSON.parse((row && row.payload) || '{}'); } catch (_) { p = {}; }
+  }
+  return isDeveloperGift(row) && p && p.claimable === true && !p.claimedAt;
+}
+
+// SQL 版本：未领取的开发者礼包排最前；`claimedAt` 一写入就恢复普通时间序。
+const PIN_SQL = `((id LIKE 'servermail:%' OR id LIKE 'broadcast:%' OR kind IN ('welcome','opening_gift'))
+  AND payload LIKE '%"claimable":true%' AND payload NOT LIKE '%"claimedAt"%')`;
+const PIN_ORDER = `CASE WHEN ${PIN_SQL} THEN 0 ELSE 1 END`;
+
 function messageRow(row, accountId) {
   let payload = {};
   try { payload = JSON.parse(row.payload || '{}'); } catch (_) { payload = {}; }
-  /* 天梯复仇只认“被抢方 + 当天 + 原战报”：由服务端算 eligibility，客户端不再自己
-   * 从本地 battleHistory 猜。每条 rank 消息多查一次原战斗，50 条上限下开销可接受。 */
+  // 天梯复仇只认“被抢方 + 当天 + 原战报”：由服务端算 eligibility，客户端不再自己
+  // 从本地 battleHistory 猜。每条 rank 消息多查一次原战斗，50 条上限下开销可接受。
   if (/^rank_/.test(String(row.kind)) && row.combat_id) {
     const info = fight.revengeInfoFor(accountId, row.combat_id);
     if (info) payload.revenge = info;
@@ -54,33 +72,57 @@ function messageRow(row, accountId) {
     from: row.from_id ? { accountId: Number(row.from_id), name: String(row.from_name || '') } : null,
     text: String(row.text || ''),
     payload,
+    pinned: pinnedMail(row, payload),
     read: !!row.read_at,
     createdAt: Number(row.created_at),
   };
 }
 
-function friendRow(row) {
-  const last = db.get('SELECT last_seen FROM accounts WHERE id = ?', Number(row.friend_id));
-  const snap = snapshots.currentSnapshotMeta(row.friend_id, 'classic');
-  const save = db.get('SELECT level, name FROM saves WHERE account_id = ? AND mode = ?', Number(row.friend_id), 'classic');
-  const rating = settlement.scoreOf(row.friend_id);
-  return {
-    accountId: Number(row.friend_id),
-    name: String(row.name || (save && save.name) || ''),
-    tag: String(row.tag || ''),
-    display: String(row.name || ''),
-    level: save ? Number(save.level) : (snap ? snap.level : 1),
-    score: rating,
-    lastSeen: last ? Number(last.last_seen) : 0,
-    snapshotId: snap ? snap.id : '',
-    online: last ? (Date.now() - Number(last.last_seen) < 5 * 60 * 1000) : false,
-  };
+// 好友列表一次取齐快照 / 积分，避免每个好友各查 3 条（50 好友 ≈ 150 次查询）。
+function friendRows(rows) {
+  const ids = rows.map((row) => Number(row.friend_id)).filter((id) => id > 0);
+  const snaps = new Map(), ratings = new Map();
+  if (ids.length) {
+    const marks = ids.map(() => '?').join(',');
+    const snapRows = db.all(
+      `SELECT account_id, id, level FROM battle_snapshots
+        WHERE account_id IN (${marks}) AND mode = ? AND is_current = 1
+        ORDER BY level DESC, revision DESC`, ...ids, 'classic'
+    );
+    for (const snap of snapRows) {
+      const id = Number(snap.account_id);
+      if (!snaps.has(id)) snaps.set(id, { id: String(snap.id), level: Number(snap.level) });
+    }
+    const ratingRows = db.all(
+      `SELECT account_id, score FROM ratings WHERE season = ? AND account_id IN (${marks})`,
+      settlement.weekKey(), ...ids
+    );
+    for (const rating of ratingRows) ratings.set(Number(rating.account_id), Math.max(0, Number(rating.score) || 0));
+  }
+  const now = Date.now();
+  return rows.map((row) => {
+    const accountId = Number(row.friend_id);
+    const snap = snaps.get(accountId) || null;
+    const lastSeen = Number(row.last_seen) || 0;
+    return {
+      accountId,
+      name: String(row.name || row.save_name || ''),
+      tag: String(row.tag || ''),
+      display: String(row.name || ''),
+      level: row.save_level != null ? Number(row.save_level) : (snap ? snap.level : 1),
+      vipLevel: vip.levelAt(row.vip_level, row.vip_until),
+      score: ratings.get(accountId) || 0,
+      lastSeen,
+      snapshotId: snap ? snap.id : '',
+      online: lastSeen > 0 && now - lastSeen < 5 * 60 * 1000,
+    };
+  });
 }
 
-/** 一条好友申请 → 原版 `messages.do?type=3` 的字段（messageId / name / playerId / level）。 */
+// 一条好友申请 → 原版 `messages.do?type=3` 的字段（messageId / name / playerId / level）。
 function friendRequestRow(row) {
   const prof = publicFrom(row.from_id) || { accountId: Number(row.from_id), playerId: 0, name: '', tag: '', display: '' };
-  const save = db.get('SELECT level FROM saves WHERE account_id = ? AND mode = ?', Number(row.from_id), 'classic');
+  const save = db.get('SELECT level, vip_level, vip_until FROM saves WHERE account_id = ? AND mode = ?', Number(row.from_id), 'classic');
   return {
     messageId: String(row.id),
     accountId: Number(row.from_id),
@@ -89,11 +131,12 @@ function friendRequestRow(row) {
     tag: prof.tag,
     display: prof.display,
     level: save ? Number(save.level) : 1,
+    vipLevel: save ? vip.levelAt(save.vip_level, save.vip_until) : 0,
     createdAt: Number(row.created_at),
   };
 }
 
-/** 把 `targetId` 作为好友写进 `ownerId` 的存档（经典挑战页/离线分支读这一份）。 */
+// 把 `targetId` 作为好友写进 `ownerId` 的存档（经典挑战页/离线分支读这一份）。
 function addFriendToSave(ownerId, targetId) {
   const prof = publicFrom(targetId);
   if (!prof) return;
@@ -107,7 +150,7 @@ function addFriendToSave(ownerId, targetId) {
   });
 }
 
-/** 接受一条申请：双向 `friendships` + 两边存档好友列表 + 清掉两个方向的 pending。 */
+// 接受一条申请：双向 `friendships` + 两边存档好友列表 + 清掉两个方向的 pending。
 function acceptFriendRequest(request) {
   const fromId = Number(request.from_id), toId = Number(request.to_id);
   if (Number(db.get('SELECT COUNT(*) AS c FROM friendships WHERE account_id = ?', toId).c) >= config.friendLimit)
@@ -124,13 +167,33 @@ function acceptFriendRequest(request) {
   return publicFrom(fromId);
 }
 
+// 主界面 NEW / 消息页红点共用的一份计数：`leave` 是留言板未读，仍计入 `unread`；
+// 登录安全提醒有独立弹窗，不参与主界面 NEW。
+function badgeCounts(accountId) {
+  const me = Number(accountId);
+  const seen = db.get('SELECT requests_seen_at FROM notice_seen WHERE account_id = ?', me);
+  const requestsSeenAt = Math.max(0, Number(seen && seen.requests_seen_at) || 0);
+  const row = db.get(
+    `SELECT COUNT(*) AS c,
+            SUM(CASE WHEN kind = 'friend_message' THEN 1 ELSE 0 END) AS board
+       FROM messages
+      WHERE account_id = ? AND read_at IS NULL AND kind <> 'login_alert'`,
+    me
+  );
+  const unread = Number(row && row.c || 0);
+  const leave = Number(row && row.board || 0);
+  const requests = Number(db.get(
+    'SELECT COUNT(*) AS c FROM friend_requests WHERE to_id = ? AND created_at > ?',
+    me, requestsSeenAt
+  ).c || 0);
+  return { unread, leave, requests, total: unread + requests };
+}
+
 module.exports = {
-  /* ---------------- 消息 ---------------- */
+
   messages(ctx) {
     const me = Number(ctx.account.id);
-    /* 模板奖励邮件（开服奖励等）在这里补投：等级已到 → 写一封待领取邮件。
-     * 打开消息页就是玩家「能看到邮件」的那一刻，所以投递放在查询之前；
-     * 投递幂等（固定 id），失败也不影响消息列表。 */
+
     try {
       const save = db.get('SELECT level FROM saves WHERE account_id = ? AND mode = ?', me, store.MODE);
       if (save) serverMail.deliver(me, save.level);
@@ -138,40 +201,26 @@ module.exports = {
     const since = Number(ctx.query.since) || 0;
     const limit = Math.max(1, Math.min(50, Number(ctx.query.limit) || 20));
     const rows = since > 0
-      ? db.all('SELECT * FROM messages WHERE account_id = ? AND created_at > ? ORDER BY created_at DESC LIMIT ?', me, since, limit)
-      : db.all('SELECT * FROM messages WHERE account_id = ? ORDER BY created_at DESC LIMIT ?', me, limit);
+      ? db.all(`SELECT * FROM messages WHERE account_id = ? AND (created_at > ? OR ${PIN_SQL}) ORDER BY ${PIN_ORDER}, created_at DESC LIMIT ?`, me, since, limit)
+      : db.all(`SELECT * FROM messages WHERE account_id = ? ORDER BY ${PIN_ORDER}, created_at DESC LIMIT ?`, me, limit);
     const unread = db.get('SELECT COUNT(*) AS c FROM messages WHERE account_id = ? AND read_at IS NULL', me);
     return { ok: true, messages: rows.map(row => messageRow(row, me)), unread: Number(unread.c || 0), serverTime: Date.now() };
   },
 
-  /** 主界面「消息」NEW 红点：只统计**被动到达且还没看过**的东西。
-   *  · 消息：`messages.read_at IS NULL`（玩家自己在战斗里产生的记录不写 messages，
-   *    所以主动挑战不会点亮红点）；
-   *  · 好友验证：`friend_requests` 没有 read 标记，用 `notice_seen.requests_seen_at`
-   *    记录「上一次打开消息页时已经看到哪」，只算之后新到的申请。
-   *  返回 total 给 `SfUiMain.hasNewMessages()`，客户端每 15 秒轮询一次。 */
+  // 主界面「消息」NEW 红点：只统计被动到达且还没看过的东西。
+  // 返回 total 给 `SfUiMain.hasNewMessages()`，客户端每 15 秒轮询一次。
   badge(ctx) {
     const me = Number(ctx.account.id);
-    /* 和 `/api/messages` 一样顺手补投模板奖励邮件：等级刚到的玩家不用等下一次 /api/state
-     * 就能在 15 秒内看到红点。投递幂等，失败不影响计数。 */
+
     try {
       const save = db.get('SELECT level FROM saves WHERE account_id = ? AND mode = ?', me, store.MODE);
       if (save) serverMail.deliver(me, save.level);
     } catch (e) { console.warn('[server-mail] 投递失败：' + ((e && e.message) || e)); }
-    const seen = db.get('SELECT requests_seen_at FROM notice_seen WHERE account_id = ?', me);
-    const requestsSeenAt = Math.max(0, Number(seen && seen.requests_seen_at) || 0);
-    /* 留言（friend_message）有独立的 leaveNew 红点；登录安全提醒（login_alert）
-     * 有登录弹窗自己负责。两者都不混进主界面 NEW，避免同一个事件提示两遍。 */
-    const unread = Number(db.get(
-      "SELECT COUNT(*) AS c FROM messages WHERE account_id = ? AND read_at IS NULL AND kind NOT IN ('friend_message','login_alert')",
-      me
-    ).c || 0);
-    const requests = Number(db.get('SELECT COUNT(*) AS c FROM friend_requests WHERE to_id = ? AND created_at > ?', me, requestsSeenAt).c || 0);
-    return { ok: true, unread, requests, total: unread + requests, serverTime: Date.now() };
+    return Object.assign({ ok: true }, badgeCounts(me), { serverTime: Date.now() });
   },
 
-  /** 打开消息页时调用：把已到达的普通消息标为已读，并记下好友验证看到哪。
-   *  留言不动（它的未读状态由留言 tab 自己按 id 标记），否则 `leaveNew` 会一起熄灭。 */
+  // 打开消息页时调用：把已到达的普通消息标为已读，并记下好友验证看到哪。
+  // 留言不动（它的未读状态由留言 tab 自己按 id 标记），否则主界面 NEW 和 `leaveNew` 会一起熄灭。
   seenMessages(ctx) {
     const me = Number(ctx.account.id), ts = Date.now();
     db.tx(() => {
@@ -182,7 +231,7 @@ module.exports = {
         me, ts, ts
       );
     });
-    return { ok: true, unread: 0, requests: 0, total: 0, seenAt: ts };
+    return Object.assign({ ok: true }, badgeCounts(me), { seenAt: ts });
   },
 
   readMessages(ctx) {
@@ -190,22 +239,19 @@ module.exports = {
     const before = Number(ctx.body.before) || 0;
     const ts = Date.now();
     if (ids.length) {
-      for (const id of ids) {
-        db.run('UPDATE messages SET read_at = ? WHERE id = ? AND account_id = ? AND read_at IS NULL', ts, String(id), Number(ctx.account.id));
-      }
+      const marks = ids.map(() => '?').join(',');
+      db.run(`UPDATE messages SET read_at = ? WHERE account_id = ? AND read_at IS NULL AND id IN (${marks})`,
+        ts, Number(ctx.account.id), ...ids);
     } else if (before > 0) {
       db.run('UPDATE messages SET read_at = ? WHERE account_id = ? AND created_at <= ? AND read_at IS NULL', ts, Number(ctx.account.id), before);
     } else {
       db.run('UPDATE messages SET read_at = ? WHERE account_id = ? AND read_at IS NULL', ts, Number(ctx.account.id));
     }
-    return { ok: true };
+    return Object.assign({ ok: true }, badgeCounts(Number(ctx.account.id)));
   },
 
-  /** 领取奖励邮件（`POST /api/messages/claim`）：同一封邮件只能成功入账一次。
-   *  可领取类型 = 老的全服公告 + `server/game/server-mail.js` 模板声明的类型；
-   *  模板邮件的 `payload.minLevel` 在这里再校验一次（没解锁消息功能前不许领）。
-   *  老公告（payload 没有 claimable）返回 already，不发奖；新邮件在事务里
-   *  「发奖 + 把 claimedAt 写回 payload」一起提交。 */
+  // 领取奖励邮件（`POST /api/messages/claim`）：同一封邮件只能成功入账一次。
+  // 模板邮件的 `payload.minLevel` 在这里再校验一次（没解锁消息功能前不许领）。
   claimMail(ctx) {
     const me = Number(ctx.account.id), id = String(ctx.body && ctx.body.id || '');
     if (!id) throw fail('BAD_REQUEST', '邮件编号无效');
@@ -230,8 +276,10 @@ module.exports = {
         return { ok: true, already: true, claimed: true, rewards, message: '这条公告没有可领取的奖励。' };
       }
       store.runOnSave(me, ({ api, save }) => {
+        // 邮件金松果是赠送，不是当日个人收益：不写 earnHistory，徒弟日供（按昨日收益 10%）
+        // 不能把它算进师傅进贡。只有战斗/关卡/礼包/任务等默认 addGold 的收益才计入。
         if (rewards.gold) api.addGold(rewards.gold, { count: false });
-        if (rewards.cup) save.goldCup = Math.max(0, Number(save.goldCup) || 0) + rewards.cup;
+        if (rewards.cup) api.addGoldCup(rewards.cup);
         if (!rewards.props.length) return;
         if (!save.props || typeof save.props !== 'object' || Array.isArray(save.props)) save.props = {};
         for (const item of rewards.props) {
@@ -244,27 +292,30 @@ module.exports = {
     });
   },
 
-  /* ---------------- 好友 ---------------- */
+
   friends(ctx) {
     const rows = db.all(
-      `SELECT f.friend_id, a.name, a.tag FROM friendships f JOIN accounts a ON a.id = f.friend_id
-       WHERE f.account_id = ? ORDER BY f.created_at DESC`,
-      Number(ctx.account.id)
+      `SELECT f.friend_id, a.name, a.tag, a.last_seen, s.level AS save_level, s.name AS save_name,
+              s.vip_level AS vip_level, s.vip_until AS vip_until
+         FROM friendships f
+         JOIN accounts a ON a.id = f.friend_id
+         LEFT JOIN saves s ON s.account_id = f.friend_id AND s.mode = ?
+        WHERE f.account_id = ?
+        ORDER BY f.created_at DESC`,
+      store.MODE, Number(ctx.account.id)
     );
-    const list = rows.map(friendRow);
+    const list = friendRows(rows);
     const aiRows = db.all('SELECT id,fighter,created_at FROM ai_friends WHERE account_id=? ORDER BY created_at DESC,id DESC', Number(ctx.account.id));
-    /* 和 `/api/opponents` 同一个理由：列表里直接带战斗体，客户端不必每个好友再跑一次
-     * `/api/fighter`（好友多的时候那是 N 次**串行**往返，Net 是全局串行队列）。
-     * 预算是 `config.friendLimit`（50）：好友页一次请求就能翻完所有页。
-     * ⚠ 再往上放（原版抓包 142 人）不能继续整包下发，要先把好友页改成分页/懒加载。 */
+    // 和 `/api/opponents` 同一个理由：列表里直接带战斗体，客户端不必每个好友再跑一次
+    // ⚠ 再往上放（原版抓包 142 人）不能继续整包下发，要先把好友页改成分页/懒加载。
     const fighterFromSnapshot = require('../game/fighter').fighterFromSnapshot;
     const withFighter = String(ctx.query.withFighter || '1') !== '0';
     if (withFighter) {
+      const snaps = snapshots.snapshotByIds(list.map((item) => item.snapshotId).filter(Boolean));
       let budget = config.friendLimit;
       for (const item of list) {
         if (budget <= 0) break;
-        if (!item.snapshotId) continue;
-        const snap = snapshots.snapshotById(item.snapshotId);
+        const snap = item.snapshotId ? snaps.get(String(item.snapshotId)) : null;
         if (!snap || !snap.fighter) continue;
         item.fighter = fighterFromSnapshot(snap.fighter);
         item.hp = item.fighter.maxHp || item.fighter.hp;
@@ -274,12 +325,12 @@ module.exports = {
     for (const row of aiRows) {
       const fighter = JSON.parse(row.fighter);
       list.push({ snapshotId: String(row.id), source: 'bot', bot: true, player: false, name: fighter.name,
-        level: fighter.level, display: fighter.name + ' AI', fighter, createdAt: Number(row.created_at) });
+        level: fighter.level, vipLevel: 0, display: fighter.name + ' AI', fighter, createdAt: Number(row.created_at) });
     }
     return {
       ok: true, friends: list, limit: config.friendLimit, aiCount: aiRows.length, aiLimit: 10,
-      /* 消息页「验证消息」红点（原版 `newMsgType.hasNewValidateMessage`）：没有单独的推送，
-       * 客户端每次打开消息页/好友页时读这个数。 */
+      // 消息页「验证消息」红点（原版 `newMsgType.hasNewValidateMessage`）：没有单独的推送，
+      // 客户端每次打开消息页/好友页时读这个数。
       requestCount: Number(db.get('SELECT COUNT(*) AS c FROM friend_requests WHERE to_id = ?', Number(ctx.account.id)).c),
     };
   },
@@ -308,7 +359,7 @@ module.exports = {
     return { ok: true, friend };
   },
 
-  /** 发送好友申请（原版 `addFriend.do?isFind=false`）：**只写申请，不写好友关系**。 */
+
   addFriend(ctx) {
     rateLimit('friend:' + ctx.account.id, 30, 60 * 1000);
     const me = Number(ctx.account.id);
@@ -316,12 +367,12 @@ module.exports = {
     const target = internalId ? db.get('SELECT * FROM accounts WHERE id=?', internalId) : auth.findAccountStrict(ctx.body.target);
     if (!target) throw fail('NOT_FOUND', '找不到这个玩家（可写昵称或玩家 ID）');
     if (Number(target.id) === me) throw fail('BAD_REQUEST', '不能加自己');
-    /* 已经是好友：原版服务端也会直接回成功；这里给 `already` 让客户端换文案。 */
+    // 已经是好友：原版服务端也会直接回成功；这里给 `already` 让客户端换文案。
     if (db.get('SELECT 1 AS x FROM friendships WHERE account_id = ? AND friend_id = ?', me, Number(target.id)))
       return { ok: true, already: true, friend: publicFrom(target.id), message: '你们已经是好友。' };
     if (Number(db.get('SELECT COUNT(*) AS c FROM friendships WHERE account_id = ?', me).c) >= config.friendLimit)
       throw fail('CONFLICT', '好友已满（' + config.friendLimit + ' 个）');
-    /* 对方也申请过我 = 双方都同意 → 直接接受（等价于先到的那条申请被验证通过）。 */
+
     const reverse = db.get('SELECT * FROM friend_requests WHERE from_id = ? AND to_id = ?', Number(target.id), me);
     if (reverse) {
       const friend = acceptFriendRequest(reverse);
@@ -339,13 +390,32 @@ module.exports = {
     };
   },
 
-  /** 我收到的待验证好友申请（原版 `messages.do?type=3`；红点用 `friends.requestCount`）。 */
+
   friendRequests(ctx) {
-    const rows = db.all('SELECT * FROM friend_requests WHERE to_id = ? ORDER BY created_at DESC LIMIT 50', Number(ctx.account.id));
-    return { ok: true, requests: rows.map(friendRequestRow), count: rows.length };
+    const rows = db.all(
+      `SELECT fr.*, a.name, a.tag, p.player_id, s.level AS save_level
+         FROM friend_requests fr
+         LEFT JOIN accounts a ON a.id = fr.from_id
+         LEFT JOIN player_ids p ON p.account_id = fr.from_id
+         LEFT JOIN saves s ON s.account_id = fr.from_id AND s.mode = ?
+        WHERE fr.to_id = ?
+        ORDER BY fr.created_at DESC LIMIT 50`,
+      store.MODE, Number(ctx.account.id)
+    );
+    const requests = rows.map((row) => ({
+      messageId: String(row.id),
+      accountId: Number(row.from_id),
+      playerId: Number(row.player_id) || 0,
+      name: String(row.name || ''),
+      tag: String(row.tag || ''),
+      display: String(row.name || ''),
+      level: row.save_level != null ? Number(row.save_level) : 1,
+      createdAt: Number(row.created_at),
+    }));
+    return { ok: true, requests, count: requests.length };
   },
 
-  /** 同意 / 拒绝一条好友申请（原版 `validateFriend.do?messageId=&accept=`）。 */
+
   respondFriendRequest(ctx) {
     const me = Number(ctx.account.id);
     const id = String(ctx.params.id || '');
@@ -373,20 +443,27 @@ module.exports = {
     db.tx(() => {
       db.run('DELETE FROM friendships WHERE account_id = ? AND friend_id = ?', me, Number(target.id));
       db.run('DELETE FROM friendships WHERE account_id = ? AND friend_id = ?', Number(target.id), me);
-      /* 删好友连两边还没处理的申请一起清掉，避免请求列表里残留“已经是好友”的条目。 */
+
       db.run('DELETE FROM friend_requests WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)',
         me, Number(target.id), Number(target.id), me);
       store.runOnSave(me, ({ api }) => { api.removeFriend(String(target.name)); });
+      // 好友是双向关系：两边存档镜像都摘掉（师徒是另一套关系，这里不碰）。
+      try {
+        const mine = store.peek(me);
+        if (mine && mine.name) store.runOnSave(Number(target.id), ({ api }) => { api.removeFriend(String(mine.name)); });
+      } catch (_) {}
     });
     return { ok: true };
   },
 
-  /** 按昵称、玩家 ID 或旧格式“名字#编号”搜索玩家。 */
+  // 按昵称、玩家 ID 或旧格式“名字#编号”搜索玩家。
   search(ctx) {
     const q = String(ctx.query.q || '').trim();
     if (!q) return { ok: true, results: [] };
     const rows = db.all(
-      "SELECT a.id, a.name, a.tag, p.player_id FROM accounts a JOIN player_ids p ON p.account_id=a.id WHERE a.banned = 0 AND (a.name LIKE ? OR (a.name = ?) OR CAST(p.player_id AS TEXT) = ? OR (a.name || '#' || a.tag) = ?) ORDER BY a.last_seen DESC LIMIT 20",
+      `SELECT a.id, a.name, a.tag, p.player_id FROM accounts a JOIN player_ids p ON p.account_id=a.id
+        WHERE a.banned = 0 AND (a.name LIKE ? OR (a.name = ?) OR CAST(p.player_id AS TEXT) = ? OR (a.name || '#' || a.tag) = ?)
+        ORDER BY a.last_seen DESC LIMIT 20`,
       '%' + q + '%', q, q, q
     );
     const results = rows.map((r) => {
@@ -402,7 +479,7 @@ module.exports = {
     return { ok: true, results };
   },
 
-  /* ---------------- 留言板 ---------------- */
+
   friendMessages(ctx) {
     const toId = Number(ctx.query.accountId) || Number(ctx.account.id);
     const rows = db.all('SELECT * FROM friend_messages WHERE to_id = ? ORDER BY created_at DESC LIMIT 50', toId);
@@ -427,7 +504,14 @@ module.exports = {
     const target = db.get('SELECT id FROM accounts WHERE id = ?', toId);
     if (!target) throw fail('NOT_FOUND', '没有这个玩家');
     const friend = db.get('SELECT 1 AS x FROM friendships WHERE account_id = ? AND friend_id = ?', Number(ctx.account.id), toId);
-    if (!friend) throw fail('FORBIDDEN', '只能给好友留言');
+    // 师徒也是社交关系：好友→拜师/收徒后名册只保留师徒行，留言入口不能因此 403。
+    const kin = db.get(
+      `SELECT 1 AS x FROM apprenticeships
+        WHERE status = 'active' AND master_kind = 'account'
+          AND ((master_id = ? AND prentice_id = ?) OR (master_id = ? AND prentice_id = ?))`,
+      Number(ctx.account.id), toId, toId, Number(ctx.account.id)
+    );
+    if (!friend && !kin) throw fail('FORBIDDEN', '只能给好友或师徒留言');
     const meAccount = db.get('SELECT name FROM accounts WHERE id = ?', Number(ctx.account.id));
     db.tx(() => {
       db.run('INSERT INTO friend_messages (id, to_id, from_id, from_name, text, created_at) VALUES (?,?,?,?,?,?)',
@@ -439,29 +523,26 @@ module.exports = {
     return { ok: true };
   },
 
-  /* ---------------- 天梯周奖励 ---------------- */
+
   rankAward(ctx) {
     return Object.assign({ ok: true }, settlement.rankAwardStatus(ctx.account.id));
   },
 
   claimRankAward(ctx) {
     const accountId = ctx.account.id;
-    /* 领取记录与金杯必须在同一个事务里：以前先插 `rank_awards` 再单独 runOnSave，
-     * 中途失败会留下「奖励记录已用、金杯没到」的死账（安全审计 R-12）。 */
+    // 中途失败会留下「奖励记录已用、金杯没到」的死账（安全审计 R-12）。
     return db.tx(() => {
       const out = settlement.claimRankAward(accountId);
       if (!out.ok) {
-        /* 这是正常的业务结果（已领过 / 没进前 100），不是协议错误；带上 `error.msg`
-         * 让所有客户端（包括只认 error.msg 的旧版）显示服务端文案，而不是
-         * 「请求失败（HTTP 200）」。 */
+        // 这是正常的业务结果（已领过 / 没进前 100），不是协议错误；带上 `error.msg`
         const code = out.already ? 'ALREADY_CLAIMED' : 'NOT_ELIGIBLE';
         return Object.assign({
           ok: false, msg: out.msg, already: !!out.already,
           error: { code, msg: out.msg },
         }, settlement.rankAwardStatus(accountId));
       }
-      const saved = store.runOnSave(accountId, ({ save }) => {
-        save.goldCup = Math.max(0, Number(save.goldCup) || 0) + out.cups;
+      const saved = store.runOnSave(accountId, ({ api, save }) => {
+        api.addGoldCup(out.cups);
         return save.goldCup;
       }, { snapshotSource: 'rank-award' });
       return {

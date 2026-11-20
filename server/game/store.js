@@ -1,26 +1,22 @@
 'use strict';
-/* ============================================================
- * server/game/store.js — 权威存档的读写原语
- * ------------------------------------------------------------
- * 所有会改存档的服务端逻辑都从这里进出：
- *   `runOnSave()` = 载入 → housekeeping → 你的同步回调 → 写回 → 返回 patch/revision。
- * 回调里**不能 await**（State 是单例，await 会让两个请求串档）。
- * ============================================================ */
+// server/game/store.js — 权威存档的读写原语
+// 所有会改存档的服务端逻辑都从这里进出：
+// 回调里不能 await（State 是单例，await 会让两个请求串档）。
 
 const db = require('../db');
 const runtime = require('./runtime');
 const snapshots = require('./snapshot');
+const vip = require('./vip');
 const nickname = require('../../js/nickname');
 
 const MODE = 'classic';
-/* 旧账号最多 12 个汉字（36 个“三分之一字”）：存档/快照里的旧名字保留原样，
- * 不因为新注册规则收成 7 个字；新注册在 `auth.normalizeName` 已按 21 个单位收口。 */
+// 旧账号最多 12 个汉字（36 个“三分之一字”）：存档/快照里的旧名字保留原样，
 const LEGACY_NAME_UNITS = 36;
 
 function encode(obj) { return Buffer.from(JSON.stringify(obj), 'utf8'); }
 
-/** node:sqlite 的 BLOB 读回来是 **Uint8Array**（不是 Buffer）——统一成 Buffer 再解码，
- *  否则 `String(blob)` 会得到 "123,34,..." 这种字节列表，JSON.parse 直接炸。 */
+// node:sqlite 的 BLOB 读回来是 Uint8Array（不是 Buffer）——统一成 Buffer 再解码，
+// 否则 `String(blob)` 会得到 "123,34,..." 这种字节列表，JSON.parse 直接炸。
 function toBuffer(blob) {
   if (blob == null) return Buffer.alloc(0);
   if (Buffer.isBuffer(blob)) return blob;
@@ -40,15 +36,18 @@ function getRow(accountId, mode) {
 function summaryOf(payload) {
   const s = payload || {};
   const num = (v) => Math.max(0, Math.round(Number(v) || 0));
+  const v = s.vip && typeof s.vip === 'object' && !Array.isArray(s.vip) ? s.vip : {};
   return {
     level: Math.max(1, num(s.level) || 1),
     name: nickname.truncate(s.name || '', LEGACY_NAME_UNITS),
     power: num(s.power), agility: num(s.agility), speed: num(s.speed), hp: num(s.maxHp),
     gold: num(s.goldPoint), goldCup: num(s.goldCup), integral: num(s.integral),
+    vipLevel: Math.max(0, Math.min(vip.MAX_LEVEL, Math.floor(Number(v.level) || 0))),
+    vipUntil: Math.max(0, Math.floor(Number(v.until) || 0)),
   };
 }
 
-/** 顶层键 diff：只把变了的键发回客户端。 */
+// 顶层键 diff：只把变了的键发回客户端。
 function diffPayload(before, after) {
   const set = {};
   const del = [];
@@ -65,9 +64,8 @@ function diffPayload(before, after) {
   return { set, del };
 }
 
-/** JSON 可表示值的深比较。替代每个顶层键一次 `JSON.stringify`：
- *  `battles` 这种几十 KB 的数组在未变时也要被序列化两遍，是动作延迟里最冤的一笔。
- *  这里只做逐值比较，不分配大字符串；数组/对象顺序不影响结果。 */
+// JSON 可表示值的深比较。替代每个顶层键一次 `JSON.stringify`：
+// 这里只做逐值比较，不分配大字符串；数组/对象顺序不影响结果。
 function deepEqual(a, b) {
   if (a === b) return true;
   if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
@@ -86,29 +84,22 @@ function deepEqual(a, b) {
   return true;
 }
 
-/** 服务端时间推进：体力/每日/村庄日常。幂等，失败不影响主流程。 */
+// 服务端时间推进：体力/每日/村庄日常。幂等，失败不影响主流程。
 function housekeeping() {
   const S = globalThis.State;
   if (!S) return;
-  /* `tickEnergy()` 内部已经串了 syncDailyStats / syncVipEnergyCap / tickVipDaily，
-   * 以前这里又把后三个各调了一遍（每个动作多跑两轮 Intl + 幂等检查）。 */
+
   try { S.tickEnergy(); } catch (_) {}
   try { S.settleBuildings(); } catch (_) {}
   try { if (S.syncLotteryDay) S.syncLotteryDay(); } catch (_) {}
 }
 
-/**
- * 在权威存档上执行同步回调并写回。
- * 回调签名 `({ api, save })`：`api` 是 State 模块，`save` 是当前存档对象。
- * @param {number} accountId
- * @param {(ctx:{api:object, save:object}) => any} fn
- * @param {{expectRev?:number, snapshotSource?:string, mode?:string, row?:object}} opts
- */
+// 在权威存档上执行同步回调并写回。
+// 回调签名 `({ api, save })`：`api` 是 State 模块，`save` 是当前存档对象。
 function runOnSave(accountId, fn, opts) {
   const o = opts || {};
   const mode = o.mode || MODE;
-  /* 调用方刚刚查过同一行时可以直接传进来，省掉一次 SELECT（actions.execute 就是这种情况；
-   * Node 单线程，同步代码里不存在“查完又被别的请求改掉”的窗口）。 */
+
   const row = o.row || getRow(accountId, mode);
   if (!row) {
     const e = new Error('还没有存档');
@@ -146,16 +137,17 @@ function commit(accountId, mode, row, before, after, value, o) {
     rev = Number(row.revision) + 1;
     db.run(
       `UPDATE saves SET revision = ?, payload = ?, level = ?, name = ?, power = ?, agility = ?, speed = ?, hp = ?,
-        gold = ?, gold_cup = ?, integral = ?, updated_at = ? WHERE account_id = ? AND mode = ?`,
+        gold = ?, gold_cup = ?, integral = ?, vip_level = ?, vip_until = ?, updated_at = ? WHERE account_id = ? AND mode = ?`,
       rev, encode(after), summary.level, summary.name, summary.power, summary.agility, summary.speed, summary.hp,
-      summary.gold, summary.goldCup, summary.integral, Date.now(), Number(accountId), mode
+      summary.gold, summary.goldCup, summary.integral, summary.vipLevel, summary.vipUntil, Date.now(),
+      Number(accountId), mode
     );
     if (o.snapshotSource) snapshots.ensureCurrent(accountId, mode, o.snapshotSource);
   }
   return { value, patch: changed ? patch : null, rev, payload: after, summary, changed };
 }
 
-/** 新建账号时的初始存档。 */
+// 新建账号时的初始存档。
 function createSave(accountId, name, mode) {
   const m = mode || MODE;
   const out = runtime.withState(null, ({ save }) => {
@@ -166,17 +158,16 @@ function createSave(accountId, name, mode) {
   const sum = summaryOf(payload);
   const ts = Date.now();
   db.run(
-    `INSERT INTO saves (account_id, mode, revision, payload, level, name, power, agility, speed, hp, gold, gold_cup, integral, updated_at)
-     VALUES (?,?,1,?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO saves (account_id, mode, revision, payload, level, name, power, agility, speed, hp, gold, gold_cup, integral, vip_level, vip_until, updated_at)
+     VALUES (?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     Number(accountId), m, encode(payload), sum.level, sum.name, sum.power, sum.agility, sum.speed, sum.hp,
-    sum.gold, sum.goldCup, sum.integral, ts
+    sum.gold, sum.goldCup, sum.integral, sum.vipLevel, sum.vipUntil, ts
   );
   snapshots.ensureCurrent(accountId, m, 'newgame');
   return payload;
 }
 
-/** 改昵称：同步存档显示名 + 当前防守快照里的名字；返回和动作一样的 patch/rev。
- *  账号表 `accounts.name` 由 `auth.changeName()` 在同一事务里改。 */
+// 改昵称：同步存档显示名 + 当前防守快照里的名字；返回和动作一样的 patch/rev。
 function rename(accountId, name, mode) {
   const m = mode || MODE;
   if (!getRow(accountId, m)) return null;
@@ -186,7 +177,7 @@ function rename(accountId, name, mode) {
   return out;
 }
 
-/** 读一份存档（不修改）。 */
+// 读一份存档（不修改）。
 function peek(accountId, mode) {
   const row = getRow(accountId, mode);
   return row ? decode(row.payload) : null;

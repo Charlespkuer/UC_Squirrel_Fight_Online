@@ -23,9 +23,10 @@ function findRoot(start) {
 }
 const ROOT = findRoot(__dirname);
 
-function game() {
+function game(online) {
   const ctx = { localStorage: { getItem: () => null, setItem: () => {} }, Date };
   ctx.window = ctx;
+  if (online) { ctx.__SSDZ_ONLINE__ = true; ctx.__SSDZ_ONLINE_COMBAT__ = true; }
   vm.createContext(ctx);
   for (const file of ['js/gamedict.js', 'js/gamedata.js', 'js/state.js', 'js/sim.js']) {
     vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), ctx, { filename: file });
@@ -43,7 +44,7 @@ function fighter(o) {
     name: 'x', side: 0, hp: 100000, maxHp: 100000, power: 100, agility: 100, speed: 100,
     baseStats: { power: 100, agility: 100, speed: 100, hp: 100000 }, skills: [], weapons: [],
     buffFlat: { power: 0, agility: 0, speed: 0 }, debuffs: { power: 0, agility: 0, speed: 0 },
-    effects: {}, mods: {}, setFx: {}, mech: [], mechState: {},
+    effects: {}, mods: {}, mech: [], mechState: {},
     petSeals: {}, petSealWeapons: {}, petSealSkills: {},
   }, o);
 }
@@ -125,4 +126,40 @@ test('ssfight 装备词条：48 条、32 空号、宝石 12 档增幅与 42~49 �
   const counterCount = (effects) => g.Sim.simulate(fighter({ weapons: ['1:10'] }), fighter({ side: 1, agility: 100, speed: 1, effects }), {}).rounds.filter((r) => r.counterDmg > 0).length;
   assert.equal(counterCount({}), 0, '25% 反击在 0.5 随机下不应触发');
   assert.ok(counterCount({ 49: 100 }) > 0, '49 +100 点后应能反击');
+});
+
+test('同名词条只保留一条：旧档详情取最高星，在线融合产物不重复', () => {
+  /* ① 旧档/任意入口的 ext 先收口：25 号分别 1/3 星时只留 3 星，不出现两行同名。 */
+  const off = game();
+  const gear = off.State.addGear(128, [{ id: 25, level: 1 }, { id: 25, level: 3 }, { id: 26, level: 2 }]);
+  assert.ok(gear, 'addGear 应成功');
+  assert.deepEqual(Array.from(gear.ext, (e) => [e.id, e.level]), [[25, 3], [26, 2]], '同名词条应合并为最高星');
+  assert.deepEqual(Array.from(off.State.extText([{ id: 25, level: 1 }, { id: 25, level: 3 }])), ['忍者镖伤害+40%'],
+    '详情页同一词条只显示最高星');
+  off.State.state().level = 90;
+  assert.equal(off.State.wear(gear.key), true, '橙装应能穿上');
+  assert.equal(off.State.equipmentEffects()[25], 40, '合并后效果仍取最高星（战斗侧本来就按 id 取最大）');
+
+  /* ② 在线融合：两件材料都有 25 号（3 星/2 星）时，前两条不能都取 25 号。 */
+  const on = game(true);
+  const s = on.State.state();
+  s.level = 90; s.goldPoint = 10000;
+  const ids = [];
+  for (let id = 1; id <= 500 && ids.length < 3; id++) {
+    const gi = on.State.gearInst(id, [], 0);
+    if (gi && gi.quality === 4 && gi.type === 3) ids.push(id);
+  }
+  assert.equal(ids.length, 3, '应能找到三件同部位橙装');
+  const exts = [[{ id: 25, level: 3 }], [{ id: 25, level: 2 }], [{ id: 26, level: 1 }]];
+  const keys = ids.map((id, i) => {
+    const made = on.State.addGear(id, exts[i]);
+    assert.ok(made, '材料 ' + id + ' 应能加入');
+    return made.key;
+  });
+  const res = on.State.mergeGears(keys, {});
+  assert.equal(res.ok, true, '融合应成功');
+  const ext = res.gear.ext;
+  assert.equal(new Set(ext.map((e) => e.id)).size, ext.length, '融合产物不应有同名词条');
+  const e25 = ext.find((e) => e.id === 25);
+  assert.deepEqual([e25 && e25.id, e25 && e25.level], [25, 3], '同名词条取最高星');
 });

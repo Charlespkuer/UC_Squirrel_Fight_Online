@@ -11,7 +11,11 @@ process.env.BIND = '127.0.0.1';
 process.env.LOG_LEVEL = 'warn';
 process.env.ALLOW_BROWSER_DEVICES = 'true'; // Explicitly opt this isolated QA server into weak installation IDs.
 process.env.ACCOUNTS_PER_IP = '0'; // 本地测试所有账号同 IP；IP 额度只测设备维度，避免测试互相挤占。
+process.env.ACCOUNT_DAILY_LIMIT = '0'; // 本套件会建很多号；每日注册/注销闸门在单独用例里临时打开。
 process.env.OWNER_IPS = '127.0.0.1,::1'; // 本机请求应被识别为服务器主人（设置页一键同步按钮）。
+process.env.OWNER_IP_ONLY = 'true'; // 本套件用普通 QA 设备验主人 IP；创作设备门槛在 test-online-creator 里验。
+process.env.FIGHT_INTERVAL_MS = '0'; // 套件连续打很多场；连点器闸门在单独用例里临时打开。
+process.env.ACTION_INTERVAL_MS = '0'; // 套件连续领奖/升级；动作连点闸门在单独用例里临时打开。
 
 const { start } = require('../server/index.js');
 const db = require('../server/db');
@@ -67,12 +71,49 @@ async function main() {
   ok('health ok', health.ok === true && health.db === 'ok');
   const meta = await call('GET', '/api/meta');
   ok('meta has actions', meta.ok && meta.actions && meta.actions.doUpgrade && meta.actions.doUpgrade.mode === 'async');
+  ok('meta sellGear compat sync', meta.ok && meta.actions && meta.actions.sellGear && meta.actions.sellGear.mode === 'sync' && Array.isArray(meta.actions.sellGear.args) && meta.actions.sellGear.args[1] === 'bool');
   ok('meta has limits', meta.limits && meta.limits.rankDaily === 0 && meta.limits.rankFree === 10
     && meta.limits.rankPaidCost === 5 && meta.limits.rankLateCost === 10
-    && meta.limits.rankBotWeightDivisor === 3);
+    && meta.limits.rankCapFrom === 30 && meta.limits.rankCapCost === 20
+    && meta.limits.opponentRatingSpread === 200 && meta.limits.opponentRatingWeightFloor === 0.2
+    && meta.limits.lotteryPrice === 25);
   const update = await call('GET', '/api/update');
   ok('update manifest', update.ok === true && /^\d+\.\d+/.test(String(update.version || ''))
-    && Number(update.pollSeconds) >= 20 && /^https?:\/\//.test(String(update.url || '')));
+    && Number(update.pollSeconds) >= 20 && /^https?:\/\//.test(String(update.url || ''))
+    /* 客户端「立即更新」直接用这个地址拉整包；没有对应安装包时是空串。 */
+    && typeof update.exe === 'string' && (!update.exe || /^\/download\/[^/]+\.exe$/.test(update.exe))
+    && typeof update.apk === 'string' && (!update.apk || /^\/download\/[^/]+\.apk$/.test(update.apk))
+    && typeof update.apkX86 === 'string' && (!update.apkX86 || /^\/download\/[^/]+\.apk$/.test(update.apkX86))
+    && typeof update.ipa === 'string' && (!update.ipa || /^\/download\/[^/]+\.ipa$/.test(update.ipa))
+    && typeof update.ipaLegacy === 'string' && (!update.ipaLegacy || /^\/download\/[^/]+\.ipa$/.test(update.ipaLegacy))
+    && typeof update.ipaSize === 'number' && typeof update.ipaLegacySize === 'number'
+    && typeof update.ipaVersion === 'string' && typeof update.ipaLegacyVersion === 'string'
+    && Array.isArray(update.downloads));
+
+  /* 纯网页端「下载客户端」：系统 / 架构 → 服务器上的对应安装包；没有包时说明原因。 */
+  const downloadsDir = path.join(DATA, 'downloads');
+  const pkgPrefix = 'squirrel_fight_online-' + update.version;
+  const ipaPrefix = 'squirrel_fight_online_' + update.version;
+  fs.mkdirSync(downloadsDir, { recursive: true });
+  for (const name of [
+    pkgPrefix + '.exe', pkgPrefix + '-arm64.apk', pkgPrefix + '-x86_64.apk',
+    ipaPrefix + '_ios_unsigned.ipa', ipaPrefix + '_ios_legacy_unsigned.ipa',
+  ]) fs.writeFileSync(path.join(downloadsDir, name), 'test');
+  const winPkg = await call('GET', '/api/client/download?os=windows&arch=x64');
+  const x86Pkg = await call('GET', '/api/client/download?os=android&arch=x86_64');
+  const armPkg = await call('GET', '/api/client/download?os=android');
+  const arm32Pkg = await call('GET', '/api/client/download?os=android&arch=arm');
+  const iosPkg = await call('GET', '/api/client/download?os=ios&ios=18');
+  const ios26Pkg = await call('GET', '/api/client/download?os=ios&ios=26');
+  const macPkg = await call('GET', '/api/client/download?os=macos&arch=arm64');
+  ok('网页端下载客户端按系统/架构选包', winPkg.ok && winPkg.package && /\.exe$/.test(winPkg.package.url)
+    && x86Pkg.package && /x86_64\.apk$/.test(x86Pkg.package.url)
+    && armPkg.package && /-arm64\.apk$/.test(armPkg.package.url) && /arm64/.test(armPkg.package.note || '')
+    && iosPkg.package && /_ios_legacy_unsigned\.ipa$/.test(iosPkg.package.url)
+    && ios26Pkg.package && /_ios_unsigned\.ipa$/.test(ios26Pkg.package.url)
+    && !arm32Pkg.package && arm32Pkg.reason === 'unsupported-arch'
+    && !macPkg.package && macPkg.reason === 'unsupported-platform' && macPkg.downloadPage === '/download');
+  fs.rmSync(downloadsDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 
   /* 2. 注册两个号 */
   const A = await call('POST', '/api/register', { name: '甲鼠', password: 'pass-a1' });
@@ -121,6 +162,22 @@ async function main() {
   serverConfig.ownerIps = savedOwnerIps;
   ok('owner status hides from non-owner', nobody.ok === true && nobody.owner === false
     && !Object.prototype.hasOwnProperty.call(nobody, 'version'));
+  /* 开发者同步：版本号没变、只改了代码时也要能识别（用户 2026-11 口径：
+   * "检测到代码有变化就可以进行同步"，不必等版本号 +1）。
+   * 客户端带自己的构建号来：同一个 build → 0 个文件；换一个 build → 不能算最新，
+   * 并把服务器当前清单回给客户端，让它用包里的清单自己算逐文件差异。 */
+  const previewAny = await call('GET', '/api/owner/sync/preview?from=' + ownerVersion, undefined, A.token);
+  ok('owner preview reports current build', previewAny.ok === true && previewAny.owner === true
+    && typeof previewAny.build === 'string' && previewAny.build.length > 0);
+  const previewSame = await call('GET', '/api/owner/sync/preview?from=' + ownerVersion +
+    '&build=' + encodeURIComponent(previewAny.build), undefined, A.token);
+  ok('owner preview same build is up to date', previewSame.ok === true && previewSame.stale === false
+    && previewSame.diff && previewSame.diff.count === 0 && Array.isArray(previewSame.manifest));
+  const previewStale = await call('GET', '/api/owner/sync/preview?from=' + ownerVersion +
+    '&build=deadbeef', undefined, A.token);
+  ok('owner preview changed build is stale', previewStale.ok === true && previewStale.stale === true
+    && previewStale.clientBuild === 'deadbeef' && Array.isArray(previewStale.manifest)
+    && previewStale.manifest.length > 1);
   let bad = null;
   try { await call('POST', '/api/login', { name: '甲鼠', password: 'nope' }); } catch (e) { bad = e; }
   ok('bad password rejected', bad && bad.status === 401);
@@ -223,6 +280,9 @@ async function main() {
     && same(firstPickup.prize, fight1.pickups[0]) && !firstPickup.duplicate && retryPickup.duplicate
     && same(afterPickup.save, afterPickupRetry.save));
   const afterFight = await call('GET', '/api/state', undefined, token);
+  ok('今日胜率与战斗场次写服务端存档',
+    Number(afterFight.save.dailyWins) + Number(afterFight.save.dailyFails) === 1
+    && Number(afterFight.save.allWins) + Number(afterFight.save.allFails) === 1);
   await call('POST', '/api/action', { name: 'buyProp', args: [1, 1], rev: afterFight.rev }, token);
   const beforeRetry = await call('GET', '/api/state', undefined, token);
   const retried = await call('POST', '/api/battle', { kind: 'random', snapshotId: bot.snapshotId, rev: st1.rev, idemKey: 'selected-bot' }, token);
@@ -279,8 +339,18 @@ async function main() {
   const playerPreview = await call('GET', '/api/fighter?snapshotId=' + player.snapshotId, undefined, token);
 
   /* 9. 天梯对手：两个同级号应该能互相看到（随后统一抬到 30 级开天梯） */
+  /* 给 A 一个接近人机基准分的积分，保证 300 分以下也会补人机候选。 */
+  db.run('UPDATE ratings SET score = 250 WHERE account_id = ? AND season = ?',
+    A.profile.account.accountId, require('../server/game/settlement').weekKey());
+  /* 「战斗准备中」要显示真人名次：B 先有本周 rating，才会出现在赛区名次表里。 */
+  require('../server/game/settlement').ensureRating(B.profile.account.accountId,
+    require('../server/game/settlement').weekKey());
   const opp = await call('GET', '/api/opponents', undefined, token);
-  ok('opponents list', opp.ok && Array.isArray(opp.opponents));
+  ok('opponents list 带赛区名次（真人对手有 rank，自己 myRank 在顶层）',
+    opp.ok && Array.isArray(opp.opponents)
+    && Number.isInteger(opp.myRank) && opp.myRank >= 1
+    && opp.opponents.some((o) => o.player && Number(o.rank) >= 1)
+    && opp.opponents.filter((o) => o.bot).every((o) => !o.rank));
   ok('opponents exclude self', !opp.opponents.some((o) => o.accountId === A.profile.account.accountId));
 
   /* 10. 天梯战斗（需要对手快照；30 级才开启） */
@@ -486,7 +556,7 @@ async function main() {
     /* 第 11 次可能又抽中（会写一条新冷却），也可能没抽中；两种都证明旧冷却已清掉。 */
     && (!eligibleAgain || Number(eligibleAgain.through_refresh) === pickSeq + 21));
 
-  /* 10b. 赛区制：B 抬到 35 级仍在 30-39 赛区；A 到 300 分以后只认真人。
+  /* 10b. 赛区制：B 抬到 35 级仍在 30-39 赛区；A 到 300 分以后人机按 0 分参与匹配。
    * 同一个真人至少隔 5 场；同赛区没有真人时回落一个人机（本场不动积分）。 */
   const weekNow = require('../server/game/settlement').weekKey();
   const aId = A.profile.account.accountId, bId = B.profile.account.accountId;
@@ -498,15 +568,22 @@ async function main() {
   db.tx(() => store.runOnSave(demonId, ({ save }) => { save.level = 30; }, { snapshotSource: 'test-demon' }));
   db.run('INSERT INTO simulated_accounts (account_id, note) VALUES (?, ?)', demonId, 'test');
   db.run('INSERT INTO ratings (account_id, season, score, wins, losses, streak, updated_at) VALUES (?,?,1500,20,2,5,?)', demonId, weekNow, Date.now());
-  /* 清掉 A 之前的真人战报，只留赛区真人 B；A 到 300 分（真人段）。 */
+  /* 清掉 A 之前的真人战报，只留赛区真人 B；A 到 300 分。 */
   db.run("DELETE FROM combats WHERE attacker_id = ? AND kind = 'rank'", aId);
   db.run('UPDATE ratings SET score = 300 WHERE account_id = ? AND season = ?', aId, weekNow);
   const highRank = await call('GET', '/api/opponents', undefined, token);
-  ok('300 分以上：真人先补满候选位，人机候选位权重降到 1/3，模拟账号不进池',
-    highRank.match.weighted === true && highRank.match.botWeight === 1 / 3 && highRank.match.realCount >= 1
-    && highRank.match.botCount === 1 && highRank.opponents.length === 2
+  ok('300 分以上：真人按积分差权重抽取，人机按 0 分计权重（1/5），模拟账号不进池',
+    highRank.match.weighted === true && highRank.match.botWeight === 0.2 && highRank.match.realCount >= 1
+    && highRank.match.botCount === 0 && highRank.opponents.length === 1
     && highRank.opponents[0].accountId === bId
     && !highRank.opponents.some((x) => x.accountId === demonId));
+  const oppMod = require('../server/game/opponents');
+  const weightAt = (my, foe) => oppMod.ratingWeight(my, foe);
+  ok('天梯抽取权重：同分 1、100 分差 0.6、200 分及更远保底 1/5',
+    weightAt(1000, 1000) === 1 && Math.abs(weightAt(1000, 1100) - 0.6) < 1e-9
+    && Math.abs(weightAt(1000, 1200) - 0.2) < 1e-9
+    && Math.abs(weightAt(1000, 1500) - 0.2) < 1e-9
+    && Math.abs(weightAt(500, 0) - 0.2) < 1e-9);
   const ladderNoBots = await call('GET', '/api/ladder?limit=200', undefined, token);
   /* 上周的积分行不参与本周榜（每周一 0 点从 0 开始）。 */
   db.run('INSERT OR REPLACE INTO ratings (account_id, season, score, wins, losses, streak, updated_at) VALUES (?,?,9999,50,0,0,?)',
@@ -520,10 +597,10 @@ async function main() {
     && ladderNoBots.top.filter((x) => x.bot).every((x) => x.level >= 30 && x.level <= 39)
     && !ladderNoBots.top.some((x) => x.accountId === demonId)
     && staleWeek.me.score !== 9999 && staleWeek.week === weekNow);
-  /* B 离开 30-39 赛区 → A 没有真人可打：人机按缩小后的权重补满候选位（不再有「回落不结算」）。 */
+  /* B 离开 30-39 赛区 → A 没有真人可打：300 分以上按 0 分权重给 1 个兜底人机。 */
   db.tx(() => store.runOnSave(bId, ({ save }) => { save.level = 55; }, { snapshotSource: 'test-rank' }));
   const noRealRank = await call('GET', '/api/opponents', undefined, token);
-  ok('300 分以上没有真人时仍匹配到赛区人机（权重 1/3）',
+  ok('300 分以上没有真人时仍匹配到赛区人机（按 0 分权重 1/5）',
     noRealRank.match.weighted === true && noRealRank.match.realCount === 0 && noRealRank.match.botCount === 1
     && noRealRank.opponents.length === 1 && noRealRank.opponents[0].bot === true);
   const stFb = await call('GET', '/api/state', undefined, token);
@@ -591,6 +668,20 @@ async function main() {
   const friendsOther = await call('GET', '/api/friends', undefined, B.token);
   ok('双方好友列表都出现对方、待验证数归零', friendsAfter.friends.length === 1 && friendsOther.friends.length === 1
     && friendsAfter.requestCount === 0 && friendsOther.requestCount === 0);
+  /* 超级松鼠等级是账号实时状态，不能跟着战斗快照冻结。 */
+  const vipBefore = JSON.parse(JSON.stringify(stB.save.vip || {}));
+  db.tx(() => store.runOnSave(target.accountId, ({ save }) => {
+    save.vip = Object.assign({}, vipBefore, { level: 6, until: Date.now() + 86400000, capAdded: 60, capApplied: true });
+  }));
+  const vipList = await call('GET', '/api/friends', undefined, token);
+  const vipRow = vipList.friends.find((f) => f.accountId === target.accountId);
+  db.tx(() => store.runOnSave(target.accountId, ({ save }) => { save.vip.until = Date.now() - 1000; }));
+  const expiredList = await call('GET', '/api/friends', undefined, token);
+  const expiredRow = expiredList.friends.find((f) => f.accountId === target.accountId);
+  db.tx(() => store.runOnSave(target.accountId, ({ save }) => { save.vip = vipBefore; }));
+  ok('好友列表按账号实时下发超级松鼠等级，到期立即隐藏（不读战斗快照）',
+    !!vipRow && vipRow.vipLevel === 6 && !!expiredRow && expiredRow.vipLevel === 0,
+    { active: vipRow && vipRow.vipLevel, expired: expiredRow && expiredRow.vipLevel });
   const bots = [];
   for (let i = 0; i < 10; i++) bots.push(await call('POST', '/api/friends/ai', { requestKey: 'friend-ai-test-' + String(i).padStart(4, '0') }, token));
   const retryBot = await call('POST', '/api/friends/ai', { requestKey: 'friend-ai-test-0000' }, token);
@@ -624,6 +715,25 @@ async function main() {
   await call('POST', '/api/board', { toId: A.profile.account.accountId, text: '收到' }, B.token);
   const reply = await call('GET', '/api/board', undefined, token);
   ok('留言回复投递给原发送者', reply.messages.some(m => m.text === '收到' && m.from.accountId === target.accountId));
+
+  const boardBadgeBefore = await call('GET', '/api/messages/badge', undefined, B.token);
+  await call('POST', '/api/board', { toId: target.accountId, text: '留言红点测试' }, token);
+  const boardBadgeAfter = await call('GET', '/api/messages/badge', undefined, B.token);
+  const boardInbox = await call('GET', '/api/messages', undefined, B.token);
+  const boardNotice = boardInbox.messages.find((m) => m.kind === 'friend_message' && String(m.text).indexOf('留言红点测试') >= 0);
+  const boardSeen = await call('POST', '/api/messages/seen', {}, B.token);
+  const boardBadgeSeen = await call('GET', '/api/messages/badge', undefined, B.token);
+  await call('POST', '/api/messages/read', { ids: boardNotice ? [boardNotice.id] : [] }, B.token);
+  const boardBadgeRead = await call('GET', '/api/messages/badge', undefined, B.token);
+  ok('留言板新消息点亮主界面 NEW，打开消息页不灭，读完留言才灭',
+    !!boardNotice
+    && boardBadgeAfter.leave === boardBadgeBefore.leave + 1
+    && boardBadgeAfter.unread === boardBadgeBefore.unread + 1
+    && boardBadgeAfter.total === boardBadgeBefore.total + 1
+    && boardSeen.leave === boardBadgeAfter.leave
+    && boardBadgeSeen.leave === boardBadgeAfter.leave
+    && boardBadgeRead.leave === boardBadgeAfter.leave - 1,
+    { before: boardBadgeBefore, after: boardBadgeAfter, seen: boardSeen, badgeSeen: boardBadgeSeen, read: boardBadgeRead });
 
   // 两个真实账号：发帖/回复的重试、跨账号删除保护及列表与详情。
   const postData = { title: '测试 <帖子>', body: '论坛正文', requestKey: 'forum-qa-post-000001' };
@@ -680,7 +790,7 @@ async function main() {
   const C = await call('POST', '/api/register', { name: '丙鼠测', password: 'pass-c1' }, undefined, qaDevice('qa-c'));
   const cid = C.profile.account.accountId;
   db.tx(() => store.runOnSave(cid, ({ save }) => {
-    save.level = 20; save.energy = 0; save.lastEnergyTs = Date.now(); save.props = { 39: 1, 23: 2 };
+    save.level = 20; save.energy = 0; save.lastEnergyTs = Date.now(); save.props = { 39: 1, 23: 2, 1: 2, 2: 1 };
   }, { snapshotSource: 'test-arena' }));
   const noTicketBefore = await call('GET', '/api/state', undefined, C.token);
   let wrongTicket = null;
@@ -690,9 +800,17 @@ async function main() {
   const withTicket = await call('GET', '/api/state', undefined, C.token);
   const joined = await call('POST', '/api/arena/join', { kind: 0, rev: withTicket.rev }, C.token);
   const afterJoin = await call('GET', '/api/state', undefined, C.token);
-  ok('竞技场只消耗对应门票，失败报名不扣其他场门票', wrongTicket && wrongTicket.status === 409
-    && same(noTicketBefore.save, noTicketAfter.save) && joined.paid.itemId === 36
-    && !afterJoin.save.props[36] && afterJoin.save.props[39] === 1);
+  ok('竞技场只消耗对应门票，失败报名不扣其他场门票；不自动喝药', wrongTicket && wrongTicket.status === 409
+    && same(noTicketBefore.save, noTicketAfter.save)
+    && noTicketAfter.save.props[1] === 2 && noTicketAfter.save.props[2] === 1
+    && joined.paid.itemId === 36
+    && !afterJoin.save.props[36] && afterJoin.save.props[39] === 1
+    && afterJoin.save.props[1] === 2 && afterJoin.save.props[2] === 1);
+
+  /* 竞技场药丸口径（用户 2026-11）：属性丸不进面板、也不扣次数；经验丸只在经验场发经验时扣 1 次。 */
+  db.tx(() => store.runOnSave(cid, ({ save }) => {
+    save.propsStates = { 3: 20, 7: 20 };
+  }, { snapshotSource: 'test-arena-pills' }));
 
   const cases = [
     { kind: 'arena' },
@@ -725,6 +843,39 @@ async function main() {
   let missingRev = null;
   try { await call('POST', '/api/battle', { kind: 'stage', stageId: 1 }, C.token); } catch (e) { missingRev = e; }
   ok('关卡、竞技和切磋断线重试保留原战斗与结算，缺版本被拒', replaySafe && missingRev && missingRev.status === 400);
+
+  /* 上面 cases 里那一场是竞技半决赛（不发经验）：属性丸/经验丸都不该动；
+   * 接着打决赛（经验场，一定发经验）：只扣经验丸 1 次，属性丸仍然不动。 */
+  const pillSemiState = await call('GET', '/api/state', undefined, C.token);
+  const pillSemi = pillSemiState.save.propsStates || {};
+  const cupBefore = Number(pillSemiState.save.goldCup) || 0;
+  const cupTodayBefore = Number(pillSemiState.save.goldCupToday) || 0;
+  const powerBefore = pillSemiState.save.power;
+  db.tx(() => store.runOnSave(cid, ({ save }) => {
+    if (!save.classicArenaRun) throw new Error('missing arena run');
+    save.classicArenaRun.phase = 'final';
+    save.classicArenaRun.finalist = Object.assign({}, save.classicArenaRun.finalist, {
+      power: 1, agility: 1, speed: 1, hp: 1, maxHp: 1, weapons: [], skills: [], pets: [],
+    });
+    save.power = 100000;
+  }, { snapshotSource: 'test-arena-champion' }));
+  const championState = await call('GET', '/api/state', undefined, C.token);
+  const pillFinal = await call('POST', '/api/battle', { kind: 'arena', rev: championState.rev, idemKey: 'arena-pill-final' }, C.token);
+  const pillAfterState = await call('GET', '/api/state', undefined, C.token);
+  const pillAfter = pillAfterState.save.propsStates || {};
+  db.tx(() => store.runOnSave(cid, ({ save }) => { save.power = powerBefore; }, { snapshotSource: 'test-arena-restore' }));
+  ok('竞技场不扣属性丸次数，经验丸只在经验场发经验时扣 1 次',
+    pillSemi[3] === 20 && pillSemi[7] === 20
+    && pillAfter[3] === 20
+    && pillAfter[7] === (Number(pillFinal.settlement && pillFinal.settlement.exp) > 0 ? 19 : 20));
+  ok('任一竞技场冠军固定 +1 金杯',
+    pillFinal.ok && pillFinal.settlement && pillFinal.settlement.position === 0
+    && pillFinal.settlement.goldCup === 1 && pillFinal.arena && pillFinal.arena.rewards && pillFinal.arena.rewards.goldCup === 1
+    && (Number(pillAfterState.save.goldCup) || 0) === cupBefore + 1
+    && (pillAfterState.save.goldCupDate !== pillSemiState.save.goldCupDate
+      || (Number(pillAfterState.save.goldCupToday) || 0) === cupTodayBefore + 1),
+    { position: pillFinal.settlement && pillFinal.settlement.position, cup: pillFinal.settlement && pillFinal.settlement.goldCup,
+      before: cupBefore, after: pillAfterState.save.goldCup });
 
   db.tx(() => store.runOnSave(cid, ({ save }) => { save.level = 40; save.props[87] = 1; }, { snapshotSource: 'campaign-test' }));
   const campaigns = require('../server/game/campaign');
@@ -790,7 +941,7 @@ async function main() {
     authority = await rejects({ name: 'buyProp', args: [1, 1], rev: invalid }, 400) && authority;
   }
   db.tx(() => store.runOnSave(B.profile.account.accountId, ({ save }) => {
-    save.level = 60; save.weapons = ['1:1', '2:1', '3:1', '4:1']; save.skills = []; save.props = { 47: 2, 48: 2 };
+    save.level = 60; save.weapons = ['1:1', '2:1', '3:1', '4:1']; save.skills = []; save.props = { 47: 3, 48: 2 };
   }));
   for (const fruit of [47, 48]) {
     const before = await call('GET', '/api/state', undefined, B.token);
@@ -804,9 +955,10 @@ async function main() {
     const choices = opened.result.options;
     const forged = candidates.find(c => !choices.some(x => x.kind === c.kind && Number(x.id) === c.id)
       && !(before.save[c.kind === 'weapon' ? 'weapons' : 'skills'] || []).some(ref => parseInt(ref) === c.id));
-    // 恶魔果实的伪造项应为已掌握、但本轮三选一未给出的武器。
+    // 恶魔果实的伪造项应为已掌握、但本轮随机结果未给出的武器。
     const outside = fruit === 48 ? candidates.find(c => !choices.some(x => x.kind === c.kind && Number(x.id) === c.id)) : forged;
-    authority = !!outside && await rejects({ name: 'applyFruitChoice', args: [fruit, outside.kind, outside.id], rev: repeated.rev }, 400) && authority;
+    authority = choices.length === 1 && !!outside
+      && await rejects({ name: 'applyFruitChoice', args: [fruit, outside.kind, outside.id], rev: repeated.rev }, 400) && authority;
     const picked = choices[0];
     const applied = await call('POST', '/api/action', { name: 'applyFruitChoice', args: [fruit, picked.kind, Number(picked.id)], rev: repeated.rev }, B.token);
     const after = await call('GET', '/api/state', undefined, B.token);
@@ -815,7 +967,25 @@ async function main() {
       && after.save.props[fruit] === before.save.props[fruit] - 1
       && await rejects({ name: 'applyFruitChoice', args: [fruit, picked.kind, Number(picked.id)], rev: applied.rev }, 400);
   }
-  ok('动作必须携带有效版本；果实重复打开不重抽、仅能选本轮候选且领取一次', authority);
+  ok('动作必须携带有效版本；果实一次只给 1 个随机武技、重复打开不重抽、仅能结算本轮候选且领取一次', authority);
+
+  /* 取消：果实照常消耗、不改变武技，但记进 fruitSeen —— 下一次先给没出现过的。 */
+  const cancelBefore = await call('GET', '/api/state', undefined, B.token);
+  const cancelOpen = await call('POST', '/api/action', { name: 'useProp', args: [47], rev: cancelBefore.rev }, B.token);
+  const cancelPick = cancelOpen.result.options[0];
+  const cancelled = await call('POST', '/api/action', { name: 'cancelFruitChoice', args: [47], rev: cancelOpen.rev }, B.token);
+  const afterCancel = await call('GET', '/api/state', undefined, B.token);
+  const seenCode = (cancelPick.kind === 'weapon' ? 'w' : 's') + Number(cancelPick.id);
+  const noReplay = await rejects({ name: 'applyFruitChoice', args: [47, cancelPick.kind, Number(cancelPick.id)], rev: afterCancel.rev }, 400);
+  const nextOpen = await call('POST', '/api/action', { name: 'useProp', args: [47], rev: afterCancel.rev }, B.token);
+  const nextPick = nextOpen.result.options[0];
+  const rotated = !(nextPick.kind === cancelPick.kind && Number(nextPick.id) === Number(cancelPick.id));
+  const nextApplied = await call('POST', '/api/action', { name: 'applyFruitChoice', args: [47, nextPick.kind, Number(nextPick.id)], rev: nextOpen.rev }, B.token);
+  ok('果实取消也消耗；取消过的武技记入 fruitSeen，下一次换一个，旧候选不能再结算',
+    cancelled.result.ok && nextApplied.result.ok && rotated && noReplay
+      && Array.isArray(afterCancel.save.fruitSeen && afterCancel.save.fruitSeen[47])
+      && afterCancel.save.fruitSeen[47].indexOf(seenCode) >= 0
+      && afterCancel.save.props[47] === cancelBefore.save.props[47] - 1);
 
   /* 战后宝箱：断线恢复与重复请求都不能把同一份奖励发两次。 */
   const pendingBefore = await call('GET', '/api/battle/chest', undefined, token);
@@ -851,7 +1021,7 @@ async function main() {
     && pendingAfter.pendingCount === pendingBefore.pendingCount - 1
     && !pendingAfter.chests.some(c => c.combatId === fight1.combatId));
 
-  /* 金宝箱重开：服务端动作必须保留 chestPending，且联机版 10 次上限真的可达。 */
+  /* 金宝箱：begin/confirm 走服务端，固定 10 点 + 其它；重开接口已移除。 */
   db.tx(() => store.runOnSave(A.profile.account.accountId, ({ save }) => {
     save.props = Object.assign({}, save.props, { 90: 1 });
     save.chestPending = null;
@@ -859,21 +1029,16 @@ async function main() {
   }));
   let chestState = await call('GET', '/api/state', undefined, token);
   const beginChestOut = await call('POST', '/api/action', { name: 'beginChest', args: [90], rev: chestState.rev }, token);
-  let reopenOk = !!beginChestOut.result && beginChestOut.result.ok === true;
-  let reopenNoGold = true;
-  let rev = beginChestOut.rev;
-  for (let i = 0; i < 10; i++) {
-    const out = await call('POST', '/api/action', { name: 'reopenChest', args: [], rev }, token);
-    rev = out.rev;
-    reopenOk = reopenOk && !!out.result && out.result.ok === true;
-    if (out.result && out.result.pending) reopenNoGold = reopenNoGold && out.result.pending.reward.kind !== 'gold';
-  }
-  const over = await call('POST', '/api/action', { name: 'reopenChest', args: [], rev }, token);
-  const confirm = await call('POST', '/api/action', { name: 'confirmChest', args: [], rev: over.rev }, token);
+  const beginPending = beginChestOut.result && beginChestOut.result.pending;
+  const pointGainKey = beginPending && beginPending.pointsGain ? JSON.stringify(beginPending.pointsGain) : '';
+  const confirm = await call('POST', '/api/action', { name: 'confirmChest', args: [], rev: beginChestOut.rev }, token);
   chestState = await call('GET', '/api/state', undefined, token);
-  ok('金宝箱重开走服务端动作：保留 pending、10 次上限可达且重开不出金松果',
-    reopenOk && reopenNoGold && over.result && over.result.ok === false && /10次上限/.test(over.result.msg || '')
-    && confirm.result && confirm.result.ok === true && !chestState.save.chestPending);
+  ok('金宝箱走服务端动作：固定 10 点属性 + 其它奖励，重开接口已移除',
+    !!beginChestOut.result && beginChestOut.result.ok === true
+    && !!beginPending && beginPending.points === 10 && beginPending.reward.kind !== 'points'
+    && pointGainKey
+    && confirm.result && confirm.result.ok === true && confirm.result.points === 10
+    && JSON.stringify(confirm.result.pointsGain) === pointGainKey && !chestState.save.chestPending);
 
   /* 设备协议（2026-11 新口径）：
    *  · 同一设备最多**创建** 3 个账号，第 4 个拒绝（DEVICE_ACCOUNT_LIMIT）；
@@ -910,6 +1075,12 @@ async function main() {
   db.run('INSERT INTO sessions(token_hash,account_id,created_at,last_seen,expires_at) VALUES (?,?,?,?,?)',
     authApi.sha256(legacyF), F.profile.account.accountId, Date.now(), Date.now(), Date.now() + 60000);
   const migratedF = await call('GET', '/api/state', undefined, legacyF, native2);
+  /* ANDROID_ID 不可用时客户端退回本安装随机标识（platform=android / provider=installation）：
+   * 即使服务端关了浏览器设备，也必须放行原生安卓兜底。 */
+  const androidFallback = { ...native, 'x-device-id': 'android-fallback'.padEnd(64, '_'),
+    'x-device-platform': 'android', 'x-device-provider': 'installation' };
+  const fallbackReg = await call('POST', '/api/register', { name: '安卓兜底', password: 'pass-j1' },
+    undefined, { ...androidFallback, 'x-forwarded-for': '203.0.113.16' });
   cfg.allowBrowserDevices = true; cfg.trustProxy = true;
   await call('GET', '/api/profile', undefined, FLogin2.token, { ...native, 'x-forwarded-for': '198.51.100.99,203.0.113.7' });
   const sharedB = await call('GET', '/api/state', undefined, B.token);
@@ -929,6 +1100,9 @@ async function main() {
     && adminReport.events.some(row => row.event === 'ip_change' && row.ip === '203.0.113.7')
     && !JSON.stringify(adminReport).includes(native['x-device-id']) && !JSON.stringify(adminReport).includes(F.token)
     && directIp === '198.51.100.4');
+  ok('安卓 ANDROID_ID 不可用时的安装标识兜底仍可注册',
+    !!fallbackReg.token && fallbackReg.profile && fallbackReg.profile.account
+    && fallbackReg.profile.account.name === '安卓兜底');
 
   /* IP 额度：同一来源 IP 最多创建 3 个账号；用不同设备也不能绕过。 */
   const oldIpLimit = cfg.accountsPerIp;
@@ -990,24 +1164,51 @@ async function main() {
   db.run('UPDATE rank_bots SET score = 300 WHERE id = ?', floorId);
   ok('人机积分有 50 硬下限', floored === 50);
 
-  /* 每日次数不限（用户 2026-11 口径）：前 10 场免费、11-20 每场 5 金、第 21 场起每场 10 金。 */
+  /* 每日次数不限（用户 2026-11 口径）：前 10 场免费、11-20 每场 5 金、21-30 每场 10 金、第 31 场起 20 金封顶。 */
   const day = settleGame.rankDailyStatus(aId).date;
   const beforeTier = settleGame.rankDailyStatus(aId).played;
-  db.run('INSERT INTO daily_counts (account_id,kind,date,count) VALUES (?,?,?,20) ON CONFLICT(account_id,kind,date) DO UPDATE SET count=20', aId, 'rank', day);
+  db.run('INSERT INTO daily_counts (account_id,kind,date,count) VALUES (?,?,?,10) ON CONFLICT(account_id,kind,date) DO UPDATE SET count=10', aId, 'rank', day);
+  const paidTier = settleGame.rankDailyStatus(aId);
+  db.run('UPDATE daily_counts SET count = 20 WHERE account_id = ? AND kind = ? AND date = ?', aId, 'rank', day);
   const lateTier = settleGame.rankDailyStatus(aId);
+  db.run('UPDATE daily_counts SET count = 30 WHERE account_id = ? AND kind = ? AND date = ?', aId, 'rank', day);
+  const capTier = settleGame.rankDailyStatus(aId);
   db.run('UPDATE daily_counts SET count = 999 WHERE account_id = ? AND kind = ? AND date = ?', aId, 'rank', day);
   const overTier = settleGame.rankDailyStatus(aId);
   db.run('UPDATE daily_counts SET count = ? WHERE account_id = ? AND kind = ? AND date = ?', beforeTier, aId, 'rank', day);
-  ok('天梯每日次数不限：第21场起每场 10 金松果，打到 999 场仍可继续',
-    lateTier.limit === 0 && lateTier.unlimited === true && lateTier.left === null
+  ok('天梯每日次数不限：11-20 场 5 金、21-30 场 10 金、第31场起 20 金封顶，打到 999 场仍可继续',
+    paidTier.cost === 5 && paidTier.tier === 'paid' && paidTier.tierStart === 11
     && lateTier.cost === 10 && lateTier.tier === 'late' && lateTier.tierStart === 21
-    && overTier.played === 999 && overTier.cost === 10 && overTier.left === null);
+    && capTier.cost === 20 && capTier.tier === 'cap' && capTier.tierStart === 31
+    && overTier.played === 999 && overTier.cost === 20 && overTier.left === null
+    && lateTier.limit === 0 && lateTier.unlimited === true && lateTier.left === null);
 
   /* 注销只删除自己；共享战绩匿名保留，不改其他玩家的已结算经济。 */
   const bid = B.profile.account.accountId, aid = A.profile.account.accountId;
   const secondSession = await call('POST', '/api/login', { name: '乙鼠', password: 'pass-b1' });
   B.token = secondSession.token; // 单会话：旧令牌已被第二会话顶掉
   const statusOf = async (method, url, body, authToken) => { try { await call(method, url, body, authToken); return 200; } catch (e) { return e.status; } };
+  /* 连点器：同一账号两次开战的最小间隔由服务端执行；同一 idemKey 的断线重试放行。 */
+  const paceCfg = require('../server/config').config;
+  const paceBefore = await call('GET', '/api/state', undefined, token);
+  const oldFightInterval = paceCfg.fightIntervalMs;
+  paceCfg.fightIntervalMs = 2000;
+  const pacedFirst = await call('POST', '/api/battle', { kind: 'wood', rev: paceBefore.rev, idemKey: 'qa-pace-1' }, token);
+  const pacedSecond = await statusOf('POST', '/api/battle', { kind: 'wood', rev: pacedFirst.rev, idemKey: 'qa-pace-2' }, token);
+  const pacedCross = await statusOf('POST', '/api/battle', { kind: 'stage', stageId: 1, rev: pacedFirst.rev, idemKey: 'qa-pace-1' }, token);
+  const pacedRetry = await call('POST', '/api/battle', { kind: 'wood', rev: paceBefore.rev, idemKey: 'qa-pace-1' }, token);
+  paceCfg.fightIntervalMs = oldFightInterval;
+  ok('连点器限速：两次开战间隔不足被拒，同一场的断线重试仍返回原结果',
+    pacedSecond === 429 && pacedCross === 429 && pacedRetry.duplicate === true && pacedRetry.combatId === pacedFirst.combatId,
+    { second: pacedSecond, cross: pacedCross, duplicate: pacedRetry.duplicate });
+  /* 动作入口同样的服务端闸门（async 动作）：不依赖客户端「连点保护」开关。 */
+  const actBefore = await call('GET', '/api/state', undefined, token);
+  const oldActionInterval = paceCfg.actionIntervalMs;
+  paceCfg.actionIntervalMs = 2000;
+  const pacedAct1 = await call('POST', '/api/action', { name: 'doUpgrade', args: ['skill', 999], rev: actBefore.rev }, token);
+  const pacedAct2 = await statusOf('POST', '/api/action', { name: 'doUpgrade', args: ['skill', 999], rev: pacedAct1.rev }, token);
+  paceCfg.actionIntervalMs = oldActionInterval;
+  ok('连点器限速：同一账号两次 async 动作间隔不足被服务端拒绝', pacedAct2 === 429, { act2: pacedAct2 });
   const wrongPassword = await statusOf('POST', '/api/account/delete', { password: 'wrong' }, B.token);
   const stillLoggedIn = await statusOf('GET', '/api/state', undefined, B.token);
   await call('POST', '/api/board', { toId: aid, text: '测试留言' }, B.token);
@@ -1032,6 +1233,45 @@ async function main() {
     && !JSON.stringify(afterDelete.save).includes('乙鼠') && same(economy(beforeDelete.save), economy(afterDelete.save))
     && db.get('SELECT host_id FROM campaign_rooms WHERE id = ?', 'delete-room').host_id === aid
     && db.get('SELECT COUNT(*) AS n FROM friendships WHERE account_id = ? OR friend_id = ?', bid, bid).n === 0);
+
+  /* 同一 IP 每天最多注册 / 注销各 5 次（2026-11 用户口径）。注册和注销分开计数：
+   * 注册 5 次成功、第 6 次 429；换一个 IP 注销这 5 个 + 另 1 个账号，前 5 次成功、第 6 次 429。 */
+  const dailyCfg = require('../server/config').config;
+  const oldDailyLimit = dailyCfg.accountDailyLimit;
+  const oldDailyTrust = dailyCfg.trustProxy;
+  dailyCfg.accountDailyLimit = 5;
+  dailyCfg.trustProxy = true;
+  const dailyIp = (n) => ({ 'x-forwarded-for': '198.51.100.' + n });
+  const regResults = [];
+  for (let i = 0; i < 6; i += 1) {
+    try {
+      regResults.push(await call('POST', '/api/register', { name: '日限注册' + i, password: 'pass-q1' },
+        null, { ...qaDevice('daily-reg-' + i), ...dailyIp(10) }));
+    } catch (e) { regResults.push(e); }
+  }
+  let sixthAccount = null;
+  try {
+    sixthAccount = await call('POST', '/api/register', { name: '日限注销六', password: 'pass-q1' },
+      null, { ...qaDevice('daily-del-six'), ...dailyIp(12) });
+  } catch (e) { sixthAccount = e; }
+  const deleteResults = [];
+  for (const account of regResults.slice(0, 5).concat([sixthAccount])) {
+    try {
+      deleteResults.push(await call('POST', '/api/account/delete', { password: 'pass-q1' },
+        account.token, dailyIp(11)));
+    } catch (e) { deleteResults.push(e); }
+  }
+  dailyCfg.accountDailyLimit = oldDailyLimit;
+  dailyCfg.trustProxy = oldDailyTrust;
+  const blockedCode = (x) => x && x.status === 429 && x.body && x.body.error && x.body.error.code;
+  ok('同一 IP 每天最多注册 / 注销各 5 次：第 6 次 429',
+    regResults.slice(0, 5).every((x) => x && x.ok) &&
+    blockedCode(regResults[5]) === 'ACCOUNT_DAILY_LIMIT' &&
+    sixthAccount && sixthAccount.ok &&
+    deleteResults.slice(0, 5).every((x) => x && x.deleted === true) &&
+    blockedCode(deleteResults[5]) === 'ACCOUNT_DAILY_LIMIT',
+    { regs: regResults.map((x) => x && (x.ok ? 'ok' : blockedCode(x) || 'unexpected')),
+      dels: deleteResults.map((x) => x && (x.deleted ? 'ok' : blockedCode(x) || 'unexpected')) });
 
   const config = require('../server/config').config;
   const oldLimit = config.registrationLimit;
@@ -1074,7 +1314,8 @@ async function main() {
     unclaimedGift.save.goldPoint === beforeGift.save.goldPoint &&
     Number(unclaimedGift.save.goldCup || 0) === Number(beforeGift.save.goldCup || 0) &&
     Number(unclaimedGift.save.props[23] || 0) === Number(beforeProps[23] || 0) &&
-    !!giftMessage && giftMessage.payload.claimable === true && !giftMessage.payload.claimedAt &&
+    !!giftMessage && giftMessage.pinned === true && giftInbox.messages[0].id === giftMessage.id &&
+    giftMessage.payload.claimable === true && !giftMessage.payload.claimedAt &&
     /可领取：/.test(giftMessage.text) && /挑战书 ×2/.test(giftMessage.text) && /金杯 4/.test(giftMessage.text) &&
     /* 领取才入账；重复领取不叠加 */
     claim.ok && claim.claimed === true && claim.already === false &&
@@ -1084,7 +1325,7 @@ async function main() {
     Number(afterGift.save.props[23] || 0) === Number(beforeProps[23] || 0) + 2 &&
     Number(afterGift.save.props[36] || 0) === Number(beforeProps[36] || 0) + 1 &&
     claimAgain.ok && claimAgain.already === true && claimAgain.claimed === true &&
-    afterMessage && afterMessage.payload.claimedAt > 0,
+    afterMessage && afterMessage.pinned === false && afterMessage.payload.claimedAt > 0,
     { sentGift, duplicateGift, changedGiftRejected, goldBefore: beforeGift.save.goldPoint, goldAfter: afterGift.save.goldPoint,
       cupBefore: beforeGift.save.goldCup, cupAfter: afterGift.save.goldCup,
       propsBefore: beforeProps, propsAfter: afterGift.save.props, claim, claimAgain, message: giftMessage });
@@ -1133,6 +1374,27 @@ async function main() {
     { template: mailTpl, level1: rookieLv1.messages, disabled: rookieDisabled.messages, mail: rookieMail,
       claim: rookieClaim, again: rookieClaimAgain, propsBefore: beforeMailProps, propsAfter: afterMailProps });
 
+  /* 2026-11-17 开服庆祝邮件：模板默认启用，2 级自动投递；奖励 500 金松果 + 10 种道具。 */
+  const celebrationMail = rookieInbox.messages.find((m) => m.kind === 'opening_gift');
+  const celebrationClaim = await call('POST', '/api/messages/claim', { id: celebrationMail && celebrationMail.id }, rookie.token);
+  const celebrationAgain = await call('POST', '/api/messages/claim', { id: celebrationMail && celebrationMail.id }, rookie.token);
+  const celebrationAfter = await call('GET', '/api/state', undefined, rookie.token);
+  const wantCelebrationProps = Object.entries({
+    2: 10, 23: 3, 36: 3, 39: 3, 41: 3, 42: 3, 43: 3, 44: 5, 82: 3, 87: 3,
+  }).map(([id, count]) => ({ id: Number(id), count }));
+  const celebrationBeforeProps = rookieAfter.save.props || {}, celebrationAfterProps = celebrationAfter.save.props || {};
+  ok('开服庆祝邮件：2 级自动投递 500 金松果 + 10 种道具，只能领一次',
+    !!celebrationMail && celebrationMail.payload.title === '庆祝联机版开服'
+    && celebrationMail.payload.claimable === true
+    && celebrationClaim.ok && celebrationClaim.claimed === true && celebrationClaim.already === false
+    && celebrationClaim.rewards.gold === 500
+    && same(celebrationClaim.rewards.props, wantCelebrationProps)
+    && celebrationAfter.save.goldPoint === rookieAfter.save.goldPoint + 500
+    && wantCelebrationProps.every(p => Number(celebrationAfterProps[p.id] || 0) === Number(celebrationBeforeProps[p.id] || 0) + p.count)
+    && celebrationAgain.ok && celebrationAgain.already === true && celebrationAgain.claimed === true,
+    { mail: celebrationMail, claim: celebrationClaim, again: celebrationAgain,
+      propsBefore: celebrationBeforeProps, propsAfter: celebrationAfterProps });
+
   /* 每日任务：服务端题面 + 进度 + 领取一条龙。用容量测试留下的账号（A/B 已注销），
    * 把第一条的计数器直接置满，再走真实 claimQuest 动作，确认奖励落 patch 而不是只改客户端。 */
   await call('GET', '/api/state', undefined, capToken);
@@ -1175,6 +1437,41 @@ async function main() {
     promptAgain.ok && promptAgain.result === false && !promptAgain.patch,
     { take: promptTake, again: promptAgain, saved: promptAfter.save.supportPromptShown });
 
+  /* 无尽塔周奖励：服务端发奖、周限 10 张、同一 runId 幂等、跨周重置。
+   * 层数 / 铸币由本机对局在结算时提交；服务端不校验塔内过程，只守周上限。 */
+  const tw0 = await call('GET', '/api/state', undefined, token);
+  const twBase = Number((tw0.save.props || {})[50] || 0);
+  let twBad = 0;
+  try { await call('POST', '/api/action', { name: 'claimEndlessTower', args: [0, 11, 'qa-tower-bad'], rev: tw0.rev }, token); }
+  catch (e) { twBad = e.status; }
+  const tw1 = await call('POST', '/api/action', { name: 'claimEndlessTower', args: [76, 11, 'qa-tower-1', false], rev: tw0.rev }, token);
+  const tw2 = await call('POST', '/api/action', { name: 'claimEndlessTower', args: [76, 11, 'qa-tower-1', false], rev: tw1.rev }, token);
+  const tw3 = await call('POST', '/api/action', { name: 'claimEndlessTower', args: [95, 0, 'qa-tower-2', false], rev: tw2.rev }, token);
+  const tw4 = await call('POST', '/api/action', { name: 'claimEndlessTower', args: [95, 0, 'qa-tower-3', false], rev: tw3.rev }, token);
+  // 第 101 层：周限已满，百层奖励仍应发；第 4 个参数模拟旧客户端的 false。
+  const tw5 = await call('POST', '/api/action', { name: 'claimEndlessTower', args: [101, 0, 'qa-tower-4', false], rev: tw4.rev }, token);
+  db.tx(() => store.runOnSave(A.profile.account.accountId, ({ save }) => {
+    save.towerWeek = { week: '2000-01-01', tickets: 10, runs: [] };
+  }));
+  const tw6State = await call('GET', '/api/state', undefined, token);
+  const tw6 = await call('POST', '/api/action', { name: 'claimEndlessTower', args: [75, 0, 'qa-tower-5'], rev: tw6State.rev }, token);
+  ok('无尽塔周奖励：服务端发奖、周限 10 张、同一局幂等、百层奖励、跨周重置、明显不合理结算被拒',
+    twBad === 400 &&
+    tw1.result.granted === 8 && tw1.result.raw === 8 && tw1.result.weekCap === 10 &&
+    !!(tw1.patch && tw1.patch.set && tw1.patch.set.towerWeek) &&
+    tw1.patch.set.towerWeek.tickets === 8 &&
+    Number((tw1.patch.set.props || {})[50]) === twBase + 8 &&
+    tw2.result.duplicate === true && tw2.result.granted === 8 &&
+    tw3.result.granted === 2 && tw3.result.capped === true &&
+    tw4.result.granted === 0 && tw4.result.capped === true &&
+    tw5.result.granted === 2 && tw5.result.victoryBonus === 2 && tw5.result.trueEnd === true &&
+    tw5.result.weekUsed === 10 && tw5.result.weekLeft === 0 && tw5.result.capped === true &&
+    Number((tw5.patch.set.props || {})[50]) === twBase + 12 &&
+    tw6.result.granted === 7 && !!(tw6.patch && tw6.patch.set && tw6.patch.set.towerWeek) &&
+    tw6.patch.set.towerWeek.week !== '2000-01-01' && tw6.patch.set.towerWeek.tickets === 7,
+    { first: tw1.result, duplicate: tw2.result, capped: tw3.result, full: tw4.result,
+      at101: tw5.result, reset: tw6.result });
+
   /* 修改密码：当前密码校验 + 旧口令失效 + 新口令可登录（设置页「联机账号」入口）。 */
   const wrongChange = await statusOf('POST', '/api/account/password', { password: 'nope', newPassword: 'pass-new-a1' }, token);
   const changed = await call('POST', '/api/account/password', { password: 'pass-a1', newPassword: 'pass-new-a1' }, token);
@@ -1211,6 +1508,27 @@ async function main() {
     && renamedState.snapshot && renamedState.snapshot.fighter.name === '改名之后'
     && oldNameLogin === 401 && newNameLogin.ok && newNameLogin.profile.account.name === '改名之后',
     { renameSame, renameTaken, renameTooLong, renamed, save: renamedState.save && renamedState.save.name, oldNameLogin });
+
+  /* 随机挑战「查看」保存原始快照号（snapshotRef）：内存 offer 过期 / 服务重启后，
+   * 仍能用同一颗快照继续开打（旧行为只能靠 10 分钟的 o_… offer）。 */
+  {
+    // 改密码用例已经用新口令登录过一次，旧 token 会被踢；这里用最后一次登录的 token。
+    const refToken = newLogin.token || token;
+    let late = null;
+    for (let i = 0; i < 60 && !late; i++) {
+      const data = await call('GET', '/api/opponents?kind=random', undefined, refToken);
+      late = data.opponents.find((x) => x.player && x.snapshotRef) || null;
+    }
+    const stLate = await call('GET', '/api/state', undefined, refToken);
+    const refFight = late ? await call('POST', '/api/battle', {
+      kind: 'random', snapshotId: late.snapshotRef, rev: stLate.rev, idemKey: 'raw-snapshot-ref',
+    }, refToken) : { ok: false, error: '没有真人候选' };
+    ok('随机挑战可用原始快照号（snapshotRef）继续战斗：重启 / offer 过期后同一颗快照仍能打',
+      !!late && refFight.ok && refFight.opponent
+      && refFight.opponent.snapshotId === late.snapshotRef
+      && refFight.opponent.accountId === late.accountId,
+      { ref: late && late.snapshotRef, offer: late && late.snapshotId, err: refFight.error });
+  }
 
   /* 汇总 */
   const pass = results.filter((r) => r.pass).length;

@@ -1,7 +1,4 @@
-/* ============================================================
- * online.css 鈥?鑱旀満鐗堟柊澧炵殑灏戦噺鏍峰紡
- * ------------------------------------------------------------
- * 鍙湁**鍘熺増娌℃湁瀵瑰簲绱犳潗**鐨勪氦浜掍欢鎵嶅啓鍦ㄨ繖閲岋紙鐧诲綍琛ㄥ崟銆佸鎵嬪垪琛ㄦ寜閽級銆? * 瑙嗚鍒绘剰璐磋繎缁忓吀鐣岄潰锛氱背鑹插崱绾搞€佹繁妫曡壊鎻忚竟銆佸渾瑙掋€侀噾鑹蹭富鎸夐挳锛? * 璺?`.classic-modal` 涓€濂楄壊锛屼笉鍐嶉€犵浜屽璁捐璇█銆? * ============================================================ */
+/* online.css —— 联机版新增的少量样式 */
 
 .online-login {
   position: absolute;
@@ -16,12 +13,10 @@
   padding: 16px;
   overflow-y: auto;
   background: #2b2016;
-  /* 鈿?蹇呴』鏄惧紡鎵撳紑锛歚css/classic.css` 閲屾湁 `.classic-home{pointer-events:none!important}`锛?   * 鑰岀櫥褰曢〉鐨勫鍣ㄦ濂戒篃甯?`classic-home`锛堟部鐢ㄧ粡鍏告暣椤电殑瀹氫綅锛夛紱閭ｈ竟鍙粰
-   * `.classic-home button` 寮€浜?auto 鈥斺€?浜庢槸鍑虹幇銆屾寜閽兘鐐广€佸悕瀛?瀵嗙爜妗嗙偣涓嶅姩銆嶃€?   * 鐧诲綍椤典笉鏄粡鍏哥偣鍑诲眰锛屾暣妫甸兘瑕佽兘鏀朵簨浠躲€?*/
+
   pointer-events: auto !important;
 }
 
-/* 鍙屼繚闄╋細鍗＄墖鍜岄噷闈㈢殑鎺т欢鑷繁鍐嶅０鏄庝竴娆★紝鍏嶅緱灏嗘潵鏈変汉缁欏鍣ㄥ姞 pointer-events銆?*/
 .online-login .online-login-card,
 .online-login .online-login-card * {
   pointer-events: auto;
@@ -142,19 +137,27 @@
 }
 
 .online-player-input { width: 100%; padding: 16px; font: inherit; border: 2px solid #c9a86f; background: #fffdf5; color: #673c1a; }
-@media (max-height: 520px) { .online-login { align-items: flex-start; } .online-login-card { margin: auto 0; padding: 14px 20px; } .online-login-sub { margin-bottom: 6px; } }
+@media (max-height: 520px) { .online-login { align-items: flex-start; } .online-login-card { margin: auto 0; padding: 10px 18px 8px; } .online-login-title { font-size: 18px; } .online-login-sub { margin-bottom: 4px; font-size: 11px; } .online-login-card label { margin-top: 6px; font-size: 12px; } .online-login-card input { min-height: 36px; padding: 6px 8px; font-size: 14px; } .online-login-note { min-height: 14px; margin-top: 4px; font-size: 11px; } .online-login-hint { min-height: 12px; margin-top: 2px; font-size: 10px; } .online-login-actions { margin-top: 6px; } .online-btn { min-height: 36px; padding: 6px 8px; font-size: 13px; } .online-login-foot { margin-top: 6px; font-size: 10px; } .online-login-card .online-recover-link { display: inline-block; margin: 4px 10px 0 0; padding: 2px; font-size: 10px; } }
 
 .online-settings-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .online-account-panel { margin-top: 22px; padding-top: 14px; border-top: 2px solid #ceb47b; }
 .online-account-panel p { margin: 8px 0 12px; }
+p.online-update-hint {
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  border-left: 4px solid #c99a3d;
+  background: #fff6d9;
+  color: #7a5117;
+  font-size: 18px;
+  line-height: 1.45;
+}
 .online-account-heading { display: flex; align-items: center; gap: 24px; }
 .online-account-heading .classic-section-title { margin: 0; }
 .online-account-heading > b { font-size: 26px; }
 .online-account-panel .online-server-address { font-size: 18px; margin: 12px 0 0; opacity: .8; }
 .online-account-form label { display: block; }
 .online-account-form input { display: block; box-sizing: border-box; width: 100%; margin-top: 16px; padding: 14px; border: 2px solid #b39763; border-radius: 12px; background: #fffdf1; color: #715231; font: inherit; }
-/* 修改密码有三个输入框：small-modal 的 326px 正文高度会把「确认新密码」切掉，
- * 这里把这一种弹窗的正文放宽到 520px（与常规弹窗同高），仍保留滚动兜底。 */
+
 .classic-modal-overlay.password-dialog>.classic-modal.small-modal{max-height:625px}
 .classic-modal-overlay.password-dialog>.classic-modal.small-modal>.modal-body{max-height:520px}
 .password-dialog .online-account-form>.small-label{font-size:18px;margin:8px 8px 0}
@@ -164,9 +167,7 @@
 .online-recover-link { display: block; margin: 12px auto 0; padding: 6px; border: 0; background: transparent; color: #79562b; text-decoration: underline; cursor: pointer; }
 .online-recovery-code { width: 100%; box-sizing: border-box; padding: 12px; color: #715231; background: #fffdf1; border: 2px solid #b39763; border-radius: 10px; font: inherit; font-size: 22px; }
 
-/* The original forum opened an external page; this in-game forum uses the classic modal.
- * 2026-11: 论坛改成接近整屏的弹窗（1170×690 舞台内），列表行压成单行，
- * 一页 15 帖；搜索、容量条、管理页都放在同一个滚动区外面。 */
+/* 一页 15 帖；搜索、容量条、管理页都放在同一个滚动区外面。 */
 .classic-modal-overlay.forum-dialog > .classic-modal {
   box-sizing: border-box;
   width: 1132px;
@@ -296,8 +297,6 @@
 .online-forum-admin-log b { color: #5f4328; }
 .online-forum-log-time { color: #a58a62; margin-right: 6px; }
 
-
-/* 寰佹垬鐪熶汉鍖归厤鐘舵€佹潯锛氭姤鍚嶅悗绂诲紑椤甸潰涔熻兘缁х画绛夛紱杩欓噷鍙礋璐ｅ湪褰撳墠椤垫樉绀鸿繘搴﹀拰鍙栨秷銆?*/
 .online-campaign-status {
   position: absolute;
   left: 10px;
@@ -331,8 +330,7 @@
 }
 .online-campaign-status .online-campaign-cancel:hover { background: #ffe7ae; }
 
-/* 寰佹垬鎶ュ悕锛氭鏂囧帇灏忥紝涓や釜鎸夐挳淇濇寔涓€琛岋紱鍚﹀垯 modal-buttons 鐨?flex-wrap 浼氭妸
-   绗簩涓寜閽姌鍒板脊绐楀闈€?*/
+/* 征战报名：正文压小、两个按钮保持一行，避免 flex-wrap 换行。 */
 .campaign-match-dialog .modal-body p {
   font-size: 24px;
   line-height: 1.45;
@@ -356,8 +354,6 @@
   min-height: 0;
 }
 
-/* 征战结果：只有一颗「确定」，按用户 2026-11 截图口径放大并下移；
- * 与报名弹窗的两颗小键区分开，避免同一套 modal-buttons 尺寸互相牵制。 */
 .classic-modal-overlay.campaign-result-dialog>.classic-modal.small-modal {
   max-height: 560px;
 }
@@ -372,7 +368,6 @@
   border-width: 4px;
 }
 
-/* 鏀惧簳閮ㄦ寜閽笂鏂癸紝閬垮厤鍘嬩綇椤堕儴鈥滃緛鎴樺紑鏀炬椂闂粹€濇爣棰樸€?*/
 .online-campaign-status {
   left: 50%;
   top: auto;
@@ -381,7 +376,6 @@
   max-width: calc(100% - 24px);
 }
 
-/* 娓告垙鍏憡锛氱粡鍏稿脊绐楃毊 + 鍙炕椤垫鏂囷紱鐧诲綍椤甸娆¤繘鍏ユ椂鏄剧ず鍦ㄧ櫥褰曢〉涔嬩笂銆?*/
 .game-notice-overlay { z-index: 90; }
 .game-notice { padding: 0 6px; }
 .game-notice-kicker { font-size: 20px; color: #a08356; letter-spacing: .5px; }
@@ -401,7 +395,7 @@
 .help-notice-footer { margin: 22px 0 4px; padding-top: 16px; border-top: 2px dashed #d8c18d; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .help-notice-footer .small-label { margin: 0; }
 
-/* 鍘熺増 4406銆屽叕鍛娿€嶏細SVG 搴曟澘 + 鍙犲湪搴曟澘鍐呯殑鍙粴鍔ㄦ鏂囷紱3152 缁胯壊鎸夐挳鍙犮€屽叧闂€嶃€?*/
+/* 原版 4406「公告」：SVG 底板 + 叠在底板内的可滚动正文；3152 绿色按钮叠「关闭」。 */
 .online-notice-original { position: absolute; top:0;right:0;bottom:0;left:0;inset: 0; z-index: 30; visibility: visible !important; pointer-events: auto !important; background: transparent !important; }
 .online-notice-original * { pointer-events: auto; }
 .online-notice-original-body {
@@ -413,12 +407,11 @@
   padding: 2px 8px 8px;
   color: #5a3a18;
   line-height: 1.5;
-  scrollbar-width: thin;
-  scrollbar-color: #c9a86f #f3e3bf;
+  /* 公告板不显示滚动条：滚轮 / 触屏照样能滚，但滑块不再占正文宽度 */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
-.online-notice-original-body::-webkit-scrollbar { width: 8px; }
-.online-notice-original-body::-webkit-scrollbar-thumb { background: #c9a86f; border-radius: 4px; }
-.online-notice-original-body::-webkit-scrollbar-track { background: #f3e3bf; }
+.online-notice-original-body::-webkit-scrollbar { width: 0; height: 0; display: none; }
 .online-notice-original-kicker { color: #a08356; font-size: .78em; margin: 0 0 4px; }
 .online-notice-original-body h3 { margin: 8px 0 4px; font-size: 1.08em; color: #8a5a26; }
 .online-notice-original-body p { margin: 4px 0; }
@@ -428,9 +421,6 @@
 .online-notice-original-body hr { border: 0; border-top: 1px dashed #d8c18d; margin: 8px 0; }
 .online-notice-original-body .small-label { color: #a08356; }
 
-
-
-/* 原版 3152「确定」的透明点击热区：不改画稿，只保证点击不被底板吃掉。 */
 .online-notice-original-hit {
   position: absolute;
   z-index: 4;
@@ -440,20 +430,13 @@
   cursor: pointer;
 }
 
-
-/* ============================================================
- * 村庄右上角的「远方的无尽之塔」石板小径
- * ------------------------------------------------------------
- * 画在村庄页同一棵 SVG 里（舞台坐标 320×196），随页面一起缩放。
- * 只有石板与缝隙，没有塔 / 旗 / 路牌；悬停 / 按下反馈复用 SfUiFeedback。
- * ========================================================== */
+/* 画在村庄页同一棵 SVG 里（舞台坐标 320×196），随页面一起缩放。 */
 .sf-tower-path {
   transform-box: fill-box;
   transform-origin: center;
   cursor: pointer;
   pointer-events: auto;
-  /* 点击时不要浏览器默认的黑色焦点框 / 移动端 tap 高亮；
-   * 键盘 Tab 的黄色焦点环仍由下面的 :focus-visible 保留。 */
+
   outline: none;
   -webkit-tap-highlight-color: transparent;
 }
@@ -490,7 +473,6 @@
   .sf-tower-path .tp-shadow { transition: none; }
 }
 
-/* 设置 → 开发者同步：预览「将同步的文件」清单。 */
 .online-owner-panel .owner-sync-files {
   max-height: 52vh;
   overflow: auto;

@@ -1,6 +1,6 @@
 [package]
 name = "ssdz-online"
-version = "1.0.50"
+version = "1.0.76"
 description = "松鼠大战 Online 客户端"
 authors = ["ssdz-online"]
 edition = "2021"
@@ -19,7 +19,9 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", default-features = false, features = ["wry", "common-controls-v6", "compression"] }
+tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 sha2 = "0.10"
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -27,6 +29,9 @@ winreg = "0.55"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+# 轻壳：前端不进二进制，启动时从仓库目录读（`node tools/build-online-app.cjs --shell`）。
+# 这个 feature 只给开发机用；完整包 / APK / iOS 都不带它。
+thin-shell = []
 
 [profile.release]
 codegen-units = 1

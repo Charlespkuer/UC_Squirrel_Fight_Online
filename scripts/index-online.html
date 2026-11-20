@@ -4,9 +4,18 @@
 <meta charset="UTF-8">
 <base href="/">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#2b2016">
+<meta name="color-scheme" content="light">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="松鼠大战">
 <title>松鼠大战 Online</title>
+<link rel="manifest" href="images/ui/web/manifest.webmanifest">
+<link rel="icon" href="images/ui/web/favicon.png">
+<link rel="apple-touch-icon" href="images/ui/web/icon-180.png">
 <style>
-/* iOS / 安卓 WebView 的触摸约定，与单机版 scripts/index.html 完全一致。 */
+/* iOS / 安卓 WebView 的触摸约定（安装包内页面也走这一份入口）。 */
 @supports (-webkit-touch-callout: none) {
   html, body { -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
   body { -webkit-touch-callout: none; }
@@ -22,14 +31,17 @@
 <link rel="stylesheet" href="css/classic-fusion.css">
 <link rel="stylesheet" href="css/battle-drops.css">
 <link rel="stylesheet" href="css/classic-refine.css">
-<!-- 无尽塔的局内窄屏样式（增益 / 商店 / 结算 / 战报）；只从村庄小径进入 -->
-<link rel="stylesheet" href="css/tower.css">
 <!-- 联机版新增的少量交互件（登录表单 / 对手列表）：原版没有对应素材 -->
 <link rel="stylesheet" href="css/online.css">
+<!-- 纯网页端的手机安全区 / 竖屏提示；安装包也加载，但提示只在 http(s) 页面启用 -->
+<link rel="stylesheet" href="css/web.css">
+<!-- 文字描边的唯一出口：安卓 WebView 不认 HTML 文本的 paint-order，改走 text-shadow 回退 -->
+<link rel="stylesheet" href="css/text-outline.css">
+<!-- 联机标记必须先于任何游戏脚本置位：state.js 靠它决定「只经典 + 不落本地存档」。 -->
 <script>
-/* 联机标记必须在任何游戏脚本之前置位：js/state.js 靠它决定「只经典 + 不落本地存档」。
-   ⚠ 不要在单机版 scripts/index.html 里写这一行。 */
 window.__SSDZ_ONLINE__ = true;
+// 安卓描边回退（css/text-outline.css）要在首帧前就命中。
+if (/Android/i.test(navigator.userAgent || '')) document.documentElement.classList.add('is-android');
 window.__errs = [];
 window.addEventListener('error', function (e) {
   window.__errs.push((e.message || '') + ' @ ' + (e.filename || '') + ':' + (e.lineno || 0));
@@ -46,34 +58,32 @@ window.addEventListener('unhandledrejection', function (e) {
   <div id="boot-note">正在连接服务器…</div>
 </div>
 
-<!-- ============ 数据与内核 ============ -->
-<!-- 昵称长度规则：注册页 / 修改昵称 / 服务端 auth 共用同一份 7 个汉字口径 -->
+<div id="rotate-hint" aria-hidden="true">
+  <div class="web-rotate-card">
+    <div class="web-rotate-phone" aria-hidden="true"></div>
+    <h2 class="web-rotate-title">请横屏游玩</h2>
+    <p class="web-rotate-text">松鼠大战是横向画面，横屏后按钮和文字更大、更好点。<br>旋转手机，或点下面的按钮继续。</p>
+    <button type="button" class="web-rotate-continue" data-rotate-continue>仍要竖屏游玩</button>
+  </div>
+</div>
+
+<!-- 昵称长度：注册页 / 修改昵称 / 服务端 auth 共用同一份 7 个汉字口径 -->
 <script src="js/nickname.js"></script>
-<!-- 征战静态表（首领 / 门票 / 奖励池）：浏览器与服务端共用同一份 -->
+<!-- 征战静态表（首领 / 门票 / 奖励池）：浏览器与服务端共用 -->
 <script src="js/campaign-data.js"></script>
-<!-- 原版数据：武器/技能/道具字典 + 素材清单 + 动画帧表 -->
 <script src="js/gamedict.js"></script>
 <script src="js/engine.js"></script>
 <script src="js/gamedata.js"></script>
-<!-- 无尽塔：数值表是纯数据；联机版只开放经典的常规无尽塔（零局外奖励） -->
-<script src="js/tower-data.js"></script>
+<!-- 无尽塔周奖励公式（浏览器与服务端共用）；其余塔脚本首次进塔时按需加载 -->
+<script src="js/tower-rewards.js"></script>
+<script src="js/tower-loader.js"></script>
 <script src="js/state.js"></script>
 <script src="js/sim.js"></script>
-<script src="js/tower-hero.js"></script>
-<script src="js/tower.js"></script>
-<!-- 战斗：联机版只有经典 ssfight 战斗（ui-fight.js + 服务端录像）；
-     现代 canvas 战斗 js/battle.js 不进联机包，也不在这里加载。 -->
 <script src="js/battle-drops.js"></script>
 
-<!-- ============ 联机层 ============ -->
-<!-- net.js：唯一的网络出口（令牌 / 超时 / 串行队列） -->
 <script src="js/net.js"></script>
-<!-- online.js：权威镜像 + 动作流水线 + State 口子收口 -->
 <script src="js/online.js"></script>
-<!-- 无尽塔的本机对局存档：服务端存档里没有 tower / endless，塔也不发局外奖励 -->
-<script src="js/tower-online.js"></script>
 
-<!-- ============ 经典界面（ssfight 原版数据渲染） ============ -->
 <script src="js/ssfight/render.js"></script>
 <script src="js/ssfight/ui-main.js"></script>
 <script src="js/ssfight/ui-feedback.js"></script>
@@ -90,23 +100,22 @@ window.addEventListener('unhandledrejection', function (e) {
 <script src="js/ssfight/ui-fight-result.js"></script>
 <script src="js/ssfight/ui-fight.js"></script>
 
-<!-- ============ 界面外壳 ============ -->
-<!-- ui.js 只提供 UI 基础件（toast / runAction / hitRegion / 图标）；联机版的页面一律走经典帧 -->
-<script src="js/ui.js"></script>
+<script src="js/ui-base.js"></script>
 <script src="js/classic-ui.js"></script>
 <script src="js/classic-extras.js"></script>
 <script src="js/classic-fusion.js"></script>
-<!-- 无尽塔：剧情播片机 + 经典界面页（只从村庄小径进入） -->
-<script src="js/tower-plot.js"></script>
-<script src="js/tower-ui.js"></script>
 
-<!-- ============ 联机流程与新增界面 ============ -->
 <script src="js/online-battle.js"></script>
 <script src="js/online-notice.js"></script>
 <script src="js/online-ui.js"></script>
+<script src="js/online-campaign.js"></script>
+<script src="js/online-social.js"></script>
+<script src="js/online-settings.js"></script>
 <script src="js/online-update.js"></script>
+<script src="js/online-client-download.js"></script>
 
 <script src="js/main.js"></script>
+<script src="js/web-shell.js"></script>
 <script src="js/touch-fallback.js"></script>
 </body>
 </html>

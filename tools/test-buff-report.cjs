@@ -598,27 +598,15 @@ test('巡逻（魔王战）：随机替换任意一场、魔王本体、收缴�
   run0.patrolTolls = [];          // 清掉这两条造出来的记录，下面 ⑤ 走真实收缴流程
   delete run0.patrolShopGift;
   delete run0.patrolFoeGain;
-  /* ④ 魔王本体：名字固定、穿全套橙狂战、全武器全技能真5。 */
+  /* ④ 魔王本体：名字固定、穿全套经典黑狂战、全武器全技能真5。 */
   const built = Tower.buildFoeOf('endless', at, pe[0], salt, false);
   assert.equal(built.foe.name, TD.PATROL.name, '固定名字');
-  /* 【2026-10 第七十四批】橙狂战套要**真的显示**：wear 必须是 {src,label} 形态
-   *（裸字符串会被 wearsFor 当成装备 id 去查 gearMap，`Number('Head_113_1')` = NaN → 整条丢掉，
-   *  于是魔王一件都穿不上）；而且 engine 里必须真有这几张图的帧表，否则图集注册出来 0 帧，照样画不出来。 */
-  const outfit = TD.PATROL.outfit;
-  assert.equal(outfit.length, 6, '六个部位：' + JSON.stringify(outfit));
-  assert.ok(outfit.every((w) => w && w.src && String(w.label) === '0'), '必须是 {src,label} 形态');
-  assert.equal(built.foe.wears.map((w) => w && w.src).join(','), outfit.map((w) => w.src).join(','),
-    '战斗里的 wears 就是 PATROL.outfit');
-  {
-    const engineSrc = fs.readFileSync(path.join(ROOT, 'js/engine.js'), 'utf8').replace(/\r\n/g, '\n');
-    for (const w of outfit) assert.ok(engineSrc.includes(w.src + ':'), 'engine.js 的 EXTRA_DEFS 里要有 ' + w.src);
-    /* 手导素材是 1x 的，要靠帧表里的显示尺寸放大回原版贴图同级（第 8/9 列 dw/dh）。 */
-    assert.ok(/dw\/dh/.test(engineSrc) && /EXTRA_DEFS/.test(engineSrc), '帧表要支持显示尺寸（dw/dh）');
-  }
-  /* 橙狂战套**真的给性能**：战斗修正走 setFx 独立通道（属性那半在 adjustMe 的复制之后落，见 ⑥）。 */
-  assert.ok(built.foe.setFx && built.foe.setFx.lowHpFinalMul > 0, '狂战套的战斗修正要写进 setFx：' + JSON.stringify(built.foe.setFx));
-  assert.equal(built.foe.setFx.critBonus, 5.9, '2 件档暴击率 +5.9%');
-  assert.equal(built.foe.setFx.lowHpAt, 0.4, '4 件档低血阈值 40%');
+  /* 经典战斗外观走 ssfight 的 181~184 黑狂战套；现代 outfit 层已全部退役。 */
+  assert.equal(JSON.stringify(built.foe.gears.map((g) => [g.id, g.type])),
+    JSON.stringify([[181, 0], [182, 1], [183, 2], [184, 3]]), '经典黑狂战四件要进战斗体');
+  assert.ok((built.foe.wears || []).every((w) => w && w.src == null), '现代 outfit 层不再进战斗体');
+  /* 套装效果已移除：魔王只保留经典外观四件，战斗体不再带任何 setFx / 套装修正。 */
+  assert.equal(built.foe.setFx, undefined, '套装效果已移除，战斗体不能带 setFx');
   const countOf = (map) => { let n = 0; if (map && map.each) map.each(() => n++); return n; };
   assert.equal(built.foe.weapons.length, countOf(c.weaponsMap), '持有全部武器');
   assert.equal(built.foe.skills.length, countOf(c.skillsMap), '持有全部技能');
@@ -753,7 +741,7 @@ test('巡逻（魔王战）：随机替换任意一场、魔王本体、收缴�
       masterLevel: 3, healMul: 1.4, skillBoost: { 14: 0.6 } };
     px.adjustMe(meStub);
     const mf = px.foe;
-    assert.equal(mf.power, 1234 + 9, '面板照抄玩家，再叠狂战套 2 件档力量 +9：' + mf.power);
+    assert.equal(mf.power, 1234, '面板照抄玩家，不再叠加套装效果：' + mf.power);
     assert.equal(mf.agility, 567, '敏捷照抄');
     assert.equal(mf.maxHp, 4321, '生命上限照抄');
     /* 玩家这一场确实有增益（暴击精通 + 涅槃），但魔王**不该**拿到它们。 */
@@ -845,7 +833,7 @@ test('觐见魔王（x00）：两件涅槃plus（3 条命）+ 破碎终焉烙印
   /* 真打一场：碾压配置下要**恰好复活 2 次**（3 条命）。 */
   const mkFoe = () => JSON.parse(JSON.stringify({ name: foe.name, level: 70, power: foe.power, agility: foe.agility,
     speed: foe.speed, hp: foe.maxHp, maxHp: foe.maxHp, weapons: [], skills: [], effects: {},
-    baseStats: foe.baseStats, mods: foe.mods, setFx: foe.setFx || null }));
+    baseStats: foe.baseStats, mods: foe.mods }));
   const hero = { name: '我', level: 70, power: 100000, agility: 100000, speed: 100000,
     hp: 500000, maxHp: 500000, weapons: [{ id: 3, level: 15 }], skills: [], effects: {},
     baseStats: { power: 100000, agility: 100000, speed: 100000 } };
@@ -921,6 +909,27 @@ test('觐见魔王（x00）：两件涅槃plus（3 条命）+ 破碎终焉烙印
       '第二条命只回 75% 生命上限：' + JSON.stringify(revives[0].hpAfter));
     assert.equal(killed.winner, 0, '杀满两条命才算赢');
   }
+});
+
+test('E17「假如我直接赢」与护盾：敌方护盾清零，直接胜利时双方不留盾', () => {
+  const c = setup();
+  const { Sim } = c;
+  const mkMe = () => ({ name: '我', level: 70, power: 1000, agility: 100, speed: 100, hp: 1000, maxHp: 1000,
+    baseStats: { power: 100, agility: 100, speed: 100 }, weapons: [{ id: 1, level: 1 }], skills: [], effects: {},
+    mods: { openKill: 1, shellPct: 0.1 } });
+  const mkFoe = (mods) => ({ name: '敌', level: 70, power: 100, agility: 100, speed: 100, hp: 1000, maxHp: 1000,
+    baseStats: { power: 100, agility: 100, speed: 100 }, weapons: [], skills: [], effects: {}, mods });
+  const plain = Sim.simulate(mkMe(), mkFoe({ shellPct: 0.2 }));
+  assert.equal(plain.winner, 0, '普通敌人直接被 E17 判胜');
+  assert.equal(plain.rounds.length, 1, '普通敌人没有第二条命');
+  assert.equal(plain.rounds[0].shellAfter[0], 0, '直接胜利后玩家护盾不能残留');
+  assert.equal(plain.rounds[0].shellAfter[1], 0, '直接胜利后敌方护盾不能残留');
+  const boss = Sim.simulate(mkMe(), mkFoe({ shellPct: 0.2,
+    deathSaves: [{ bossLife: true, healPct: 1, name: '涅槃+' }] }));
+  assert.equal(boss.rounds[0].deathSave, true, 'bossLife 照常吃一条命');
+  assert.equal(boss.rounds[0].shellAfter[1], 0, '魔王复活时敌方护盾也先归零');
+  assert.ok(boss.rounds[0].shellAfter[0] > 0, '战斗继续时玩家护盾保留');
+  assert.ok(boss.rounds.length > 1, '魔王还有后续战斗');
 });
 
 test('巡视的传奇三选一不再挤掉第 3 场的战斗掉落：两批都保留、选完自动接上', () => {

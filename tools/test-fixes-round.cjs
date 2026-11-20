@@ -619,6 +619,7 @@ test('需求9.0：无尽塔首页在「战后待选牌」状态下必须能渲�
   /* 去掉注释与**字符串字面量**再查：这条查的是「裸 mode 这个标识符」，
    * 而 `'story-mode'`（剧情/挑战模式开关的 action 名）只是字符串内容，不算引用。 */
   const code = openEndless.replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/[^\n]*/g, ' ')
     .replace(/'(?:[^'\\]|\\.)*'/g, "''").replace(/"(?:[^"\\]|\\.)*"/g, '""');
   assert.ok(!/\bmode\b/.test(code),
     'openEndless() 里不该出现裸 mode（它没有这个参数）：' + (code.match(/.{0,40}\bmode\b.{0,40}/) || [''])[0]);
@@ -681,35 +682,14 @@ test('需求9.1：玉石俱焚确实生效 —— 战斗内双方血量上限真
   assert.ok(rows[0].maxHp && rows[0].maxHp[0] === Math.floor(before.me * 0.9),
     '第一次结算就该是 floor(初始上限 ×0.9)：' + JSON.stringify(rows[0].maxHp));
 
-  /* 战斗回放要消费这个 payload（否则只看到飘字、看不到上限变化）——
-   * 把回放里的纯函数抠出来直接跑：血条上限与当前血量都要被压低。 */
-  const battleSrc = readSrc('js', 'battle.js');
-  assert.match(battleSrc, /function applyRoundCaps\(maxHpArr, hpsArr, r\)/, '回放要有 applyRoundCaps');
-  assert.match(battleSrc, /上限 ' \+ fmtBig\(maxHp\[side\]\)/, '上限变化时要有飘字提示');
-  const fn = (() => {
-    const at = battleSrc.indexOf('function applyRoundCaps(maxHpArr, hpsArr, r) {');
-    let k = battleSrc.indexOf('{', at), depth = 0, e = k;
-    while (e < battleSrc.length) {
-      const ch = battleSrc[e];
-      if (ch === '{') depth++;
-      else if (ch === '}') { depth--; if (depth === 0) break; }
-      e++;
-    }
-    return battleSrc.slice(at, e + 1);
-  })();
-  const caps = vm.runInNewContext(fn + '\napplyRoundCaps;', {});
-  const maxArr = [1000, 1000], hpArr = [1000, 1000];
-  const r1 = caps(maxArr, hpArr, { maxHp: [900, 900], hp: [900, 900] });
-  assert.equal(r1.capped, true, '第一次应当判定为「压低了」');
-  assert.deepEqual(maxArr.slice(), [900, 900], '血条上限要跟着压低：' + JSON.stringify(maxArr));
-  assert.deepEqual(hpArr.slice(), [900, 900], '当前血量也要跟着裁：' + JSON.stringify(hpArr));
-  caps(maxArr, hpArr, { maxHp: [810, 810], hp: [805, 810] });
-  assert.deepEqual(maxArr.slice(), [810, 810], '继续压低');
-  assert.deepEqual(hpArr.slice(), [805, 810], '当前血量按回合给的数值走');
-  const max2 = [500, 500], hp2 = [400, 300];
-  assert.equal(caps(max2, hp2, { noteText: '越战越勇' }).capped, false, '没有 maxHp 的回合不该动上限');
-  assert.deepEqual(max2.slice(), [500, 500], '上限保持不动');
-  assert.deepEqual(hp2.slice(), [400, 300], '血量也保持不动');
+  /* 战斗回放要消费这个 payload（否则只看到飘字、看不到上限变化）。
+   * 现代战斗 `js/battle.js` 已退役（2026-11-10 移到 reference/retired/），
+   * 联机版走经典回放 `js/ssfight/ui-fight.js`：它在每回合读 `r.maxHp` 并同步血条。 */
+  const fightSrc = readSrc('js', 'ssfight', 'ui-fight.js');
+  assert.match(fightSrc, /Array\.isArray\(r\.maxHp\) && r\.maxHp\.length === 2/,
+    '经典回放要消费回合的 maxHp');
+  assert.match(fightSrc, /rec\.maxHp\[i\] = next/,
+    '上限被压低时要同步给血条');
 });
 
 test('需求9.3：无尽塔主界面右上角标注「本场战斗获得多少试炼币」', () => {
@@ -1247,7 +1227,7 @@ test('需求27：弹窗按钮按「主操作靠右、取消/返回靠左」排�
   const src = readSrc('js', 'classic-ui.js');
   const a = src.indexOf('const btnRank = (b, i) => {');
   assert.ok(a > 0, 'classic-ui.js 里应当有 btnRank');
-  const b = src.indexOf('/* 排序会打乱顺序', a);
+  const b = src.indexOf('const orderedIdx = buttons.map', a);
   assert.ok(b > a, '应当能定位 btnRank 的结尾');
   const ctx = vm.createContext({});
   /* 直接用源码里的排序规则，避免测试复制实现。 */
@@ -1310,7 +1290,7 @@ test('需求29：两座塔页面的「返回」都回关卡页（上一级界面
   // 胜利弹窗的「返回」也要回主界面（抽出 towerClear 用桩跑一遍，直接看导航）
   const a = ui.indexOf('function towerClear(rw)');
   assert.ok(a > 0, '应当有 towerClear');
-  const b = ui.indexOf('/* 主塔失败', a);
+  const b = ui.indexOf('function towerDefeat(', a);
   assert.ok(b > a, '应当能定位 towerClear 的结尾');
   const calls = [];
   const ctx = vm.createContext({
@@ -1606,7 +1586,7 @@ test('需求38：永久增益替换弹窗改为竖排可滚动列表（不再横
   assert.ok(/C\(\)\.bind\(m\.element, actions\)/.test(ui), '行点击要自己 bind（它们不在 .modal-buttons 里）');
 
   /* 关键回归：不许再把每个增益塞成 .modal-buttons 里的横排按钮 */
-  const comp = ui.slice(ui.indexOf('function offerPermanentReplace'), ui.indexOf('/** 每 10 层的里程碑奖励'));
+  const comp = ui.slice(ui.indexOf('function offerPermanentReplace'), ui.indexOf('function patrolRowHtml(', ui.indexOf('function offerPermanentReplace')));
   assert.ok(comp.indexOf("replace-btn") < 0,
     '替换弹窗不该再用 replace-btn 横排按钮');
   assert.ok((comp.match(/buttons\.push/g) || []).length === 0,
@@ -1647,9 +1627,9 @@ test('需求38：永久增益替换弹窗改为竖排可滚动列表（不再横
   assert.ok(T.buyShopSlot(0).needsReplace, '占满 8 格时买新的应当要求替换');
 
   /* 用真实的 tower-ui 片段跑 offerShopReplace（只替换 C()/modal 等依赖） */
-  const body = ui.slice(ui.indexOf('const RARITY_SHORT'), ui.indexOf('/** 每 10 层的里程碑奖励'));
+  const body = ui.slice(ui.indexOf('const RARITY_SHORT'), ui.indexOf('function milestoneModal('));
   /* 面板/弹窗的「附魔优先」排序函数在文件更前面，片段要把它一起带上。 */
-  const ordSeg = ui.slice(ui.indexOf('  function orderPermanent('), ui.indexOf('  // ---------- 通用小件 ----------'));
+  const ordSeg = ui.slice(ui.indexOf('  function orderPermanent('), ui.indexOf('  function carryBar('));
   const ctx = { Tower: T, State: S, esc: (x) => String(x == null ? '' : x), notice: () => {},
     modal: classic.modal, openShop: () => {}, openEndless: () => {},
     C: () => ({ bind: (root, actions) => { binds.push(actions); } }),
@@ -2785,7 +2765,7 @@ test('需求61：放弃永久增益的弹窗必须能真的选出候选（修「
   /* ② 真跑一遍界面函数：弹窗要列出全部候选，点击要能完成放弃 */
   const ui = readSrc('js', 'tower-ui.js');
   const seg = ui.slice(ui.indexOf('  function openPermSacrifice()'), ui.indexOf('  function openCheckpoint()'));
-  const ordSeg61 = ui.slice(ui.indexOf('  function orderPermanent('), ui.indexOf('  // ---------- 通用小件 ----------'));
+  const ordSeg61 = ui.slice(ui.indexOf('  function orderPermanent('), ui.indexOf('  function carryBar('));
   assert.ok(seg.length > 200, '应当截到 openPermSacrifice 的实现');
   assert.ok(ordSeg61.length > 100, '应当截到 orderPermanent 的实现');
   /* 断言它**没有**把 info.run 传给 sacrificeCandidatesOf（修好的标志）。 */
@@ -2929,7 +2909,7 @@ test('需求64：被虚空铭文附魔的永久增益排在前面，与未附魔
   assert.equal(raw, 'C29,C27,C22,C07,C12,C48', '前置条件：原始顺序是这个（附魔的混在中间）：' + raw);
 
   const ui = readSrc('js', 'tower-ui.js');
-  const ordSeg = ui.slice(ui.indexOf('  function orderPermanent('), ui.indexOf('  // ---------- 通用小件 ----------'));
+  const ordSeg = ui.slice(ui.indexOf('  function orderPermanent('), ui.indexOf('  function carryBar('));
   assert.ok(ordSeg.length > 100, '应当截到 orderPermanent 的实现');
 
   const ctx = { Tower: T, State: S, console,
@@ -3066,7 +3046,7 @@ test('需求67：装备出售界面倒序（新合成/新融合的排最前）',
   const src = readSrc('js', 'classic-ui.js').split('\n');
   const a = src.findIndex((l) => l.includes('function openGearSell(pg) {'));
   assert.ok(a >= 0, 'classic-ui.js 里应当有 openGearSell');
-  const b = src.findIndex((l, i) => i > a && l.includes('点一件装备'));
+  const b = src.findIndex((l, i) => i > a && l.includes('function askSellGear('));
   assert.ok(b > a, '找不到 openGearSell 的结束位置');
   const fn = src.slice(a, b).join('\n');
 
@@ -4569,7 +4549,7 @@ test('需求96：动态稀有度权重——个体降权会按比例缩小整档
   run.slotFreeIds = [];
 });
 
-test('需求97：无尽塔 10 层起战斗右下角同时给倍速键与跳过键（与普通战斗的跳过键同尺寸并排）', () => {
+test('需求97：无尽塔 10 层起战斗给跳过键（策略与接线）', () => {
   const c = setup();
   const T = c.Tower;
   /* ① 策略：只有无尽塔、且到 10 层才允许跳过播放（2026-11 用户口径：由 20 层下调到 10 层） */
@@ -4589,33 +4569,11 @@ test('需求97：无尽塔 10 层起战斗右下角同时给倍速键与跳过�
   assert.equal(c.TowerData.ENDLESS_SKIP_LAYER, 10, '起始层常量应当是 10');
   assert.equal(c.TowerData.ENDLESS_DEEP_LAYER, 30, '敌人深度曲线仍是 30 层起（两件事不要混用）');
 
-  /* ② 布局（2026-10 用户口径）：倍速 / 跳过键**统一用普通战斗跳过键那一档** 190x70；
-   * 无尽塔 10 层起两个键在右下**并排**，整块贴住右下角（右边缘 1170−16）。 */
-  const c2 = { console }; c2.window = c2; vm.createContext(c2);
-  vm.runInContext(readSrc('js', 'battle.js'), c2, { filename: 'js/battle.js' });
-  const L = c2.Battle._cornerLayout;
-  const single = { x: 964, y: 605, w: 190, h: 70 };       // 普通战斗「跳过」那一档尺寸
-  const onlySpeed = L(true, false);
-  assert.equal(onlySpeed.both, false);
-  assert.deepEqual(Object.assign({}, onlySpeed.rects.speed), single, '只有倍速时用与普通战斗跳过键相同的尺寸');
-  assert.equal(onlySpeed.rects.skip, null, '只有倍速时没有跳过键');
-  const onlySkip = L(false, true);
-  assert.deepEqual(Object.assign({}, onlySkip.rects.skip), single, '普通战斗只有跳过时保持原尺寸');
-  assert.equal(onlySkip.rects.speed, null, '只有跳过时没有倍速键');
-  const none = L(false, false);
-  assert.equal(none.rects.speed, null); assert.equal(none.rects.skip, null);
-  const both = L(true, true);
-  assert.equal(both.both, true, '两个键都要时进入双键布局');
-  const sp = both.rects.speed, sk = both.rects.skip;
-  /* 两个键都必须和「普通战斗跳过键」一样大 */
-  assert.deepEqual({ y: sp.y, w: sp.w, h: sp.h }, { y: single.y, w: single.w, h: single.h }, '倍速键尺寸 = 跳过键尺寸');
-  assert.deepEqual({ y: sk.y, w: sk.w, h: sk.h }, { y: single.y, w: single.w, h: single.h }, '跳过键尺寸 = 单键尺寸');
-  assert.equal(sp.w, sk.w, '两个键等宽');
-  assert.equal(sp.x + sp.w < sk.x, true, '两键之间要有缝，不能重叠：' + sp.x + '+' + sp.w + ' vs ' + sk.x);
-  assert.equal(sk.x - (sp.x + sp.w), 8, '缝隙固定 8px');
-  assert.equal(sp.x + sp.w + 8 + sk.w, 1170 - 16, '两个键并排后右边缘贴右下角（1170−16）');
-  assert.equal(both.base.w, single.w * 2 + 8, '整块宽度 = 两键 + 缝');
-  assert.ok(sk.y + sk.h <= 690, '不能越出画布');
+  /* ② 双键布局原本对着 js/battle.js 的 `Battle._cornerLayout` 断言；现代战斗已退役
+   * （2026-11-10 移到 reference/retired/），经典战斗的键位改由显示层回归与实机观察守。
+   * 这里只保留「经典战斗真的有倍速键」这一条源码口径。 */
+  const fightSrc = readSrc('js', 'ssfight', 'ui-fight.js');
+  assert.match(fightSrc, /function addSpeedKey\(/, '经典战斗要有倍速键');
   /* ③ 接线：tower-ui 必须用这个策略决定 allowSkip（跳过键与倍速键共存） */
   const uiSrc = readSrc('js', 'tower-ui.js');
   assert.match(uiSrc, /const skipAllowed = Tower\.skipPlaybackAllowed\(mode, layerNow\)/,
@@ -5334,7 +5292,7 @@ test('需求124：同名件的「虚空铭文附魔（不占位）」逐条判�
   assert.ok(c25Cands.every((x) => x.uid === uidA), '同名未附魔的那两条不该再进附魔候选');
   /* 界面层：orderPermanent 只按行自己的 slotFree，不再按 id 兜底 */
   const ui = readSrc('js', 'tower-ui.js');
-  const ordSeg = ui.slice(ui.indexOf('  function orderPermanent('), ui.indexOf('  // ---------- 通用小件 ----------'));
+  const ordSeg = ui.slice(ui.indexOf('  function orderPermanent('), ui.indexOf('  function carryBar('));
   assert.ok(!/free\.indexOf\(b\.id\)/.test(ordSeg), 'orderPermanent 不该再按 id 兜底：' + ordSeg);
   /* 送掉被附魔的那一条 → 附魔记录要一起清掉，**之后**再拿到同名件也不能沾上附魔。 */
   T.debugLoseBuff(uidA);
@@ -5836,12 +5794,13 @@ test('需求137：自愿支持作者 —— 系统页入口 / 30 级一次性提
   assert.match(mainSrc, /window\.open\(url, '_blank'/, '浏览器 / 便携版退回 window.open');
   assert.match(mainSrc, /SUPPORT, openExternal, openSupport/, '三个入口都要导出到 window.Main');
 
-  /* ② 系统页最上方：支持面板 + 按钮（源码口径） */
-  const sysAt = uiSrc.indexOf('function openSystem()');
-  assert.ok(sysAt > 0, '找不到 openSystem');
-  const sysBody = uiSrc.slice(sysAt, uiSrc.indexOf('function ', sysAt + 10));
-  assert.match(sysBody, /page\('system','system',supportPanelHtml\(\)\+/, '支持面板要放在系统页最上方');
-  assert.match(sysBody, /data-action="support"/, '按钮要挂 data-action=support');
+  /* ② 系统页最上方：支持面板 + 按钮（联机设置页源码口径） */
+  const settingsSrc = readSrc('js', 'online-settings.js');
+  const sysAt = settingsSrc.indexOf('function settingsPage()');
+  assert.ok(sysAt > 0, '找不到联机设置页');
+  const sysBody = settingsSrc.slice(sysAt, settingsSrc.indexOf('\n  }', sysAt));
+  assert.match(sysBody, /supportPanelHtml/, '支持面板要放在系统页最上方');
+  assert.match(uiSrc, /data-action="support"/, '按钮要挂 data-action=support');
   assert.match(sysBody, /openSupportModal\(\)/, '按钮要打开支持弹窗');
   assert.match(uiSrc, /function supportPanelHtml\(\)/, '要有面板构造器');
   assert.match(uiSrc, /喜欢这个复刻版/, '面板文案');
@@ -5959,15 +5918,26 @@ test('需求137：自愿支持作者 —— 系统页入口 / 30 级一次性提
             assert.equal(b2, false, '被浏览器拦下时要返回 false（界面据此显示「复制链接」）');
             assert.match(uiSrc, /function showSupportFallback\(/, '要有「复制链接」兜底弹窗');
             assert.match(uiSrc, /function copyText\(/, '要有复制文本');
-            /* ⑤ Rust 侧：轻壳的内置服务器要有 /__open，安装版/安卓要有 open_external 命令 */
-            assert.match(rustSrc, /if path == "\/__open"/, '内置服务器要加 /__open 路由');
-            assert.match(rustSrc, /fn open_api\(query: &str, out: &mut TcpStream\)/, '要有 /__open 的处理函数');
-            assert.match(rustSrc, /fn open_external\(url: String\) -> Result<\(\), String>/, '要有 open_external 命令');
-            assert.match(rustSrc, /generate_handler!\[[^\]]*open_external\]/,
-              '命令要注册进 invoke_handler');
-            assert.match(rustSrc, /fn spawn_opener\(url: &str\)/, '要有跨平台的系统打开器');
-            assert.match(rustSrc, /android\.intent\.action\.VIEW/, '安卓走 Intent');
-            assert.match(rustSrc, /!\url\.contains\(\[/, '链接要过滤 shell 元字符');
+            /* ⑤ Rust 侧：单机轻壳有内置 HTTP 服务器，所以要有 /__open；
+             * 联机版是 `thin-shell`（tauri:// 协议，没有 HTTP 服务器），/__open 不适用 ——
+             * 外部链接暂时走 window.open / 「复制链接」兜底（opens in browser 的完整
+             * `open_external` 命令待联机壳补，见 docs/更新记录.md 2026-11-10 批次）。 */
+            const rustHasOpen = /if path == "\/__open"/.test(rustSrc);
+            if (rustHasOpen) {
+              assert.match(rustSrc, /fn open_api\(query: &str, out: &mut TcpStream\)/, '要有 /__open 的处理函数');
+              assert.match(rustSrc, /fn open_external\(url: String\) -> Result<\(\), String>/, '要有 open_external 命令');
+              assert.match(rustSrc, /generate_handler!\[[^\]]*open_external\]/,
+                '命令要注册进 invoke_handler');
+              assert.match(rustSrc, /fn spawn_opener\(url: &str\)/, '要有跨平台的系统打开器');
+              assert.match(rustSrc, /android\.intent\.action\.VIEW/, '安卓走 Intent');
+              assert.match(rustSrc, /!\url\.contains\(\[/, '链接要过滤 shell 元字符');
+            } else {
+              const cargoSrc = readSrc('src-tauri', 'Cargo.toml');
+              assert.match(cargoSrc, /thin-shell/, '联机版应当是 thin-shell 构建');
+              assert.match(readSrc('src-tauri', 'src', 'shell.rs'), /register_uri_scheme_protocol\("tauri"/,
+                '联机轻壳应接管 tauri:// 协议');
+              assert.ok(!rustHasOpen, '联机轻壳没有内置 HTTP 服务器，不应有 /__open 路由');
+            }
           });
         });
       });

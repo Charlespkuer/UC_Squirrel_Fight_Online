@@ -1,16 +1,4 @@
-/* ============================================================
- * online-battle.js — 联机战斗流程（客户端）
- * ------------------------------------------------------------
- * 一场联机战斗固定三步：
- *   ① `POST /api/battle`（服务端算完，返回 me / foe / result / settlement）；
- *   ② `Main.startBattle(foe, { me, result, sheetsReady: true, skipRecord: true, … })`
- *      只负责**播**，不跑 Sim、不发奖、不记录；
- *   ③ 随机挑战在同一场 `SfFight` 内展示服务端战果，停 1.5 s 后自动开宝箱；
- *      竞技/关卡的续战动作仍走各自原版结果容器。
- *
- * `sheetsReady` 很关键：服务端返回的 me/foe 已经做过套装与幻兽加成，
- * `startBattle` 必须跳过那一段，否则面板会被算两遍、回放和结算对不上。
- * ============================================================ */
+// online-battle.js — 联机战斗流程（客户端）
 (function () {
   'use strict';
 
@@ -18,8 +6,7 @@
   const Net = window.Net || {};
   let activeFlow = null;
 
-  /* 普通战斗录像默认只保留在客户端，服务端只留 60 分钟的重试窗口。
-   * 每个账号一份，最多 30 场，避免 localStorage 无限增长。 */
+  // 普通战斗录像默认只保留在客户端，服务端只留 60 分钟的重试窗口。
   const LOCAL_COMBAT_LIMIT = 30;
   function localCombatKey() {
     try {
@@ -61,7 +48,24 @@
       return flow;
     };
   }
+
+  // 「师父驾到」的奶量是师父等级×4；师父可能刚升级，进战斗前先向服务端要一次
+  // 当前等级并更新存档。失败不挡战斗：服务端 fight.js 在开打时也会兜底刷新。
+  async function refreshMasterLevel() {
+    try {
+      const st = window.State && State.state ? State.state() : null;
+      if (!st || !st.master || st.master.bot) return null;
+      const skillId = Number((window.State && State.MASTER_SKILL_ID) || 13);
+      const hasSkill = Array.isArray(st.skills) && st.skills.some((x) => Number(String(x).split(':')[0]) === skillId);
+      if (!hasSkill) return null;
+      return await O.post('/api/apprentice/refresh', {}, { timeoutMs: 6000 });
+    } catch (_) {
+      return null;
+    }
+  }
   async function requestMatch(body) {
+    await refreshMasterLevel();
+    if (body && Object.prototype.hasOwnProperty.call(body, 'rev')) body.rev = O.rev;
     const key = window.crypto && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
     try {
       const out = await O.post('/api/battle', body, { idemKey: key });
@@ -69,7 +73,6 @@
       return out;
     } catch (e) {
       if (!e || e.code !== 'NETWORK' || !O.ready) throw e;
-      // Retry the same intent, never pay for or generate a second battle.
       const out = await O.post('/api/battle', body, { idemKey: key });
       rememberCombat(body.kind, out);
       return out;
@@ -81,7 +84,6 @@
     try { return await O.post('/api/battle/chest', body, { preserveMirror: true }); }
     catch (e) {
       if (!e || e.code !== 'NETWORK' || !O.ready) throw e;
-      // The server records the chosen chest atomically, so this retry cannot grant twice.
       return O.post('/api/battle/chest', body, { preserveMirror: true });
     }
   }
@@ -91,11 +93,7 @@
 
   function toast(msg) { O.toast(msg); }
 
-  /* 原版普通战斗的战果 CG 只停 1.5 s（`fight` 第 2/3 帧 → 第 5 帧开宝箱），
-   * 没有「确定 / 领取宝箱」这类额外按钮。联机的战果页同样让它自己走掉。 */
-  const RESULT_AUTO_CLOSE_MS = 1500;
 
-  /** 战斗前把当前页按住（挑战页/关卡页都实现了），打完原样放回。 */
   function holdPage() {
     try {
       if (window.SfChallenge && SfChallenge.holdPageForBattle) return SfChallenge.holdPageForBattle();
@@ -106,10 +104,11 @@
   function restorePage(hold, target) {
     const t = target || {};
     try {
+      const tab = t.tab || (t.arenaPage ? 'arena' : '');
       if (hold && window.SfChallenge && SfChallenge.resumePageAfterBattle
-        && SfChallenge.resumePageAfterBattle(hold, t.tab, { keepSub: !!t.keepSub })) {
-        if (t.arenaPage && SfChallenge.goArenaPage) SfChallenge.goArenaPage(t.arenaPage);
-        else if (t.refreshGateAt != null && SfChallenge.refreshGateAt && hold.sub) SfChallenge.refreshGateAt(t.refreshGateAt);
+        && SfChallenge.resumePageAfterBattle(hold, tab, { keepSub: !!t.keepSub, arenaPage: t.arenaPage })) {
+        if (t.arenaPage) return true;
+        if (t.refreshGateAt != null && SfChallenge.refreshGateAt && hold.sub) SfChallenge.refreshGateAt(t.refreshGateAt);
         return true;
       }
     } catch (e) {}
@@ -121,9 +120,8 @@
     return false;
   }
 
-  /** 请求在**开打前**就被拒（体力不足 / 快照失效 / 网络失败）：只把按住的页面放出来。
-   *  不能走 `restorePage()` —— 它会按“打完一场”的语义清掉随机挑战名单，玩家去喝药再回来
-   *  就会看到一批新对手（用户 2026-11 报的“体力不足后回来刷新了”）。 */
+  // 请求在开打前就被拒（体力不足 / 快照失效 / 网络失败）：只把按住的页面放出来。
+  // 不能走 `restorePage()` —— 它会按“打完一场”的语义清掉随机挑战名单，玩家去喝药再回来
   function restorePageAfterRejectedRequest(hold, target) {
     try {
       if (hold && window.SfChallenge && SfChallenge.resumePageAfterFailedRequest
@@ -132,8 +130,7 @@
     return restorePage(hold, target);
   }
 
-  /** 战果弹窗前等底页真的挂回 `#ui`：消息页/师徒页等是异步 fetch + render 的，
-   *  `restorePage()` 只负责发起，同步返回；不等就会在底页回来前露出启动 95% 深色 canvas。 */
+  // 战果弹窗前等底页真的挂回 `#ui`：消息页等是异步 fetch + render 的，
   function waitForUiPage(limitMs) {
     const end = Date.now() + (Number(limitMs) || 1500);
     return new Promise((resolve) => {
@@ -149,15 +146,14 @@
     });
   }
 
-  /** 播一场服务端结果。`onSettle` 在播完后调用（弹战果页/回页面）。 */
+  // 播一场服务端结果。`onSettle` 在播完后调用（弹战果页/回页面）。
   function play(resp, opts) {
     const o = opts || {};
     const foe = resp && resp.foe;
     const me = resp && resp.me;
     const result = resp && resp.result;
-    /* 服务端没给整场录像就**不要开打**：`SfFight` 会自己 `Sim.simulate` 一遍，
-     * 于是"客户端播的胜负"和"服务端结算的胜负"可能相反（这就是用户报的
-     * 「胜利的战斗被结算为失败」）。宁可报错，也不要播一场假比赛。 */
+    // 服务端没给整场录像就不要开打：`SfFight` 会自己 `Sim.simulate` 一遍，
+    // 「胜利的战斗被结算为失败」）。宁可报错，也不要播一场假比赛。
     if (!me || !foe || !result || !Array.isArray(result.rounds) || !result.rounds.length) {
       toast('这场战斗缺少服务端录像，已取消。请重新发起。');
       if (window.__errs) window.__errs.push('online-battle: 响应缺少 result（' + (o.kind || '') + '）');
@@ -176,6 +172,8 @@
         Promise.resolve(Main.startBattle(foe, {
           me, result, sheetsReady: true, skipRecord: true, cost: 0,
           kind: o.kind || 'challenge',
+
+          holdUnderlay: o.holdUnderlay === true,
           useProps: false, collectDrops: !!resp.pickups, pickupPlan: resp.pickups,
           claimPickup: resp.pickups ? async index => {
             const body = { combatId: resp.combatId, index };
@@ -184,9 +182,11 @@
           } : undefined,
           skipChest: typeof o.claimChest !== 'function',
           rewardFor: o.rewardFor,
+
+          resultNote: o.resultNote,
           claimChest: o.claimChest,
           onClaimError: o.onClaimError,
-          /* 随机挑战与单机共用这一张自动战果；续战页仍由对应流程接管。 */
+
           skipResultPanel: !o.resultInBattle,
           onCancel: () => done(null),
           keepScreen: true,
@@ -203,7 +203,7 @@
     });
   }
 
-  /** 原版战果页：`SfFightResult` 在经典模式下就是原版 4692/3776 那一套。 */
+
   function resultPanel(spec) {
     const s = spec || {};
     if (window.SfFightResult && classic()) {
@@ -213,6 +213,11 @@
         kind: s.kind || 'result',
         title: s.title || '战斗结果',
         win: !!s.win,
+        neutral: s.neutral === true,
+        // 3822 竞技战果的两个席位：不传就只有「我」、等级和对手都空着。
+        player: s.player || null,
+        foe: s.foe || null,
+        arenaSubtitle: s.arenaSubtitle || '',
         recruit: s.recruit === true,
         exp: Number(s.exp) || 0,
         gold: Number(s.gold) || 0,
@@ -224,10 +229,11 @@
         onAutoClose: s.onAutoClose,
       }).catch((e) => { toast('战果界面加载失败：' + (e && e.message)); });
     }
-    /* 没有原版容器（素材没加载出来）时的兜底：只写文字，不做新界面。
-     * 自动收尾的页面在兜底里仍留一颗「确定」，否则弹窗永远关不掉。 */
+    // 没有原版容器（素材没加载出来）时的兜底：只写文字，不做新界面。
+    // 自动收尾的页面在兜底里仍留一颗「确定」，否则弹窗永远关不掉。
     const C = ui() && UI.classic;
-    const body = '<p>' + (s.text || '') + '</p>';
+    // 原版战果容器没起来时也得让玩家看到升级加了什么：把升级奖励卡接在正文后面。
+    const body = '<p>' + (s.text || '') + '</p>' + (C && C.upsHtml ? C.upsHtml(s.ups) : '');
     const actions = (s.actions && s.actions.length) ? s.actions
       : [{ label: '确定', run: s.onClose || (() => {}) }];
     if (C && C.modal) C.modal(s.title || '战斗结果', body, actions, { small: true });
@@ -242,7 +248,7 @@
   }
 
   let chestBusy = false;
-  async function claimChest(chest, win) {
+  async function claimChest(chest, win, onUps) {
     if (chestBusy || !chest || !chest.combatId) return false;
     chestBusy = true;
     try {
@@ -251,6 +257,8 @@
         win,
         claimChest: async index => {
           const out = await requestChest(chest.combatId, index);
+          // 宝箱里的经验可能升级：调用方要拿 ups 补升级奖励弹窗。
+          if (out && Array.isArray(out.ups) && typeof onUps === 'function') onUps(out.ups);
           return out;
         },
         onClaimError: e => toast(O.errText(e) + '；宝箱已保留，可以重试领取。'),
@@ -260,25 +268,28 @@
     finally { chestBusy = false; }
   }
 
-  async function pendingChests() {
+  async function pendingChests(preloaded) {
     try {
-      const data = await O.get('/api/battle/chest'), list = data.chests || [], c = ui() && UI.classic;
+      const data = preloaded || await O.get('/api/battle/chest'), list = data.chests || [], c = ui() && UI.classic;
       if (!list.length) { toast('所有战斗宝箱都已领取。'); return; }
       if (!c) return;
       const m = c.modal('待领战斗宝箱', '<p>共有 ' + Number(data.pendingCount || list.length) + ' 个宝箱未领取。断线或退出后，宝箱仍会保留。</p>' +
         '<p class="small-label">先领取最早一场的宝箱；每场只能获得一次奖励。</p>', [
         { label: '领取宝箱', cls: 'gold', run: async () => {
-          await claimChest(list[0]);
+          const ups = [];
+          await claimChest(list[0], undefined, (got) => ups.push(...got));
           if (O.ready && window.Main && Main.showHome) Main.showHome();
+          // 先回首页再弹升级奖励，避免首页重建把升级页一起换掉。
+          if (ups.length && window.UI && UI.classic && UI.classic.showLevelUps) {
+            UI.classic.showLevelUps(ups.sort((a, b) => a.level - b.level));
+          }
         } }, { label: '返回', cls: 'muted' },
       ], { small: true });
       return m;
     } catch (e) { toast(O.errText(e)); }
   }
 
-  /* ============================================================
-   * 随机挑战
-   * ============================================================ */
+
   async function random(opts) {
     const o = opts || {};
     const hold = holdPage();
@@ -296,15 +307,12 @@
     const extraUps = [];
     const winner = await play(resp, {
       kind: 'challenge', resultInBattle: true, extraUps,
-      // This only displays the settlement already granted by the server.
       rewardFor: () => st,
       claimChest: chest ? async index => { const out = await requestChest(chest.combatId, index); if (out.ups) extraUps.push(...out.ups); return out; } : undefined,
       onClaimError: e => toast(O.errText(e) + '；宝箱已保留，可以重试领取。'),
     });
     if (winner == null || !O.ready) return resp;
     restorePage(hold, o.target || { tab: 'random' });
-    // Match the standalone challenge flow: use its existing level-up choices,
-    // after the original result and chest have finished, without another result page.
     const ups = [...(st.ups || []), ...extraUps].sort((a, b) => a.level - b.level);
     if (ups.length && window.SfGuide) SfGuide.onLevelup(ups);
     if (ups.length && window.SfLevelUp) await new Promise(resolve => SfLevelUp.open(ups, resolve));
@@ -314,9 +322,7 @@
     return resp;
   }
 
-  /* ============================================================
-   * 天梯赛
-   * ============================================================ */
+
   async function opponents(query) {
     const q = query || {};
     const qs = [];
@@ -340,10 +346,7 @@
     if (resp.patch) O.applyPatch(resp.patch);
     const st = resp.settlement || {};
     const pickupUps = [];
-    /* 战果面板要盖在**天梯菜单**上：`keepScreen` 不换页，战斗页撤掉后 `#ui` 是空的，
-     * 露出来的是 canvas 上启动加载的 95% 深色底 —— 这就是「天梯胜利弹窗背景一片黑」。
-     * 先恢复天梯挑战页，再弹战果；close 做成幂等，自动收尾/按钮还会再调它。
-     * 原版 `rank.do` 也没有战后宝箱（只有积分/金杯/经验），所以这里不再开宝箱。 */
+
     let closed = false;
     const close = () => {
       if (closed) return true;
@@ -381,8 +384,7 @@
       if (st.robbed) lines.push('抢走对方 ' + st.robbed + ' 个金杯');
       if (st.drop) lines.push(lootLine(st.drop));
     }
-    /* 与单机版 `outcome()` 同样的三选一：继续挑战 / 查看录像 / 返回天梯赛。
-     * 复仇回到消息页，不把「继续挑战」误接成普通天梯。 */
+
     const again = typeof o.again === 'function' ? o.again : () => {
       const backMenu = () => { try { if (window.SfChallenge && SfChallenge.goArenaPage) SfChallenge.goArenaPage('menu'); } catch (e) {} };
       if (window.ClassicExtras && ClassicExtras.startRankFlow) ClassicExtras.startRankFlow(backMenu, { confirmed: true });
@@ -397,8 +399,7 @@
       { label: '返回天梯赛', run: close },
     ];
     resultPanel({
-      /* 天梯用原版 3776 的「天梯赛」战果容器；以前误传 `arena` 会套 3822 的
-       * 竞技场标题帧，失败时显示成「争夺季军」。 */
+
       kind: 'rank', title: st.win ? '天梯赛胜利' : '天梯赛失利', win: !!st.win,
       exp: st.exp, gold: 0, ups: [...(st.ups || []), ...pickupUps].sort((a, b) => a.level - b.level),
       text: lines.join('\u3000'),
@@ -408,12 +409,8 @@
     return resp;
   }
 
-  /* ============================================================
-   * 关卡连战
-   * ============================================================ */
-  /** 服务端拒绝关卡（挑战书不足 / 复活次数用完）时的出口。以前只 toast 一句就把玩家丢回
-   *  确认页，而经典确认页只有「战斗 / 返回」——这一轮永远结束不了，看起来就是「进不去挑战」。
-   *  （用户 2026-11：「复活的挑战书用完后会进不去挑战」） */
+
+
   function stageBlocked(stageId, e) {
     const err = e && e.body && e.body.error ? e.body.error : {};
     const extra = err.extra || {};
@@ -453,9 +450,7 @@
     const settle = st.settle || {};
     const tab = Math.floor((Number(stageId) - 1) / 6);
     const pickupUps = [];
-    /* 战果页要盖在**挑战页**上：`keepScreen` 不换页，战斗页撤掉后 `#ui` 是空的，
-     * 露出来的是 canvas 上最后一帧（启动加载 95%）—— 就是「关卡胜利背景一片深色」。
-     * 先把按住的挑战页放回来，再弹战果；close 做成幂等，下面的按钮还会再调它。 */
+
     let closed = false;
     const close = () => {
       if (closed) return true;
@@ -470,7 +465,7 @@
     if (st.prenticeLost) {
       resultPanel({
         kind: 'stage', title: '徒弟战败', win: false, ups: pickupUps,
-        text: '徒弟无能，打不过它！该师父您亲自上阵了！',
+        text: '徒弟无能，打不过它！该师父您亲自上阵了！（对方保留剩余血量）',
         actions: [{ label: '师父上阵', primary: true, run: () => { close(); stage(stageId); } },
           { label: '稍后继续', run: close }],
         onClose: close,
@@ -490,12 +485,10 @@
       lines.push(revives < 2 ? '可花 1 个挑战书复活，剩余复活次数 ' + (2 - revives) : '本轮 2 次复活机会已用完');
     }
     const actions = [{ label: '确定', primary: true, run: close }];
-    /* 用户 2026-10 口径：关卡胜利页「确定 / 继续挑战」位置对调（确定在左、继续挑战在右）。
-     * `SfFightResult` 按 actions 顺序摆键（同 rank 时保持数组顺序），所以用 push 而不是 unshift。 */
+    // `SfFightResult` 按 actions 顺序摆键（同 rank 时保持数组顺序），所以用 push 而不是 unshift。
     if (settle.win && !settle.complete) actions.push({ label: '继续挑战', run: () => { close(); stage(stageId); } });
     if (!settle.win) {
-      /* 复活次数用完时不能还给「复活再战」——服务端会拒绝，玩家点了只弹一句提示、没有出口；
-       * 直接给「结束本轮」，与单机版经典确认页的兜底一致。 */
+      // 复活次数用完时不能还给「复活再战」——服务端会拒绝，玩家点了只弹一句提示、没有出口；
       const revivesDone = settle.run && settle.run.revives != null ? Number(settle.run.revives) : 0;
       if (revivesDone < 2) actions.unshift({ label: '复活再战', run: () => { close(); stage(stageId); } });
       else actions.unshift({ label: '结束本轮', primary: true, run: () => {
@@ -513,9 +506,7 @@
     return resp;
   }
 
-  /* ============================================================
-   * 竞技场
-   * ============================================================ */
+
   async function arenaJoin(kind, opts) {
     const o = opts || {};
     try {
@@ -544,15 +535,31 @@
     const arena = resp.arena || {};
     const rw = arena.rewards || {};
     const pickupUps = [];
-    /* 与天梯/关卡同一条：先把按住的挑战页恢复，再弹竞技场战果，
-     * 否则 `#ui` 空着会露出 canvas 的启动 95% 深色底。 */
+    // 与天梯/关卡同一条：先把按住的挑战页恢复，再弹竞技场战果，
+    // 否则 `#ui` 空着会露出 canvas 的启动 95% 深色底。
     let closed = false;
     const back = () => {
       if (closed) return true;
       closed = true;
-      return restorePage(hold, o.target || { arenaPage: 'rules' });
+      return restorePage(hold, o.target || { tab: 'arena', arenaPage: 'rules' });
     };
-    const played = await play(resp, { kind: 'arena', extraUps: pickupUps });
+    // 与单机版同一条：竞技场每场打完都先摆原版战果页（`fight` 第 2/3 帧，7772），
+    // 半决赛 / 碎片场 / 幻兽场不发经验，`rewardFor` 返回 null：否则原版 `maxlevel` 会停在
+    const battleReward = () => {
+      const exp = Math.max(0, Math.round(Number(rw.exp) || 0));
+      return exp > 0 ? { exp, gold: 0, ups: rw.ups || [] } : null;
+    };
+
+    const arenaParts = [];
+    if (rw.phase !== 'semi') {
+      if (rw.shards) arenaParts.push('蓝色碎片 +' + rw.shards);
+      if (rw.hatch) arenaParts.push('孵化点 +' + rw.hatch);
+      if (rw.goldCup) arenaParts.push('金杯 +' + rw.goldCup);
+    }
+    const arenaNote = arenaParts.join('　');
+    const played = await play(resp, {
+      kind: 'arena', resultInBattle: true, extraUps: pickupUps, rewardFor: battleReward, resultNote: arenaNote,
+    });
     if (played == null) { if (O.ready) back(); return resp; }
     if (!O.ready) return resp;
     back();
@@ -563,10 +570,11 @@
       lines.push(rw.next === 'final' ? '晋级决赛' : '争夺季军');
       if (rw.gem) lines.push('获得 ' + rw.gem.name + ' ×1');
     } else {
-      lines.push('获得' + (rw.title || '名次'));
+      // 名次放进 3822 的副标题（决赛/季军赛没有「下一轮」），正文只写资源，避免重复。
       if (rw.exp) lines.push('经验 +' + rw.exp);
       if (rw.shards) lines.push('蓝色碎片 +' + rw.shards);
       if (rw.hatch) lines.push('孵化点 +' + rw.hatch);
+      if (rw.goldCup) lines.push('金杯 +' + rw.goldCup);
       if (rw.gem) lines.push('获得 ' + rw.gem.name + ' ×1');
       if (rw.buffNote) lines.push(rw.buffNote);
     }
@@ -574,7 +582,10 @@
     if (rw.phase === 'semi') actions.push({ label: rw.next === 'final' ? '开始决赛' : '开始季军赛', primary: true, run: () => { back(); arenaFight({ target: o.target }); } });
     actions.push({ label: '确定', primary: rw.phase !== 'semi', run: back });
     resultPanel({
-      kind: 'arena', title: rw.phase === 'semi' ? (rw.next === 'final' ? '晋级决赛' : '争夺季军') : '竞技场',
+      kind: 'arena',
+      title: rw.phase === 'semi' ? (rw.next === 'final' ? '晋级决赛' : '争夺季军') : '竞技场 · ' + (rw.title || '名次'),
+      player: resp.me, foe: resp.foe,
+      arenaSubtitle: rw.phase === 'semi' ? '' : '获得' + (rw.title || '名次'),
       win: !!arena.win, exp: rw.exp, gold: 0, ups: [...(rw.ups || []), ...pickupUps].sort((a, b) => a.level - b.level),
       text: lines.join('\u3000'), actions, onClose: back,
     });
@@ -582,16 +593,12 @@
     return resp;
   }
 
-  /* ============================================================
-   * 收徒（异步：有师父打师父，没有师父打本人）
-   * ============================================================ */
+  // 收徒（异步：有师父打师父，没有师父打本人）
   async function recruit(targetAccountId, opts) {
     const o = opts || {};
-    /* 从「好友」页发起时页面还在底下（本函数不自己挂页）：
-     *  `o.hold` 是 `SfChallenge.holdPageForBattle()` 按住的挑战页，打完原样还原；
-     *  从师徒 DOM 页发起则没有 hold，回落成 `action:'master'` 回师徒页。 */
+
     const hold = o.hold || null;
-    const fromFriends = !!(o.target && o.target.tab);
+    await refreshMasterLevel();
     const key = window.crypto && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
     let resp;
     const body = { targetAccountId: Number(targetAccountId) || 0, rev: O.rev };
@@ -599,7 +606,7 @@
       try {
         resp = await O.post('/api/apprentice/recruit', body, { idemKey: key });
       } catch (e) {
-        /* 同一个幂等键重试：服务器已经扣费/收徒时只回原结果，不会重复收费。 */
+
         if (!e || e.code !== 'NETWORK' || !O.ready) throw e;
         resp = await O.post('/api/apprentice/recruit', body, { idemKey: key });
       }
@@ -616,38 +623,35 @@
     const close = () => {
       if (closed) return true;
       closed = true;
-      return restorePage(hold, o.target || { action: 'master' });
+      return restorePage(hold, o.target || { tab: 'friends' });
     };
     const played = await play(resp, { kind: 'challenge', extraUps: pickupUps });
     if (played == null) { if (O.ready) close(); return resp; }
     if (!O.ready) return resp;
-    /* 先把挑战页/师徒页放回，再弹收徒结果；否则结果框背后是启动 95% 的深色 canvas。 */
+    // 先把挑战页放回，再弹收徒结果；否则结果框背后是启动 95% 的深色 canvas。
     close();
     await waitForUiPage();
     const lines = [];
     lines.push(st.recruited ? '收徒成功！' : '收徒挑战失败');
-    /* 有师父时服务端打的是师父（`via:'master'`）；输赢文案不能都写成「击败了师父」。 */
+    // 有师父时服务端打的是师父（`via:'master'`）；输赢文案不能都写成「击败了师父」。
     lines.push(st.win
       ? (st.via === 'master' ? '击败了对方的师父' : '对方没有师父，直接挑战本人')
       : (st.via === 'master' ? '被对方的师父打退了' : '被对方打退了'));
     if (st.exp) lines.push('经验 +' + st.exp);
     if (st.cost || st.energy) lines.push('花费 ' + Number(st.cost || 0) + ' 金松果与 ' + Number(st.energy || 0) + ' 体力');
-    /* 原版 `showFightResult`：`fightType == 2/3`（收徒）时把战果页的 `shoutu` 拨到第 1 帧，
-     * 即原版「收徒」收益栏；普通战果仍是第 3 帧空档。 */
+
     resultPanel({
       kind: 'result', title: st.recruited ? '收徒成功' : '收徒挑战',
       win: !!st.win, recruit: true,
       exp: st.exp, gold: 0, ups: [...(st.ups || []), ...pickupUps].sort((a, b) => a.level - b.level),
       text: lines.join('\u3000'),
-      actions: [{ label: fromFriends ? '返回好友' : '返回师徒', primary: true, run: close }], onClose: close,
+      actions: [{ label: '返回好友', primary: true, run: close }], onClose: close,
     });
     O.emit('apprentice', resp);
     return resp;
   }
 
-  /* ============================================================
-   * 好友切磋
-   * ============================================================ */
+
   async function wood(opts) {
     const o = opts || {}, hold = holdPage();
     let resp;
@@ -681,8 +685,8 @@
       return null;
     }
     if (resp.patch) O.applyPatch(resp.patch);
-    /* 与天梯/竞技同一条：切磋战果框要盖在好友页上，先把按住的挑战页恢复，
-     * 否则 `#ui` 空着会露出启动 95% 深色底。 */
+    // 与天梯/竞技同一条：切磋战果框要盖在好友页上，先把按住的挑战页恢复，
+    // 否则 `#ui` 空着会露出启动 95% 深色底。
     let closed = false;
     const close = () => {
       if (closed) return true;
@@ -703,35 +707,34 @@
     return resp;
   }
 
-  /* ============================================================
-   * 录像回放
-   * ============================================================ */
+
   async function replay(combatId, as, opts) {
     const o = opts || {};
     let data;
     try {
       data = await O.get('/api/combat/' + encodeURIComponent(combatId) + (as ? '?as=' + as : ''));
     } catch (e) {
-      /* 服务端只长期保留天梯；普通战斗超过 60 分钟后从本地缓存回放。 */
+      // 服务端只长期保留天梯；普通战斗超过 60 分钟后从本地缓存回放。
       data = findLocalCombat(combatId);
       if (!data) {
         toast(O.errText(e));
         return null;
       }
     }
-    /* 优先使用服务器保存的战斗体，旧录像缺少面板时才退回空外观。 */
+
     const foe = o.foe || data.foe || { name: (data.result.names && data.result.names[1]) || '对手', level: 1, hp: 1, maxHp: 1,
       weapons: [], skills: [], gears: [], pets: [], effects: {} };
     const maxHp = Array.isArray(data.result.maxHp) ? data.result.maxHp : [1, 1];
     const names = Array.isArray(data.result.names) ? data.result.names : ['我', '对手'];
     const me = o.me || data.me || { name: names[0], level: 1, hp: maxHp[0], maxHp: maxHp[0], weapons: [], skills: [], gears: [], pets: [], effects: {} };
-    /* 征战是共享血量接力：这一场 BOSS 的起始血量可能低于 maxHp，回放必须保留
-     * `foe.hp`，否则每段录像都会从满血开始、和战斗过程对不上。旧录像没有 hp 时回落满血。 */
+    // 征战是共享血量接力：这一场 BOSS 的起始血量可能低于 maxHp，回放必须保留
+    // `foe.hp`，否则每段录像都会从满血开始、和战斗过程对不上。旧录像没有 hp 时回落满血。
     const foeHp = Math.max(1, Math.min(maxHp[1], Number(foe.hp) || maxHp[1]));
     const meHp = Math.max(1, Math.min(maxHp[0], Number(me.hp) || maxHp[0]));
     const f = Object.assign({}, foe, { name: names[1], hp: foeHp, maxHp: maxHp[1] });
     const self = Object.assign({}, me, { name: names[0], hp: meHp, maxHp: maxHp[0] });
-    const played = await play({ me: self, foe: f, result: data.result }, { kind: 'replay', allowSkip: true });
+    const played = await play({ me: self, foe: f, result: data.result },
+      { kind: 'replay', allowSkip: true, holdUnderlay: o.holdUnderlay === true });
     if (played != null && O.ready && o.onDone) o.onDone(data);
     return data;
   }

@@ -95,7 +95,7 @@ function setup() {
     const task = env.__skip.perform(rec, rec.o, rec.result, control);
     return { rec, control, task, log, attack };
   }
-  return { env, rafs, frame, nextTimer, flush, until, battle };
+  return { env, rafs, frame, nextTimer, flush, until, battle, clip };
 }
 
 async function test() {
@@ -163,6 +163,29 @@ async function test() {
   const natural = g.battle({ rounds: [], skipChest: true });
   await g.until(() => natural.log.end === 1, '自然结束继续执行真实结算'); await natural.task;
   assert.equal(natural.log.reward, 1); assert.equal(natural.rec.result.skipped, false);
+
+  /* 低帧率安卓：渲染节拍取模推进，rAF 可能整帧跳过 stopIdx；帧号回绕后旧实现永远等不到停止帧，
+   * 倒地 / 胜利动作就会无限重播。 */
+  const wrap = setup();
+  const wrapRec = { sleepers: new Set(), rafs: [], stopped: false, skipped: false, settling: false, speed: 1 };
+  wrap.env.__skip.setLive(wrapRec);
+  const deathClip = wrap.clip(10);
+  let settled = false;
+  const wrapped = wrap.env.__skip.playClip(deathClip).then(() => { settled = true; });
+  await wrap.flush();
+  const step = async (frame) => {
+    deathClip.frame = frame;
+    const pending = [...wrap.rafs.values()]; wrap.rafs.clear();
+    for (const fn of pending) fn(0);
+    await wrap.flush();
+  };
+  await step(8);
+  assert.equal(settled, false, '未到停止帧不能提前收口');
+  await step(0);
+  assert.equal(settled, true, '帧号回绕时必须收口，不能无限重播倒地动作');
+  assert.equal(deathClip.playing, false);
+  assert.equal(deathClip.frame, 9, '应当停在动作末帧');
+  await wrapped;
 }
 
 test().then(() => console.log('PASS 经典跳过及时终止演出，保留战果、宝箱与一次结算；取消不结算'))

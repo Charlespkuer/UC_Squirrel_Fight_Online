@@ -149,6 +149,12 @@ const identityFile = path.join(GEN, '.ssdz-build-identity');
 const identity = CONFIG.identifier + ':' + (CONFIG.mainBinaryName || 'squirrel_fight');
 let priorIdentity = '';
 try { priorIdentity = fs.readFileSync(identityFile, 'utf8'); } catch (_) {}
+/* 远程构建复用上一轮 gen/apple；旧 Tauri 工程可能还写着已经不存在的 `node tauri` 脚本。
+ * 工程是生成物，缺当前 CLI 的入口时重新 init，不保留手改。 */
+if (fs.existsSync(GEN) && !fs.existsSync(path.join(GEN, 'tauri'))) {
+  fs.rmSync(GEN, { recursive: true, force: true, maxRetries: 5 });
+  info('gen/apple 缺少当前 CLI 的脚本入口，重新生成工程');
+}
 if (fs.existsSync(path.join(GEN, 'project.yml')) && priorIdentity !== identity) {
   if (path.resolve(GEN) !== path.join(TAURI, 'gen', 'apple')) fail('生成工程路径不正确');
   fs.rmSync(GEN, { recursive: true, force: true, maxRetries: 5 });
@@ -157,6 +163,15 @@ if (fs.existsSync(path.join(GEN, 'project.yml')) && priorIdentity !== identity) 
 if (!fs.existsSync(path.join(GEN, 'project.yml'))) {
   info('首次生成 gen/apple');
   run(process.execPath, [CLI, 'ios', 'init', '--ci'], { cwd: TAURI });
+}
+/* 新版 Xcode 工程脚本用 `node tauri` 找 CLI；`tauri ios init` 在部分缓存工作区
+ * 不会留下这个入口，缺了就补一个转发脚本（工程本身仍是生成物）。 */
+const cliShim = path.join(GEN, 'tauri');
+if (!fs.existsSync(cliShim)) {
+  fs.writeFileSync(cliShim,
+    "#!/usr/bin/env node\nrequire('../../node_modules/@tauri-apps/cli/tauri.js');\n",
+    { mode: 0o755 });
+  ok('gen/apple/tauri：补 CLI 入口');
 }
 fs.writeFileSync(identityFile, identity);
 
@@ -336,6 +351,9 @@ const scene = sceneInfo.out.trim();
 const display = plistGet('CFBundleDisplayName').out.trim();
 const shortVersion = plistGet('CFBundleShortVersionString').out.trim();
 const buildNumber = plistGet('CFBundleVersion').out.trim();
+/* iOS 模板把可执行文件命名成产品名（如 `Squirrel Fight Online`），
+ * 不是 `mainBinaryName`（`squirrel_fight_online`）；必须以 Info.plist 为准。 */
+const appExecutable = plistGet('CFBundleExecutable').out.trim() || conf.mainBinaryName || 'squirrel_fight';
 if (bundleId !== CONFIG.identifier) fail('CFBundleIdentifier 不对：' + bundleId + '，应为 ' + CONFIG.identifier);
 if (shortVersion !== version) fail('包内版本号不是 ' + version + '：' + shortVersion + '（工程文件没同步？）');
 if (buildNumber !== BUILD_NUMBER) fail('包内构建号不是 ' + BUILD_NUMBER + '：' + buildNumber);
@@ -356,7 +374,7 @@ if (LEGACY) {
 } else if (!sceneInfo.ok || scene.indexOf('"UIApplicationSupportsMultipleScenes":true') < 0) {
   fail('缺少 UIScene 生命周期（iOS 26+ 会启动即崩）：' + scene);
 }
-const lipo = capture('lipo', ['-info', path.join(app, conf.mainBinaryName || 'squirrel_fight')]);
+const lipo = capture('lipo', ['-info', path.join(app, appExecutable)]);
 if (!/arm64/.test(lipo.out)) fail('可执行文件不是 arm64：' + lipo.out);
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ssdz-ipa-'));
@@ -370,7 +388,7 @@ try {
 
 const signed = capture('codesign', ['-dv', app]).ok;
 ok('IPA：' + out + '（' + mb(fs.statSync(out).size) + '）');
-console.log('  App：' + path.relative(ROOT, app) + '（' + mb(fs.statSync(path.join(app, conf.mainBinaryName || 'squirrel_fight')).size) + ' 可执行文件）');
+console.log('  App：' + path.relative(ROOT, app) + '（' + mb(fs.statSync(path.join(app, appExecutable)).size) + ' 可执行文件）');
 console.log('  Bundle：' + bundleId + '　显示版本：' + label + '　包内版本：' + version + '　构建号：' + BUILD_NUMBER + '　最低 iOS：' + minOs + '　设备族：iPhone+iPad');
 console.log('  显示名：' + display + '　方向：横屏　签名：' + (signed ? '已签名（意外）' : '未签名'));
 console.log('  模式：' + (LEGACY ? 'iOS 15~25 传统生命周期（无 UIScene）' : 'iOS 26+ UIScene 生命周期'));

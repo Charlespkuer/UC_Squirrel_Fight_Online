@@ -1,33 +1,15 @@
-/* ============================================================
- * debug.js — 开发调试开关面板
- *
- * 用 Ctrl+Shift+D 或右上角「调试」按钮打开。所有开关只读写本地
- * localStorage 的 ssdz_debug 项，不写进正式存档 ssdz_save_v1，
- * 删除这一项（或点「全部关闭」）即可完全恢复原状。
- *
- * 其它模块按需读取：Debug.enabled('infiniteEnergy')、Debug.numberStretch()。
- * ============================================================ */
+// debug.js — 开发调试开关面板
 
-/* ------------------------------------------------------------
- * 目录：开发调试开关面板
- * Ctrl+F 搜节号（如「【DBG1】」）直达对应代码块。
- *
- *  【DBG1】开关存取  【DBG2】开关表  【DBG3】一次性工具
- *  【DBG4】面板构建与渲染  【DBG5】导出 window.Debug
- * ------------------------------------------------------------ */
 (function () {
   'use strict';
 
-  /* 开发者开关：false = 经典界面不显示调试按钮/面板，调试开关也不生效；
-   * true  = 经典界面也照常可用。需要时只改这一行。
-   * ⚠ 提交前必须保持 false：`test-ssfight-render` 的 checkDualSaveAndDebugGate 按这条断言
-   *   （经典界面默认隐藏调试入口，只保留这个源码开关）。本地调试临时改 true 别一起提交。 */
+  // 开发者开关：false = 经典界面不显示调试按钮/面板，调试开关也不生效；
+  // ⚠ 提交前必须保持 false：`test-ssfight-render` 的 checkDualSaveAndDebugGate 按这条断言
+  // （经典界面默认隐藏调试入口，只保留这个源码开关）。本地调试临时改 true 别一起提交。
   const DEBUG_IN_CLASSIC = true;
 
-  /* 【快进 24 小时】把「当前存档」的调试时钟偏移加到 Date.now 上。
-   * 偏移存在各自槽位的 `debugClockOffset` 里：经典/现代两套存档互不影响；
-   * 切换界面后 `State.state()` 变了，这里读到的就是另一套的偏移。
-   * 只改 Date.now（游戏内日期都从它派生），不碰系统时间。 */
+  // 把「当前存档」的调试时钟偏移加到 Date.now 上。
+  // 偏移存在各自槽位的 `debugClockOffset` 里：经典/现代两套存档互不影响；
   const nativeDateNow = Date.now.bind(Date);
   function debugClockOffset() {
     try {
@@ -40,7 +22,7 @@
     Date.__ssdzDebugClock = true;
   }
 
-  /** 当前是不是经典界面。只在浏览器有 UI 时判断；纯状态测试/无 UI 宿主视为允许。 */
+
   function classicUiActive() {
     try {
       if (window.UI && typeof UI.currentUiMode === 'function') return UI.currentUiMode() === 'classic';
@@ -49,36 +31,24 @@
   }
   function debugAllowed() { return DEBUG_IN_CLASSIC || !classicUiActive(); }
 
-  /* ============================================================
-   * 【DBG1】开关存取（localStorage 隔离）
-   * ============================================================ */
+
   const STORE_KEY = 'ssdz_debug';
-  /* 开关的默认值。新增开关要同时加进这里与下面的 TOGGLES；
-   * set() 以 TOGGLES 为准，所以这里漏了也不会出现「开关点不动」的老问题
-   * （历史上 noTowerCost / endlessCoin 就漏在这里过，那两个开关于是形同虚设；
-   * 2026-10 已按用户口径删掉 —— 见下面 TOGGLES 里的说明）。 */
+
   const defaults = { infiniteEnergy: false, godMode: false, shortDay: false, noUpgradeFail: false, freeUpgrade: false, freeShop: false, noStageCost: false, noCoinCost: false, battleStats: false };
   const state = Object.assign({}, defaults);
   try {
     const raw = localStorage.getItem(STORE_KEY);
     if (raw) Object.assign(state, JSON.parse(raw));
   } catch (e) {}
-  // 首页位图数字的横向拉伸比：固定值，图集里的数字比参考图窄
   const NUMBER_STRETCH = 1.25;
 
   function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {} }
   function enabled(key) { return debugAllowed() && state[key] === true; }
   function get(key) { return debugAllowed() ? state[key] : false; }
   function numberStretch() { return NUMBER_STRETCH; }
-  // 位图可能比脚本晚加载完成，图就绪后按当前宽度重画一次
   window.addEventListener('load', () => { if (window.UI && UI.renderNumbers) UI.renderNumbers(); });
 
-  /* ============================================================
-   * 【DBG2】开关表
-   * ============================================================ */
-  // ---------- 开关表 ----------
-  // on(session) 只在玩家本次手动开启时触发（session === true）；
-  // 启动时恢复已保存的开关只还原标记，不做副作用，等游戏自己按标记运行。
+
   const TOGGLES = [
     {
       key: 'infiniteEnergy', label: '无限体力',
@@ -90,8 +60,6 @@
       note: '一天视为 12 小时：中午 12 点也算新的一天。每日礼包、免费抽奖、每日任务、天梯今日场次、弟子日供、师父踢人、真化次数、VIP 每日、挑战塔当天刷新的 boss 等，全部会在 12 点再刷一次（金杯商店的限兑是按周的，不受影响）',
       on() {
         if (!window.State || !State.state()) return;
-        // 打开时如果已经是下午，日期键会直接跳到「第二天」——手动跑一次每日检查，
-        // 让所有每日刷新立刻生效，不用等下一次进首页。
         if (State.refreshDaily) State.refreshDaily();
         State.save();
         if (window.UI && UI.refreshHome) UI.refreshHome();
@@ -110,8 +78,7 @@
     { key: 'freeUpgrade', label: '升级无需消耗', note: '升级不扣金松果、不扣武器/技能卷轴，也不受等级限制' },
     { key: 'freeShop', label: '道具免费', note: '商店购买不扣金松果' },
     { key: 'noStageCost', label: '关卡不耗挑战书', note: '入场与复活都不消耗挑战书；挑战塔 / 无尽挑战塔的进层也一样不消耗' },
-    /* 2026-10 用户口径：原来这条是「无尽试炼币拉满」（开局送 9999 试炼币，且实测没生效），
-     * 改成「试炼币不消耗」——试炼商店（买 / 刷新 / 买铸币）与铸币商店结账都不扣代币。 */
+
     { key: 'noCoinCost', label: '试炼币不消耗', note: '试炼商店（买增益 / 刷新货架 / 买铸币）与铸币商店购买都不扣代币，余额不足也照买' },
   ];
   function set(key, value, session) {
@@ -132,12 +99,8 @@
     return state;
   }
 
-  // 一键升级目标等级：与游戏满级一致（State.MAX_PLAYER_LEVEL = 90）
   const MAX_LEVEL = (window.State && State.MAX_PLAYER_LEVEL) || 90;
-  /* ============================================================
-   * 【DBG3】一次性工具（重置/发放/遗忘）
-   * ============================================================ */
-  // ---------- 一次性工具 ----------
+
   const ACTIONS = [
     { label: '一键满级', note: '从当前等级一路走「真实升级流程」到 ' + MAX_LEVEL + ' 级：属性成长、升级礼包（道具）与武器/技能「三选一」都会照常发放；攒下的三选一和自选属性点会在结束后弹窗处理（弹窗里有「全部随机」「平均分配」）',
       run() {
@@ -146,7 +109,6 @@
         if (from >= MAX_LEVEL) return '已经是 ' + MAX_LEVEL + ' 级或更高（调试上限 ' + MAX_LEVEL + '）';
         const gain = { power: 0, agility: 0, speed: 0, hp: 0 };
         let levels = 0, gifts = 0, books = 0, picks = 0, chests = 0;
-        // 每次只喂「当前等级升下一级」所需的经验，走完整的 gainExp 流程
         for (let guard = 0; S.level < MAX_LEVEL && guard < 200; guard++) {
           const ups = State.gainExp(GData.nextExp(S.level));
           if (!ups.length) break;
@@ -161,13 +123,11 @@
         }
         if (window.UI && UI.refreshHome) UI.refreshHome();
         renderOwned();
-        // 一路上攒下的三选一与自选属性点：直接弹出处理（一键满级会攒几十组/几十点）
         if (window.UI && UI.classic && UI.classic.promptLevelUpChoices) UI.classic.promptLevelUpChoices();
         return '等级 ' + from + ' → ' + S.level + '（' + levels + ' 级）：力量+' + gain.power + ' 敏捷+' + gain.agility +
           ' 速度+' + gain.speed + ' 生命+' + gain.hp + '，升级礼包 ' + gifts + ' 件' + (books ? '、属性书 ' + books + ' 本' : '') +
           (chests ? '、金宝箱 ' + chests + ' 个' : '') +
-          (picks ? '，武器/技能三选一 ' + picks + ' 组' : '，没有新的武技可选') +
-          (S.freePoints ? '，本次分配弹窗里还有 ' + S.freePoints + ' 点没点完' : '');
+          (picks ? '，武器/技能三选一 ' + picks + ' 组' : '，没有新的武技可选');
       } },
     { label: '一键升级', note: '按正常升级结算一次经验，属性成长、升级礼包与武器/技能三选一照常；到 ' + MAX_LEVEL + ' 级就停下',
       run() {
@@ -184,14 +144,12 @@
         return '升到 ' + last.level + ' 级（力量+' + sum('power') + ' 敏捷+' + sum('agility') +
           ' 速度+' + sum('speed') + ' 生命+' + sum('hp') + '）' + (gifts ? '，礼包 ' + gifts + ' 件' : '') +
           (picks ? '，武器/技能三选一 ' + picks + ' 组' : '') +
-          (last.autoPoint ? '，' + last.autoPointName + '占比过低已自动补 1 点' : '') +
-          (S.freePoints ? '，本次分配弹窗里还有 ' + S.freePoints + ' 点没点完' : '');
+          (last.autoPoint ? '，' + last.autoPointName + '占比过低已自动补 1 点' : '');
       } },
     { label: '金松果 +10000', run() { State.addGold(10000, { count: false }); State.save(); UI.refreshHome(); return '金松果 +10000'; } },
     { label: '全道具 +10', run() {
         const S = State.state();
         let n = 0;
-        // 金松果/金杯/经验不是背包道具，跳过（要加它们用上面的「快速获取物品」）。
         propMap.each((id) => {
           if (+id > 0 && !CURRENCY_PROPS[+id]) {
             S.props[id] = (S.props[id] || 0) + 10;
@@ -236,21 +194,15 @@
         return '已恢复支持作者提示（若首页没有立刻弹出，回一次首页或关掉当前弹窗即可）';
       } },
   ];
-  /* 2026-10 用户口径：删掉「清空无尽塔剧情进度」这条调试工具（面板上不再提供）。
-   * 底层接口 `Tower._debugResetStory` 保留 —— 无尽塔的剧情回归用例要靠它复位。 */
+  // 底层接口 `Tower._debugResetStory` 保留 —— 无尽塔的剧情回归用例要靠它复位。
 
-  /** 彻底重置账号：清除武器与技能，回到全新开局。
-   *  State.newGame 会重建 NEW_PLAYER（weapons = []、skills = []），
-   *  所以升级过程中随机领悟的武器/技能也会一并消失。
-   *  weaponId 可以指定开局武器；'random' 表示从原版武器表里随机挑一把。 */
+
   function resetAccount(name, weaponId) {
     const S = State.state();
     const who = typeof name === 'string' && name.trim() ? name.trim() : (S && S.name) || '小松鼠';
     for (const def of TOGGLES) state[def.key] = false;
     save();
-    /* 不清整条 saveKey：现在这是一份双界面槽位存档，删掉会把另一界面的进度也带走。
-     * 新开局只覆盖当前界面槽位，另一槽由 State.newGame/save 原样保留。 */
-    // 默认采用无武技的普通开局；调试时也可指定武器。
+    // 不清整条 saveKey：现在这是一份双界面槽位存档，删掉会把另一界面的进度也带走。
     let chosen = null;
     const list = State.weaponList ? State.weaponList() : [];
     if (weaponId === 'random' && list.length) {
@@ -259,8 +211,7 @@
       chosen = list.find((w) => w.id === Number(weaponId)) || null;
     }
     State.newGame(who, Object.assign({ force: true }, chosen ? { weaponId: chosen.id, weaponLevel: 1 } : {}));
-    /* 新档是 classic，但当前页可能还是旧模式/旧等级的 DOM；只 refreshHome 只会改数字，
-     * 不会重画整页，于是会出现"经典 + 现代混在一起"且引导不启动。直接重进首页。 */
+
     try {
       if (window.Main && Main.showHome) Main.showHome();
       else if (window.UI && UI.refreshHome) UI.refreshHome();
@@ -273,7 +224,7 @@
     };
   }
 
-  /** 开局武器下拉：普通开局（2级领悟武技）+ 全部武器 + 随机。 */
+
   function weaponOptions(selected) {
     const list = State.weaponList ? State.weaponList() : [];
     let html = '<option value="default"' + (selected === 'default' ? ' selected' : '') + '>普通开局：2级领悟武技</option>';
@@ -283,7 +234,7 @@
     return html;
   }
 
-  /** 快速获取物品用的道具下拉：字典里的全部道具；金松果/金杯/经验标注成货币。 */
+
   function itemOptions() {
     const rows = [];
     propMap.each((id, v) => {
@@ -296,13 +247,13 @@
     }).join('');
   }
 
-  /** 武器/技能下拉：字典全表，按编号排序。 */
+
   function wsOptions(kind) {
     const rows = (kind === 'skill' ? State.skillList() : State.weaponList()) || [];
     return rows.map((r) => '<option value="' + r.id + '">' + r.id + ' ' + esc(r.name) + '</option>').join('');
   }
 
-  /** 直接获得/改等级指定武器、技能（等级 1~15）。 */
+
   function grantWS(kind, id, level) {
     const S = State.state ? State.state() : null;
     if (!S) return '还没有存档，先开始游戏';
@@ -315,7 +266,7 @@
       : r.msg;
   }
 
-  /** 遗忘指定武器、技能。 */
+
   function forgetWS(kind, id) {
     const S = State.state ? State.state() : null;
     if (!S) return '还没有存档，先开始游戏';
@@ -326,7 +277,7 @@
     return r.ok ? '已遗忘【' + r.name + '】　武技 ' + r.total + '/' + r.limit : r.msg;
   }
 
-  /** 无尽塔增益：下拉全表（编号 + 名称 + 稀有度/类型）。 */
+
   function buffOptions() {
     const rows = (window.TowerData && TowerData.BUFFS) || [];
     const rar = (window.TowerData && TowerData.RARITY_NAME) || ['普通', '稀有', '史诗', '传奇'];
@@ -334,7 +285,7 @@
     return rows.map((b) => '<option value="' + b.id + '">' + b.id + ' ' + esc(b.name) +
       '（' + (rar[b.rarity] || '') + '·' + (kind[b.kind] || '') + '）</option>').join('');
   }
-  /** 无尽塔专属：立即获得指定增益（走 Tower.debugGrantBuff）。 */
+
   function grantBuff(id) {
     if (!(window.Tower && Tower.debugGrantBuff)) return '当前版本没有这个接口';
     const r = Tower.debugGrantBuff(id);
@@ -342,7 +293,7 @@
     if (window.TowerUI && TowerUI.openEndless && State.state().endless && State.state().endless.run) TowerUI.openEndless();
     return r.ok ? '获得【' + r.buff.name + '】' + (r.granted ? '（永久槽位 +' + r.granted + '）' : '') : (r.msg || '没成功');
   }
-  /** 无尽塔专属：立即失去指定增益（走 Tower.debugLoseBuff）。 */
+
   function loseBuff(id) {
     if (!(window.Tower && Tower.debugLoseBuff)) return '当前版本没有这个接口';
     const def = (window.TowerData && TowerData.BUFF_BY_ID && TowerData.BUFF_BY_ID[id]) || null;
@@ -351,8 +302,8 @@
     if (window.TowerUI && TowerUI.openEndless && State.state().endless && State.state().endless.run) TowerUI.openEndless();
     return r.ok ? '失去【' + ((def && def.name) || id) + '】' : (r.msg || '没成功');
   }
-  /** 无尽塔专属调试：**立刻生成一个铸币商店**（跳过 5%~10% 的概率与层区间判定）。
-   *  走正式开店路径（掷货架 / 讨价还价对折 / C59 进门币都照常），只是不占「本组已刷过」的名额。 */
+  // 无尽塔专属调试：立刻生成一个铸币商店（跳过 5%~10% 的概率与层区间判定）。
+  // 走正式开店路径（掷货架 / 讨价还价对折 / C59 进门币都照常），只是不占「本组已刷过」的名额。
   function spawnMintShop() {
     if (!(window.Tower && Tower._debugSpawnMintShop)) return '当前版本没有这个接口';
     const r = Tower._debugSpawnMintShop();
@@ -361,8 +312,7 @@
     renderOwned();
     return '已在第 ' + r.layer + ' 层生成铸币商店（' + r.slots + ' 件货）';
   }
-  /** 无尽塔专属调试：**立刻生成一个普通（试炼）商店** —— 与铸币商店按钮同一口径，
-   *  只是货架换回试炼币交易，关掉后回去继续打。 */
+
   function spawnShop() {
     if (!(window.Tower && Tower._debugSpawnShop)) return '当前版本没有这个接口';
     const r = Tower._debugSpawnShop();
@@ -371,7 +321,7 @@
     renderOwned();
     return '已在第 ' + r.layer + ' 层生成普通商店（' + r.slots + ' 件货）';
   }
-  /** 无尽塔专属调试：**快速爬塔** —— 当前层数 ±1（没有对局时先开一局，落在第 1 层）。 */
+
   function shiftEndlessLayer(delta) {
     if (!(window.Tower && Tower._debugShiftEndlessLayer)) return '当前版本没有这个接口';
     const r = Tower._debugShiftEndlessLayer(delta);
@@ -380,14 +330,14 @@
     refreshEndlessPage();
     return '无尽塔：现在是第 ' + r.layer + ' 层';
   }
-  /** 无尽塔界面刷新：有对局就重画无尽主界面（与 grantBuff / shiftEndlessLayer 同一行为）。 */
+
   function refreshEndlessPage() {
     try {
       if (window.TowerUI && TowerUI.openEndless && window.State && State.state()
           && State.state().endless && State.state().endless.run) TowerUI.openEndless();
-    } catch (e) { /* 界面刷新失败不影响数值 */ }
+    } catch (e) {  }
   }
-  /** 无尽塔专属调试：**直接发试炼币**（数量由面板输入框决定，等价于 E02/E03）。 */
+
   function grantEndlessCoins(count) {
     if (!(window.Tower && Tower._debugGrantCoins)) return '当前版本没有这个接口';
     const r = Tower._debugGrantCoins(count);
@@ -396,7 +346,7 @@
     refreshEndlessPage();
     return '试炼币 +' + r.amount + '（第 ' + r.layer + ' 层现有 ' + r.total + '）';
   }
-  /** 无尽塔专属调试：**直接发铸币**（数量由面板输入框决定，等价于 E09/E10）。 */
+
   function grantEndlessMint(count) {
     if (!(window.Tower && Tower._debugGrantMint)) return '当前版本没有这个接口';
     const r = Tower._debugGrantMint(count);
@@ -406,9 +356,7 @@
     return '铸币 +' + r.amount + '（现有 ' + r.total + ' 枚）';
   }
 
-  /* 调试所得账本的外壳：操作前快照 → 执行 → 记录净增量。
-   * 所有「直接发东西」的按钮都从这里走，系统页才能按索引只回收调试部分。
-   * 不包裹「遗忘」「重置每日」这类**减少/不改变物品**的操作。 */
+  // 调试所得账本的外壳：操作前快照 → 执行 → 记录净增量。
   function traceDebug(label, fn) {
     let before = null;
     try { before = (window.State && State.debugSnapshot) ? State.debugSnapshot() : null; } catch (e) {}
@@ -417,11 +365,11 @@
     return out;
   }
 
-  /* 8 金松果 / 15 经验 / 40 金杯在原版里就是货币或经验值，不是背包道具：
-   * 挂进背包只是个用不掉的死物（useType 0/3），所以取物时直接加到对应字段上。 */
+  // 8 金松果 / 15 经验 / 40 金杯在原版里就是货币或经验值，不是背包道具：
+  // 挂进背包只是个用不掉的死物（useType 0/3），所以取物时直接加到对应字段上。
   const CURRENCY_PROPS = { 8: 'gold', 40: 'goldCup', 15: 'exp' };
-  /** 直接往背包里加道具（调试用，不扣任何货币），并刷新首页/背包。
-   *  仍然遵守 9999 的单件上限；金松果/金杯/经验走各自的货币字段。 */
+  // 直接往背包里加道具（调试用，不扣任何货币），并刷新首页/背包。
+  // 仍然遵守 9999 的单件上限；金松果/金杯/经验走各自的货币字段。
   function grantItem(id, count) {
     const S = State.state ? State.state() : null;
     if (!S) return '还没有存档，先开始游戏';
@@ -455,19 +403,13 @@
     return '获得 ' + def.name + ' ×' + added + '（现有 ' + S.props[id] + ' 个' + (S.props[id] >= cap ? '，已达上限 ' + cap : '') + '）';
   }
 
-  /* ============================================================
-   * 【DBG4】面板构建与渲染
-   * ============================================================ */
-  // ---------- 面板 ----------
+
   let panel = null, gear = null, drag = null;
-  /* 玩家手动拖过面板之后就不再让面板跟内屏走（按钮始终跟随）。 */
+
   let panelPinned = false;
   let layoutBound = false;
 
-  /** 游戏**内屏**的可见包围盒：经典/现代界面都是 `#ui`（1150×690 设计空间）经
-   *  `Main.resizeLayout()` 等比缩放后的那个矩形。窗口比例和舞台不一致时，窗口四周会留黑边，
-   *  `position:fixed` 贴的是**外框**（窗口），会掉进黑边里；这里改成按内屏的矩形定位。
-   *  `#ui` 还没挂上（启动最早的一瞬间）时退回窗口尺寸。 */
+
   function stageRect() {
     let r = null;
     try {
@@ -480,13 +422,12 @@
     const vh = Math.max(1, de.clientHeight || window.innerHeight || 1);
     return { left: 0, top: 0, right: vw, bottom: vh, width: vw, height: vh, windowFallback: true };
   }
-  /** 把入口按钮（以及没被拖过的面板）贴到内屏的右上角。
-   *  尺寸用 getBoundingClientRect 量：按钮本身是 fixed + 不缩放，所以这里只需要平移。 */
+  // 把入口按钮（以及没被拖过的面板）贴到内屏的右上角。
   function layoutDebugUi() {
     if (!gear) return;
     const r = stageRect();
     const margin = 6;
-    /* 按钮隐藏时 offsetWidth 是 0，用一个够用的兜底宽度（实测约 58×34）。 */
+
     const gw = Math.max(28, gear.offsetWidth || 58);
     const gh = Math.max(20, gear.offsetHeight || 34);
     const gearLeft = Math.max(r.left + 2, r.right - margin - gw);
@@ -496,16 +437,15 @@
     gear.style.top = Math.round(gearTop) + 'px';
     if (!panel) return;
     const room = Math.max(160, r.bottom - (gearTop + gh + 8) - 8);
-    /* 面板高度也按内屏算（内联样式优先于 CSS 里的 100vh 兜底），别让它伸到黑边/状态栏外面。 */
+
     panel.style.maxHeight = Math.round(room) + 'px';
-    if (panelPinned) return;          // 玩家拖过就留在原地，别再拽回来
+    if (panelPinned) return;
     const pw = Math.max(240, Math.min(panel.offsetWidth || 396, r.width - 16));
     panel.style.right = 'auto';
     panel.style.left = Math.round(Math.max(r.left + 8, gearLeft + gw - pw)) + 'px';
     panel.style.top = Math.round(gearTop + gh + 8) + 'px';
   }
-  /** 内屏尺寸会变的三条路：窗口 resize / 转屏；`Main.resizeLayout()` 改 `#ui` 的 transform；
-   *  切界面模式重建 `#ui`。前两条直接监听，第三条用 MutationObserver 盯 style/class。 */
+
   function bindLayout() {
     if (layoutBound) return;
     layoutBound = true;
@@ -563,15 +503,15 @@
       '<select data-buff-select aria-label="选择要获得或失去的增益">' + buffOptions() + '</select>' +
       '<button type="button" class="uc-button tiny" data-buff-grant="1">获得</button>' +
       '<button type="button" class="uc-button tiny muted" data-buff-lose="1">失去</button></label>' +
-      /* 无尽塔专属：快速爬塔（层数 ±1）—— 免去一层层打上去 */
+
       '<div class="debug-grant-row debug-quick"><span class="debug-ws-tag">层数</span>' +
       '<button type="button" class="uc-button tiny" data-endless-layer="1" title="无尽塔专属：当前层数 +1（还没有对局就先开一局，落在第 1 层）">层数 +1</button>' +
       '<button type="button" class="uc-button tiny" data-endless-layer="-1" title="无尽塔专属：当前层数 −1（最低第 1 层）">层数 -1</button></div>' +
-      /* 无尽塔专属：手开商店 —— 铸币商店 / 普通（试炼）商店，都不看概率与层区间 */
+
       '<div class="debug-grant-row debug-quick"><span class="debug-ws-tag">商店</span>' +
       '<button type="button" class="uc-button tiny" data-mint-shop="1" title="无尽塔专属：立刻生成一个铸币商店（跳过 5%~10% 的概率与层区间判定，也不占本组的自然刷出名额）">铸币商店</button>' +
       '<button type="button" class="uc-button tiny" data-shop="1" title="无尽塔专属：立刻生成一个普通（试炼）商店（跳过每 5 层的结算判定；关掉后回去继续打）">普通商店</button></div>' +
-      /* 无尽塔专属：直接发局内货币（试炼币 / 铸币），数量自己填 */
+
       '<div class="debug-grant-row debug-num-row"><span class="debug-ws-tag">试炼币</span>' +
       '<input type="number" data-endless-coins min="1" max="1000000" step="1" value="500" inputmode="numeric" aria-label="要获得的试炼币数量">' +
       '<button type="button" class="uc-button tiny" data-endless-grant-coins="1" title="无尽塔专属：立刻获得指定数量的试炼币（与 E02/E03 的即时试炼币同一条口径；没有对局时先开始一局）">获得</button></div>' +
@@ -579,7 +519,7 @@
       '<input type="number" data-endless-mint min="1" max="100000" step="1" value="10" inputmode="numeric" aria-label="要获得的铸币数量">' +
       '<button type="button" class="uc-button tiny" data-endless-grant-mint="1" title="无尽塔专属：立刻获得指定数量的铸币（试炼商店 50 试炼币换 1 枚的那种，与 E09/E10 同口径）">获得</button></div>' +
       '<div class="debug-ws-owned" data-buff-owned></div>' +
-      /* 增益总览：当前生效 + 已获得过的全部（含一次生效、用尽、损毁、失去）+ 累计提升效果 */
+
       '<div class="debug-buff-report" data-buff-report></div>' +
       '<p class="debug-grant-note">需要在无尽塔对局中（先开始一局）。点已获得增益后面的 × 可直接失去；扩容类增益一局只能拿一次。</p></div>' +
       '<div class="debug-actions">' +
@@ -615,7 +555,6 @@
       const a = ACTIONS[Number(b.dataset.act)];
       if (a) msg(traceDebug('调试：' + a.label, () => a.run()));
     };
-    // 快速获取物品：选道具 + 数量后点「获取」，回车同样生效
     const grantBtn = panel.querySelector('[data-item-grant]');
     const grantSelect = panel.querySelector('[data-item-select]');
     const grantCount = panel.querySelector('[data-item-count]');
@@ -630,7 +569,6 @@
       const def = propMap.getValue(Number(grantSelect.value));
       if (def) msg('已选中 ' + def.name + '，当前拥有 ' + ((State.state() || { props: {} }).props[grantSelect.value] || 0) + ' 个');
     };
-    // 武器/技能：选表 + 等级后获得（回车同样生效），已有武技后面的 × 直接遗忘
     for (const btn of panel.querySelectorAll('[data-ws-learn]')) {
       const kind = btn.dataset.wsLearn;
       btn.onclick = () => {
@@ -643,16 +581,14 @@
       const levelInput = panel.querySelector('[data-ws-level="' + kind + '"]');
       levelInput.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); btn.click(); } };
     }
-    // 无尽塔增益：下拉选一个，就能「获得」或「失去」
     panel.querySelector('[data-buff-grant]').onclick = () => msg(grantBuff(panel.querySelector('[data-buff-select]').value));
     panel.querySelector('[data-buff-lose]').onclick = () => msg(loseBuff(panel.querySelector('[data-buff-select]').value));
-    // 无尽塔专属：立刻生成一个铸币商店 / 一个普通商店；层数 ±1 快速爬塔
+// 无尽塔专属：立刻生成一个铸币商店 / 一个普通商店；层数 ±1 快速爬塔
     panel.querySelector('[data-mint-shop]').onclick = () => msg(spawnMintShop());
     panel.querySelector('[data-shop]').onclick = () => msg(spawnShop());
     for (const b of panel.querySelectorAll('[data-endless-layer]')) {
       b.onclick = () => msg(shiftEndlessLayer(Number(b.dataset.endlessLayer)));
     }
-    // 无尽塔专属：直接发试炼币 / 铸币（数量取输入框，空输入按 1）
     panel.querySelector('[data-endless-grant-coins]').onclick = () =>
       msg(grantEndlessCoins(panel.querySelector('[data-endless-coins]').value));
     panel.querySelector('[data-endless-grant-mint]').onclick = () =>
@@ -673,7 +609,6 @@
       const picked = panel.querySelector('[data-weapon-select]').value;
       const pickedName = picked === 'default' ? '原版初始武器'
         : picked === 'random' ? '随机一把' : (panel.querySelector('[data-weapon-select]').selectedOptions[0].textContent);
-      // 两步确认，避免误点清掉进度
       msg('再次点击「彻底重置」确认：清空 ' + who + ' 的全部进度与随机获得的武器/技能，开局武器「' + pickedName + '」');
       const btn = panel.querySelector('[data-reset-account]');
       if (btn.dataset.armed !== '1') {
@@ -696,7 +631,6 @@
       mark();
     };
 
-    // 拖动标题栏移动面板（拖过之后就不再自动贴内屏；边界仍按内屏算，免得拖到黑边里找不回来）
     const head = panel.querySelector('.debug-head');
     head.onpointerdown = (e) => {
       if (e.target.closest('button')) return;
@@ -720,7 +654,6 @@
     mark();
     bindLayout();
     layoutDebugUi();
-    // 启动时只还原面板显示；已保存的开关由游戏本身按标记生效，
   }
 
   function msg(text) {
@@ -730,7 +663,7 @@
     clearTimeout(msg.timer);
     msg.timer = setTimeout(() => { if (out.textContent === String(text)) out.textContent = ''; }, 2600);
   }
-  /** 同步面板状态与游戏是否真的在跑 */
+
   function mark() {
     if (!panel) return;
     const live = !!(window.State && State.state && State.state());
@@ -738,7 +671,7 @@
     for (const input of panel.querySelectorAll('input[type="checkbox"]')) input.checked = state[input.dataset.key] === true;
     renderOwned();
   }
-  /** 面板里的「已有武技」列表：每项后面一个 × 直接遗忘。 */
+
   function renderOwned() {
     if (!panel) return;
     const box = panel.querySelector('[data-ws-owned]');
@@ -752,7 +685,7 @@
       (State.mySkills ? State.mySkills() : []).map((s) => chip('skill', s)).join('');
     box.innerHTML = html || '<span class="debug-grant-note">当前没有任何武器或技能。</span>';
     renderBuffReport(panel);
-    /* 无尽塔增益：列出本局已获得的永久/限次增益，点 × 直接失去 */
+
     const bbox = panel.querySelector('[data-buff-owned]');
     if (bbox) {
       const run = (State.state().endless && State.state().endless.run) || null;
@@ -764,7 +697,6 @@
           .concat((run.limited || []).map((b) => ({ b, tag: '限次' + (b.uses != null ? ' 剩' + b.uses : '') })))
           .concat((run.permSlotIds || []).map((id) => ({ b: { id }, tag: '槽位' })))
           .concat((run.pickBuffIds || []).map((id) => {
-            // 选取型（神兵淬炼/秘技通神）：标出已经强化到哪一个武器/技能
             const def = (window.TowerData && TowerData.BUFF_BY_ID && TowerData.BUFF_BY_ID[id]) || {};
             const boost = (def.mods && def.mods.pickSkillPct) ? (run.skillBoost || {}) : (run.weaponBoost || {});
             const keys = Object.keys(boost);
@@ -787,7 +719,7 @@
       }
     }
   }
-  /** 无尽塔增益总览：已获得过的全部增益（含一次生效/用尽/损毁/失去）+ 当前实际提升。 */
+
   function renderBuffReport(root) {
     const box = root.querySelector('[data-buff-report]');
     if (!box) return;
@@ -804,13 +736,13 @@
     const EVENT_LABEL = { get: '获得', stack: '叠加', instant: '立即生效', expire: '用尽消失', break: '损毁', lose: '失去' };
     const EVENT_CLS = { get: 'get', stack: 'stack', instant: 'instant', expire: 'gone', break: 'broken', lose: 'gone' };
 
-    /* ① 当前实际提升（聚合后的效果清单） */
+
     const effects = (rep.effects || []).length
       ? '<div class="debug-effect-list">' + rep.effects.map(([k, v]) =>
           '<span class="debug-effect"><i>' + esc(k) + '</i><b>' + esc(v) + '</b></span>').join('') + '</div>'
       : '<span class="debug-grant-note">当前没有任何生效中的加成。</span>';
 
-    /* ② 已获得过的全部增益（去重，按类别分组） */
+
     const groups = { permanent: [], limited: [], instant: [], hidden: [] };
     for (const it of rep.collected || []) (groups[it.kind] || groups.hidden).push(it);
     const chip = (it) => '<span class="debug-ws-chip" title="' + esc((it.detail ? it.detail + ' · ' : '') + (KIND_LABEL[it.kind] || '')) + '">' +
@@ -822,7 +754,7 @@
         list.map(chip).join('') + '</div>';
     }).join('');
 
-    /* ③ 获取/消失流水（时间顺序，最近的在下） */
+    // ③ 获取/消失流水（时间顺序，最近的在下）
     const hist = (rep.history || []).slice().reverse().slice(0, 40);
     const histHtml = hist.length
       ? '<ol class="debug-buff-log">' + hist.map((e) => {
@@ -848,7 +780,7 @@
     const ok = debugAllowed();
     gear.style.display = ok ? '' : 'none';
     if (!ok) { panel.classList.remove('open'); gear.classList.remove('open'); }
-    /* display 一变，按钮的可见宽高也跟着变（隐藏时量不到），重新贴一次内屏。 */
+
     if (ok) layoutDebugUi();
     return ok;
   }
@@ -876,12 +808,10 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
 
-  /* ============================================================
-   * 【DBG5】导出 window.Debug
-   * ============================================================ */
+
   window.Debug = {
     enabled, get, set, toggle, reset, numberStretch, resetAccount, forgetWS, MAX_LEVEL,
-    /* 控制台/探针直接调这两个入口时也要落到调试所得账本里。 */
+    // 控制台/探针直接调这两个入口时也要落到调试所得账本里。
     grantItem: (id, count) => {
       const def = propMap.getValue(Number(id));
       return traceDebug('调试：获取 ' + ((def && def.name) || ('道具#' + id)), () => grantItem(id, count));
@@ -893,12 +823,9 @@
     },
     open: () => togglePanel(true), close: () => togglePanel(false), togglePanel, refresh: refreshAvailability,
     allowed: debugAllowed, DEBUG_IN_CLASSIC, state: () => Object.assign({}, state),
-    /* 按内屏重新贴一次入口按钮/面板（窗口尺寸、分辨率档位、界面模式变化后都可以手动叫一次）。 */
+    // 按内屏重新贴一次入口按钮/面板（窗口尺寸、分辨率档位、界面模式变化后都可以手动叫一次）。
     layout: layoutDebugUi, stageRect,
-    /* 【DBG5b】一次性工具清单（只读）：面板按它渲染按钮，回归/探针也可以用它直接跑某一条
-     * （`Debug.actions().find((a) => a.label === '快进24小时').run()`）——
-     * 与真人点按钮走的是**同一份实现**，不会出现「测试绿、点按钮不生效」那种错位。
-     * 这里包一层账本记录，控制台直接跑也会留下索引。 */
+
     actions: () => ACTIONS.map((a) => ({ label: a.label, note: a.note,
       run: () => traceDebug('调试：' + a.label, () => a.run()) })),
   };

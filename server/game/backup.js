@@ -1,14 +1,7 @@
 'use strict';
-/* ============================================================
- * server/game/backup.js — 自动整库备份
- * ------------------------------------------------------------
- * `saves` 很小，但 `combats`/消息/备份本身会增长；没有自动备份时，
- * 一次误操作或迁移失败就只能靠临时手工副本。这里用 SQLite 的
- * `VACUUM INTO` 做一致性快照（不直接 cp 正在写的 db+wal），并做：
- *   · 临时文件 → 完整性检查 → 原子 rename；
- *   · 默认每 6 小时一次，保留 7 天 / 最多 56 份；
- *   · 只清理 `backup/auto/ssdz-*.db`，绝不碰手工备份目录。
- * ============================================================ */
+// server/game/backup.js — 自动整库备份
+// 一次误操作或迁移失败就只能靠临时手工副本。这里用 SQLite 的
+// `VACUUM INTO` 做一致性快照（不直接 cp 正在写的 db+wal），并做：
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -51,7 +44,6 @@ function prune(dir, now) {
   }
 }
 
-/** 立即备份一次，返回备份文件信息；失败抛出，调用方负责记录。 */
 function run(nowMs) {
   if (!config.backupEnabled) return null;
   const now = Number(nowMs) || Date.now();

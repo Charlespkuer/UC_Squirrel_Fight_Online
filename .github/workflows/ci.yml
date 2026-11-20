@@ -57,17 +57,5 @@ jobs:
         run: |
           node -e "const b=require('fs').readFileSync('js/tower-ui.js');console.log('js/tower-ui.js CRLF:', b.includes(Buffer.from('\r\n')))"
 
-      # 动画回归需要可选依赖 @napi-rs/canvas（三个平台都有预编译包）；装不上就自动 SKIP。
-      # npm 缓存：这个包是 CI 里唯一的网络下载，三个平台每次重装大约多花 20~40s；
-      # 缓存 ~/.npm 后命中时基本是本地解包（版本固定，key 按平台分）。
-      - name: 缓存 npm（@napi-rs/canvas）
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: npm-canvas-${{ runner.os }}-v1
-      - name: 动画回归（可选依赖）
-        shell: bash
-        continue-on-error: true
-        run: |
-          npm install --no-save --package-lock=false --prefer-offline @napi-rs/canvas
-          node tools/test-battle.js
+      # 联机版没有现代 canvas 战斗（js/battle.js 已随单机产品移到 reference/retired/），
+      # 所以不再需要 @napi-rs/canvas 与 test-battle.js 的动画回归。

@@ -1,46 +1,20 @@
 'use strict';
-/* ============================================================
- * server/game/settlement.js — 天梯结算 / 赛区 / 人机 / 周重置 / 周奖励
- * ------------------------------------------------------------
- * 数值口径：基础规则参考原版《松鼠数据表》，积分档位为 2026-11 用户定制口径，不是 ELO。
- *   · 每日场次**不限**；前 10 场免费，第 11~20 场每场 5 金松果，第 21 场起每场 10 金松果；
- *   · 主动获胜 3 金杯、失败 1 金杯；被动方（防守）获胜 3 金杯、失败 1 金杯；
- *   · 积分档位（2026-11 用户口径，按**主动方**相对**被动方**的积分差）：
- *       主动方高于被动方 0-50 / 51-100 / 101-200 / 201-500 / 501+
- *         → ±14~17 / ±10~15 / ±7~12 / ±5~10 / ±1~2；
- *       主动方低于被动方 1-50 / 51-100 / 101-300 / 301+
- *         → ±15~18 / ±16~19 / ±17~20 / ±20~25；
- *     每场只掷一次，**只对挑战方生效**：主动方赢加、输减（0/100000 边界压缩实际变化量）；
- *     被动方（真人或人机）**固定 ±1 分**：挑战方赢 → 防守方 -1，挑战方输 → 防守方 +1
- *     （到 0/下限或 100000 上限时压成 0）。所以双方不再零和 —— 被挑战的人不会被反复刷分
- *     或打掉大段积分（用户 2026-11 口径）。
- *   · 主动获胜有几率抢对方 3 金杯（防守方真实扣掉，金杯仍零和）；
- *   · 赛区前 30 名每周 50 金杯（服务端按周记录，防重复领取）。
- *
- * **赛区（2026-11 用户口径，对齐原版 `text7585`「每10级一个赛区」）**：
- *   · 30-39 / 40-49 / 50-59 / 60-69 / 70-79 / 80-90 共 6 个赛区；
- *   · 玩家只能看自己赛区的榜、只能和自己赛区的人/人机打；
- *   · 积分**每周一 00:00 减半**：`ratings.season` 直接存周一日期，换周时把上一周的
- *     分数除以 2（隔了几周就除几次）写进新行；
- *   · 每个赛区每级 3 个人机（80-90 共 33 个），人机也进榜、也参与积分结算，
- *     每周一 00:00 回到 300 分，且积分有 **50 的硬下限**；玩家要进前 30 必须至少超过一个人机。
- *     300 分以后人机候选位的权重降到 1/3（`config.rankBotWeightDivisor`，见 `opponents.js`）。
- * ============================================================ */
+// server/game/settlement.js — 天梯结算 / 赛区 / 人机 / 周重置 / 周奖励
+// （到 0/下限或 100000 上限时压成 0）。所以双方不再零和 —— 被挑战的人不会被反复刷分
+// · 赛区前 30 名每周 50 金杯（服务端按周记录，防重复领取）。
 
 const db = require('../db');
+const visibility = require('./visibility');
 const { config, localDate } = require('../config');
-
-/* ---------------- 赛区 ---------------- */
 
 const DIVISIONS = Object.freeze((config.rankDivisions || []).map((d) => Object.freeze({
   key: String(d.key), lo: Number(d.lo), hi: Number(d.hi), frame: Number(d.frame), label: String(d.label || ''),
 })));
 
-/* 进程内缓存：同一周只补一次人机。服务端是单进程（见 db.js 的 WAL 说明），
- * 所以不需要跨进程失效；换周时 `weekKey()` 变化会让缓存自动失效。 */
+// 进程内缓存：同一周只补一次人机。服务端是单进程（见 db.js 的 WAL 说明），
+// 所以不需要跨进程失效；换周时 `weekKey()` 变化会让缓存自动失效。
 let botsReadyWeek = '';
 
-/** 等级 → 赛区；30 级以下没有赛区（天梯也打不了）。 */
 function divisionOf(level) {
   const lv = Math.floor(Number(level) || 0);
   return DIVISIONS.find((d) => lv >= d.lo && lv <= d.hi) || null;
@@ -55,9 +29,7 @@ function divisionOfAccount(accountId) {
   return divisionOf(levelOf(accountId));
 }
 
-/* ---------------- 周 / 积分 ---------------- */
-
-/** 一周的标识（周一为起点，按服务端时区）。天梯积分挂在周上：换周时减半。 */
+// 一周的标识（周一为起点，按服务端时区）。天梯积分挂在周上：换周时减半。
 let weekFormatterCache = null;
 let weekCache = { at: 0, key: '' };
 function weekFormatter() {
@@ -69,8 +41,8 @@ function weekFormatter() {
   return weekFormatterCache;
 }
 function weekKey(nowMs) {
-  /* 一周只会变一次；同一 5 秒内所有请求共用结果，省掉每次 new Intl + formatToParts。
-   * 不缓存太久：周一 00:00 的换周结算最多延迟 5 秒，而不是一分钟。 */
+  // 一周只会变一次；同一 5 秒内所有请求共用结果，省掉每次 new Intl + formatToParts。
+  // 不缓存太久：周一 00:00 的换周结算最多延迟 5 秒，而不是一分钟。
   if (nowMs == null) {
     const t = Date.now();
     if (weekCache.at && t - weekCache.at < 5 * 1000) return weekCache.key;
@@ -91,8 +63,6 @@ function weekKeyOf(nowMs) {
   return dt.getUTCFullYear() + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0') + '-' + String(dt.getUTCDate()).padStart(2, '0');
 }
 
-/* ---------------- 周结算（每周一 00:00：玩家积分减半，人机回到 300） ---------------- */
-
 function metaGet(key) {
   const row = db.get('SELECT value FROM meta WHERE key = ?', String(key));
   return row ? String(row.value) : '';
@@ -103,7 +73,6 @@ function metaSet(key, value) {
     String(key), String(value));
 }
 
-/** 两个周标识之间隔了几周（都是周一日期，至少按 1 周算）。 */
 function weeksBetween(from, to) {
   const a = Date.parse(String(from) + 'T00:00:00Z');
   const b = Date.parse(String(to) + 'T00:00:00Z');
@@ -111,12 +80,6 @@ function weeksBetween(from, to) {
   return Math.max(1, Math.round((b - a) / (7 * 86400000)));
 }
 
-/**
- * 本周第一次访问时做一次周结算：
- *  · 上周有分、本周还没露面的玩家 → 新行 = ⌊上周分 / 2^n⌋（n = 隔了几周），胜负清零；
- *  · 人机由 `ensureBots()` 统一回到 300（带 50 硬下限）；
- *  · 写 `meta.rank_week`，同一周不再重复搬数据。
- */
 function rollWeekIfNeeded(week) {
   const w = week || weekKey();
   if (metaGet('rank_week') === w) return 0;
@@ -131,8 +94,7 @@ function rollWeekIfNeeded(week) {
       const score = clampScore(Math.floor((Number(prev && prev.score) || 0) / div));
       db.run('INSERT INTO ratings (account_id, season, score, wins, losses, streak, best_rank, updated_at) VALUES (?,?,?,0,0,0,0,?)',
         id, w, score, Date.now());
-      /* 换周后只留本周行：`ratings` 以前每个账号每周一行、只增不删，`MAX(season) GROUP BY`
-       * 的搬迁查询会随历史线性变慢。旧周的分数已经折算进本周，没有回查需求。 */
+
       db.run('DELETE FROM ratings WHERE account_id = ? AND season < ?', id, w);
       rolled += 1;
     }
@@ -142,7 +104,7 @@ function rollWeekIfNeeded(week) {
   return rolled;
 }
 
-/** 所有天梯读写入口的周检查：每周只搬一次数据（`meta.rank_week` 是幂等标记）。 */
+// 所有天梯读写入口的周检查：每周只搬一次数据（`meta.rank_week` 是幂等标记）。
 function weekTick() {
   const w = weekKey();
   if (metaGet('rank_week') === w) return 0;
@@ -166,27 +128,23 @@ function ratingOf(accountId, week) {
   return Number(row.score) || config.rankIntegralStart;
 }
 
-/** 只读别人的分：没有本周行就是 0（不替别人建行）。 */
 function scoreOf(accountId, week) {
   const row = db.get('SELECT score FROM ratings WHERE account_id = ? AND season = ?', Number(accountId), week || weekKey());
   return row ? Math.max(0, Number(row.score) || 0) : 0;
 }
 
-/** 把权威天梯积分写进存档镜像。登录、摘要、幂等重试返回的 `save` 都必须走这一条，
- *  否则调用方会看到「ratings 0 分 / 存档里还是旧 1500」的两份数。 */
+// 把权威天梯积分写进存档镜像。登录、摘要、幂等重试返回的 `save` 都必须走这一条，
+// 否则调用方会看到「ratings 0 分 / 存档里还是旧 1500」的两份数。
 function syncIntegral(accountId, save) {
   if (save && typeof save === 'object') save.integral = ratingOf(accountId);
   return save;
 }
-
-/* ---------------- 赛区人机 ---------------- */
 
 const BOT_NAMES = Object.freeze([
   '松果见习生', '橡子巡逻员', '树洞守卫', '月光拾荒者', '雾林邮差', '坚果学徒',
   '古树见习', '溪谷哨兵', '星屑旅人', '雪原新兵', '苔原猎手', '树冠信使',
 ]);
 
-/** 固定的赛区人机名册：每个等级 3 个，名字带等级后缀（榜上只有三列，靠等级区分）。 */
 function botPlan() {
   const out = [];
   let idx = 0;
@@ -205,12 +163,10 @@ function botPlan() {
   return out;
 }
 
-/** 每周一次：人机分数回到 300、胜负清零；缺的行补上。幂等。 */
 function ensureBots(week) {
   const w = week || weekKey();
-  /* `botsFor` / `botById` / `divisionRows` 每次读榜都会进来；同一周重复跑
-   * “UPDATE + 全表 SELECT + 99 条 INSERT OR IGNORE”没有意义。
-   * 用一行 `week` 做廉价的「别处是否重置过」校验，测试/运维手改库也能生效。 */
+  // `botsFor` / `botById` / `divisionRows` 每次读榜都会进来；同一周重复跑
+  // 用一行 `week` 做廉价的「别处是否重置过」校验，测试/运维手改库也能生效。
   if (botsReadyWeek === w) {
     const row = db.get('SELECT week FROM rank_bots LIMIT 1');
     if (row && String(row.week) === w) return w;
@@ -246,9 +202,6 @@ function botById(id) {
   return db.get('SELECT * FROM rank_bots WHERE id = ?', key) || null;
 }
 
-/** 人机结算：人机作为**防守方**和真人一样只固定 ±1（`rankDefenderDelta` 的结果）。
- *  `botDelta` 是已算好的带符号变化量（挑战方赢 → -1，挑战方输 → +1）；
- *  人机积分有 `rankBotFloor`（默认 50）的硬下限，玩家怎么看都不会低于它。 */
 function applyBotResult(botId, playerWin, botDelta) {
   const bot = botById(botId);
   if (!bot) return null;
@@ -260,8 +213,6 @@ function applyBotResult(botId, playerWin, botDelta) {
   return { id: String(bot.id), score, wins: Number(bot.wins) + (playerWin ? 0 : 1), losses: Number(bot.losses) + (playerWin ? 1 : 0) };
 }
 
-/** 最近的真人对手（同一个人至少隔 `rankRealRecentMatches` 场才会再匹配到）。
- *  先取最近 N 场天梯（人机场也算一场），再从中挑出真人 —— 这样「相隔 5 场」是**按场次**算的。 */
 function recentRealOpponents(accountId, limit) {
   const n = Math.max(0, Math.floor(Number(limit) || 0));
   if (!n) return [];
@@ -274,17 +225,14 @@ function recentRealOpponents(accountId, limit) {
   return [...new Set(rows.map((r) => Number(r.defender_id)).filter((id) => id > 0))];
 }
 
-/* ---------------- 赛区榜 ---------------- */
-
 function compareRows(a, b) {
   if (b.score !== a.score) return b.score - a.score;
   if (b.wins !== a.wins) return b.wins - a.wins;
-  if (!!a.bot !== !!b.bot) return a.bot ? 1 : -1;   // 同分同胜场：真人排在人机前面
+  if (!!a.bot !== !!b.bot) return a.bot ? 1 : -1;
   if (a.bot) return String(a.botId).localeCompare(String(b.botId));
   return Number(a.accountId) - Number(b.accountId);
 }
 
-/** 一个赛区的完整榜（真人当前周行 + 该赛区人机），按名次排好。 */
 function divisionRows(division) {
   const d = division || null;
   if (!d) return [];
@@ -296,8 +244,9 @@ function divisionRows(division) {
        JOIN saves sv ON sv.account_id = r.account_id AND sv.mode = 'classic'
       WHERE r.season = ? AND a.banned = 0
         AND sv.level BETWEEN ? AND ?
-        AND NOT EXISTS (SELECT 1 FROM simulated_accounts sa WHERE sa.account_id = r.account_id)`,
-    w, d.lo, d.hi
+        AND NOT EXISTS (SELECT 1 FROM simulated_accounts sa WHERE sa.account_id = r.account_id)
+        AND ${visibility.notHiddenSql('r.account_id')}`,
+    w, d.lo, d.hi, Date.now()
   );
   const rows = players.map((r) => ({
     bot: false, botId: '', accountId: Number(r.account_id), name: String(r.name),
@@ -316,8 +265,8 @@ function divisionRows(division) {
   return rows;
 }
 
-/** 我的赛区名次（1 起，含人机）。30 级以下 / 本周没有行 → 0。 */
 function rankOf(accountId) {
+  if (visibility.isHidden(accountId)) return 0;
   const row = db.get('SELECT * FROM ratings WHERE account_id = ? AND season = ?', Number(accountId), weekKey());
   if (!row) return 0;
   const div = divisionOfAccount(accountId);
@@ -327,14 +276,28 @@ function rankOf(accountId) {
   return i >= 0 ? i + 1 : 0;
 }
 
+// 一次算齐自己与候选真人的赛区名次：天梯匹配页要同时显示双方名次，不能每人间隔一次全表扫描。
+// 人机不占真人名次；隐身账号已被 divisionRows 过滤，取不到名次时按 0 返回。
+function rankPositions(accountId, accountIds) {
+  const div = divisionOfAccount(accountId);
+  if (!div) return { rank: 0, ranks: new Map() };
+  const want = new Set((accountIds || []).map((id) => Number(id)).filter((id) => id > 0));
+  const rows = divisionRows(div);
+  const ranks = new Map();
+  let mine = 0;
+  rows.forEach((row, i) => {
+    if (row.bot) return;
+    const id = Number(row.accountId);
+    if (id === Number(accountId)) mine = i + 1;
+    if (want.has(id)) ranks.set(id, i + 1);
+  });
+  return { rank: mine, ranks };
+}
+
 function clampScore(score) {
   return Math.max(config.rankIntegralFloor, Math.min(MAX_SCORE, Math.round(Number(score) || 0)));
 }
 
-/** 积分变化档（2026-11 用户口径）。正数 = 主动方涨。
- *  只按**主动方（挑战者）相对于被动方（防守方）**的积分差取档；
- *  主动方赢 +mag、输 -mag；防守方**固定 ±1**（见 `rankDeltaPair` / `rankDefenderDelta`）。
- *  可选 `roll` 传入 0~1 的随机数，便于测试边界；默认 Math.random()。 */
 const MAX_SCORE = 100000;
 
 function integralMagnitude(attackerScore, defenderScore, roll) {
@@ -358,16 +321,13 @@ function integralMagnitude(attackerScore, defenderScore, roll) {
   return lo + Math.floor(t * (hi - lo + 1));
 }
 
-/** 兼容旧接口：主动方赢 +mag / 输 -mag；不处理上下限。 */
+// 兼容旧接口：主动方赢 +mag / 输 -mag；不处理上下限。
 function integralDelta(attackerScore, defenderScore, attackerWin, roll) {
   const mag = integralMagnitude(attackerScore, defenderScore, roll);
   return attackerWin ? mag : -mag;
 }
 
-/** 防守方（真人或赛区人机）的固定变化（用户 2026-11 口径）：
- *  挑战方赢 → 防守方 **-1**；挑战方输 → 防守方 **+1**；
- *  防守方已经贴在下限（真人 0 / 人机 50）或上限 100000 时压成 0。
- *  `floor` 不传就用 `rankIntegralFloor`（真人）；赛区人机传 `rankBotFloor`。 */
+// 防守方已经贴在下限（真人 0 / 人机 50）或上限 100000 时压成 0。
 function rankDefenderDelta(defenderScore, attackerWin, floor) {
   const foe = Math.round(Number(defenderScore) || 0);
   const lo = Number.isFinite(Number(floor)) ? Number(floor) : config.rankIntegralFloor;
@@ -375,11 +335,6 @@ function rankDefenderDelta(defenderScore, attackerWin, floor) {
   return foe + 1 <= MAX_SCORE ? 1 : 0;
 }
 
-/** 一场战斗的双方变化（用户 2026-11 口径）：**积分得失只对挑战方生效**。
- *  · 主动方：按积分差掷一次档位 ±mag，赢不超过 100000、输不低于 `rankIntegralFloor`；
- *  · 被动方（真人或人机）：固定 ±1（`rankDefenderDelta`），到边界压成 0；
- *  · 两边不再零和 —— 被挑战的人不会被反复挑战刷分或打掉大段积分。
- *  `defenderFloor` 只给赛区人机传 `rankBotFloor`；真人防守方走默认下限。 */
 function rankDeltaPair(attackerScore, defenderScore, attackerWin, roll, defenderFloor) {
   const my = Math.round(Number(attackerScore) || 0);
   const foe = Math.round(Number(defenderScore) || 0);
@@ -410,7 +365,6 @@ function bumpDaily(accountId, kind, n) {
   return todayCount(accountId, kind);
 }
 
-/** 退回一次每日计数（退票/房间过期用）；不会低于 0。 */
 function refundDaily(accountId, kind, n) {
   const date = localDate();
   const amount = Math.max(0, Math.round(Number(n) || 0));
@@ -421,23 +375,22 @@ function refundDaily(accountId, kind, n) {
   return todayCount(accountId, kind);
 }
 
-/** 下一场要多少金松果：前 10 场免费、11-20 场 5 金、21 场起 10 金。
- *  每日次数**不限**（用户 2026-11 口径），所以这里不再有「打满就免费/`limit`」的分支。 */
 function rankCostAt(played) {
   const n = Math.max(0, Math.floor(Number(played) || 0));
   if (n < config.rankFreePlays) return 0;
+  if (n >= config.rankCapFrom) return config.rankCapCost;
   return n >= config.rankLateFrom ? config.rankLateCost : config.rankPaidCost;
 }
 
-/** 天梯当日状态：已打几场、还剩几场、这一场要不要花金松果（含档位起点，给错误文案用）。
- *  `limit = 0` / `unlimited: true` 表示**不限次数**，此时 `left` 为 null。 */
+// 天梯当日状态：已打几场、还剩几场、这一场要不要花金松果（含档位起点，给错误文案用）。
 function rankDailyStatus(accountId) {
   const played = todayCount(accountId, 'rank');
   const limit = Math.max(0, Math.floor(Number(config.rankDailyLimit) || 0));
   const unlimited = limit <= 0;
   const freeLeft = Math.max(0, config.rankFreePlays - played);
   const cost = rankCostAt(played);
-  const late = played >= config.rankLateFrom;
+  const cap = played >= config.rankCapFrom;
+  const late = !cap && played >= config.rankLateFrom;
   return {
     played,
     limit,
@@ -445,19 +398,15 @@ function rankDailyStatus(accountId) {
     left: unlimited ? null : Math.max(0, limit - played),
     freeLeft,
     cost,
-    tier: cost === 0 ? 'free' : (late ? 'late' : 'paid'),
-    tierStart: cost === 0 ? 0 : (late ? config.rankLateFrom + 1 : config.rankFreePlays + 1),
+    tier: cost === 0 ? 'free' : (cap ? 'cap' : (late ? 'late' : 'paid')),
+    tierStart: cost === 0 ? 0 : (cap ? config.rankCapFrom + 1 : (late ? config.rankLateFrom + 1 : config.rankFreePlays + 1)),
     date: localDate(),
   };
 }
 
-/** 周奖励：本赛区前 30 名，并且至少超过一个人机；一周一次。 */
-function rankAwardStatus(accountId) {
-  const week = weekKey();
-  const rating = ensureRating(accountId, week);
-  const div = divisionOfAccount(accountId);
-  const rows = div ? divisionRows(div) : [];
-  const myIdx = rows.findIndex((r) => !r.bot && r.accountId === Number(accountId));
+// 由已经算好的 rows / myIdx 生成领奖状态；`rankAwardStatus` 和 `/api/ladder` 共用，
+// 避免同一请求把整个赛区排名算两遍。
+function awardStatusFrom(accountId, week, rating, div, rows, myIdx) {
   const rank = myIdx >= 0 ? myIdx + 1 : 0;
   const played = Math.max(0, Number(rating.wins) || 0) + Math.max(0, Number(rating.losses) || 0);
   const surpassedBot = myIdx >= 0 && rows.slice(myIdx + 1).some((r) => r.bot);
@@ -472,7 +421,25 @@ function rankAwardStatus(accountId) {
   };
 }
 
+function rankAwardStatus(accountId) {
+  const week = weekKey();
+  const rating = ensureRating(accountId, week);
+  const div = divisionOfAccount(accountId);
+  const rows = div ? divisionRows(div) : [];
+  const myIdx = rows.findIndex((r) => !r.bot && r.accountId === Number(accountId));
+  const out = awardStatusFrom(accountId, week, rating, div, rows, myIdx);
+  if (visibility.isHidden(accountId)) {
+    out.hidden = true;
+    out.rank = 0;
+    out.eligible = false;
+  }
+  return out;
+}
+
 function claimRankAward(accountId) {
+  if (visibility.isHidden(accountId)) {
+    return { ok: false, hidden: true, rank: 0, msg: '该账号处于隐身状态，不参与天梯排名与排名奖励。' };
+  }
   const week = weekKey();
   const rating = ensureRating(accountId, week);
   const played = Math.max(0, Number(rating.wins) || 0) + Math.max(0, Number(rating.losses) || 0);
@@ -493,24 +460,31 @@ function claimRankAward(accountId) {
     db.run('INSERT INTO rank_awards (account_id, week, rank, cups, created_at) VALUES (?,?,?,?,?)',
       Number(accountId), week, rank, config.rankWeeklyCup, Date.now());
   } catch (_) {
-    /* 并发重试：唯一键已存在就是领过了，不再发第二份。 */
+    // 并发重试：唯一键已存在就是领过了，不再发第二份。
     return { ok: false, msg: '本周的天梯奖励已经领取过了。', already: true, rank };
   }
   return { ok: true, rank, cups: config.rankWeeklyCup, msg: '恭喜进入赛区前' + config.rankWeeklyTop + '名，成功获得' + config.rankWeeklyCup + '个金杯奖励！' };
 }
 
-/** 赛区榜（前 N 名 + 我）。30 级以下返回空榜。 */
 function ladder(accountId, limit) {
   ensureBots();
   const week = weekKey();
   const mine = ensureRating(accountId, week);
   const div = divisionOfAccount(accountId);
   const n = Math.max(1, Math.min(200, Number(limit) || 20));
+  const hidden = visibility.hiddenInfo(accountId);
   const meBase = {
     score: Number(mine.score) || 0, wins: Number(mine.wins) || 0, losses: Number(mine.losses) || 0,
     streak: Number(mine.streak) || 0, rank: 0, level: levelOf(accountId),
+    hidden: !!hidden, hiddenUntil: hidden ? hidden.until : 0,
   };
-  if (!div) return { week, season: week, division: null, frame: 0, label: '', top: [], me: meBase };
+  if (!div) {
+    return {
+      week, season: week, division: null, frame: 0, label: '', top: [], me: meBase,
+      hidden: !!hidden, hiddenUntil: hidden ? hidden.until : 0,
+      award: awardStatusFrom(accountId, week, mine, null, [], -1),
+    };
+  }
   const rows = divisionRows(div);
   const myIdx = rows.findIndex((r) => !r.bot && r.accountId === Number(accountId));
   const top = rows.slice(0, n).map((r) => Object.assign({}, r));
@@ -519,12 +493,14 @@ function ladder(accountId, limit) {
     division: { key: div.key, lo: div.lo, hi: div.hi, frame: div.frame, label: div.label },
     frame: div.frame, label: div.label,
     top, me: Object.assign({}, meBase, { rank: myIdx >= 0 ? myIdx + 1 : 0 }),
+    hidden: !!hidden, hiddenUntil: hidden ? hidden.until : 0,
+    award: Object.assign(awardStatusFrom(accountId, week, mine, div, rows, myIdx), hidden ? { hidden: true, rank: 0, eligible: false } : {}),
   };
 }
 
 module.exports = {
   DIVISIONS, divisionOf, divisionOfAccount, levelOf,
-  ensureRating, ratingOf, scoreOf, syncIntegral, rankOf, integralDelta, rankDeltaPair, rankDefenderDelta,
+  ensureRating, ratingOf, scoreOf, syncIntegral, rankOf, rankPositions, integralDelta, rankDeltaPair, rankDefenderDelta,
   clampScore,
   todayCount, bumpDaily, refundDaily, rankDailyStatus, weekKey, weekTick, rollWeekIfNeeded,
   rankAwardStatus, claimRankAward,

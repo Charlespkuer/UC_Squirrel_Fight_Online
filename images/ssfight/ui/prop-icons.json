@@ -1,5 +1,5 @@
 {
- "source": "references/ssfight/ssfight/ssfight/ssfight.swf（ExportAssets 名字 → 紧邻其前的 DefineSprite）+ js/gamedict.js（propMap）+ 联机版手工道具 87",
+ "source": "references/ssfight/ssfight/ssfight/ssfight.swf（ExportAssets 名字 → 紧邻其前的 DefineSprite）+ js/gamedict.js（propMap）",
  "how": "原版 `c1.attachMovie(<道具名>, \"mc\", 100)`（showUsePropWin / showBuyPropWin）：库元件名就是道具名；`byId[道具id].id` = 该图标的元件号，供 SfPropUse 以矢量元件挂进 c1。",
  "byId": {
   "1": {
@@ -46,33 +46,25 @@
    "name": "转生果",
    "id": "3104"
   },
-  "14": {
-   "name": "生命转化丸",
-   "id": "3118"
-  },
   "15": {
    "name": "经验",
    "id": "3059"
   },
   "16": {
    "name": "力量永久+1",
-   "id": "3007",
-   "aliasOf": "属性书"
+   "id": "2985"
   },
   "17": {
    "name": "敏捷永久+1",
-   "id": "3007",
-   "aliasOf": "属性书"
+   "id": "2983"
   },
   "18": {
    "name": "速度永久+1",
-   "id": "3007",
-   "aliasOf": "属性书"
+   "id": "2979"
   },
   "19": {
    "name": "生命永久+5",
-   "id": "3007",
-   "aliasOf": "属性书"
+   "id": "2981"
   },
   "21": {
    "name": "技能卷轴",
@@ -133,8 +125,7 @@
   },
   "38": {
    "name": "红包",
-   "id": "3044",
-   "aliasOf": "礼包"
+   "id": "3064"
   },
   "39": {
    "name": "勇气徽章",
@@ -183,12 +174,8 @@
   },
   "50": {
    "name": "抽奖卷",
-   "id": "3044",
-   "aliasOf": "礼包"
-  },
-  "87": {
-   "name": "征战令",
-   "id": "3106"
+   "id": "2991",
+   "aliasOf": "幸运卡片"
   },
   "101": {
    "name": "一级宝石",

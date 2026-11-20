@@ -18,7 +18,10 @@ process.env.BIND = '127.0.0.1';
 process.env.LOG_LEVEL = 'warn';
 process.env.ALLOW_BROWSER_DEVICES = 'false';
 process.env.ACCOUNTS_PER_IP = '0';
+process.env.ACCOUNT_DAILY_LIMIT = '0'; // 本套件同 IP 连开多个测试号；每日闸门在 test-online-api 里单独验。
 process.env.REGISTRATION_LIMIT = '1000';
+// 主人面板：同一回环 IP 下，只有创作者设备能看到；普通设备即使同 IP 也必须 owner:false。
+process.env.OWNER_IPS = '127.0.0.1,::1';
 
 const hashOf = (platform, id) => crypto.createHash('sha256').update(platform + '\0' + id).digest('hex');
 const CREATOR_BROWSER_ID = 'c'.repeat(64);
@@ -87,6 +90,15 @@ const native = (id) => ({ id, platform: 'windows', provider: 'machine-guid' });
   r = await call('POST', '/api/login', { name: '创作浏览器7', password: 'pass-1' }, browser(CREATOR_BROWSER_ID));
   assert.equal(r.status, 200, '创作者设备可以登录同设备的其它测试号');
   assert.ok(r.body.token);
+  const creatorToken = r.body.token;
 
-  console.log('PASS test-online-creator（创作者设备不受限；普通设备最多 3 个账号、第 4 个拒绝、额度 x/y 正确）');
+  /* 主人面板（开发者同步）不能只看 IP：同一回环 IP 的普通设备也必须被挡。 */
+  const ownerCreator = await call('GET', '/api/owner/status', undefined, browser(CREATOR_BROWSER_ID), creatorToken);
+  assert.equal(ownerCreator.status, 200);
+  assert.equal(ownerCreator.body.owner, true, '创作者设备 + 主人 IP 才看得到开发者同步');
+  const ownerNormal = await call('GET', '/api/owner/status', undefined, native(NORMAL_NATIVE_ID), normalTokens[0]);
+  assert.equal(ownerNormal.status, 200);
+  assert.equal(ownerNormal.body.owner, false, '普通设备即使同主人 IP 也不能看到开发者同步');
+
+  console.log('PASS test-online-creator（创作者设备不受限；普通设备最多 3 个账号、第 4 个拒绝、额度 x/y 正确；主人面板只给创作者设备）');
 })().then(cleanup, (e) => { console.error(e); cleanup(); process.exitCode = 1; });

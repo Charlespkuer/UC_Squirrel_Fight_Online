@@ -1,17 +1,4 @@
 'use strict';
-/* ============================================================
- * server/game/forum.js — 论坛的规则层（与 HTTP 路由分开）
- * ------------------------------------------------------------
- * 这里只做「论坛自己的规矩」：
- *   · 违禁词（默认词库 + 运行时增删 + 归一化匹配）
- *   · 管理员（角色表、创始管理员、增删与审计）
- *   · 每日发帖/回复额度（daily_counts）
- *   · 容量水位（帖子数 / 回复数 / 估算占用）与写保护
- *   · 旧帖清理与管理员操作日志
- *
- * 路由层 server/api/forum.js 只负责参数、分页与 SQL 读写。
- * 表结构见 server/db.js；默认词与创始管理员都在 bootstrap() 里幂等种入。
- * ============================================================ */
 
 const db = require('../db');
 const { config, localDate } = require('../config');
@@ -20,9 +7,6 @@ const { fail } = require('../http');
 const DAY = 86400000;
 const WORD_LIMIT = 1000;
 
-/* 默认违禁词：只放「明确辱骂」和「明确广告/诈骗」两类。
- * 管理员可以在论坛管理页删除或补充；删除后不会被 bootstrap 重新加回来
- * （由 meta 的 forum.words.seeded 标记控制）。 */
 const DEFAULT_WORDS = [
   ['傻逼', '辱骂'], ['傻b', '辱骂'], ['煞笔', '辱骂'], ['沙比', '辱骂'], ['脑残', '辱骂'],
   ['操你妈', '辱骂'], ['草泥马', '辱骂'], ['你妈的', '辱骂'], ['他妈的', '辱骂'], ['妈了个逼', '辱骂'],
@@ -48,9 +32,6 @@ function metaSet(key, value) {
     String(key), String(value));
 }
 
-/** 匹配用的归一化：全角转半角、小写、去掉零宽字符与所有标点/空白。
- *  这样「傻 逼」「傻*逼」「ＳＨＩＴ」都能命中；代价是跨词边界可能误伤，
- *  所以默认词只放明确违规词，管理员可随时调整。 */
 function matchKey(value) {
   return String(value == null ? '' : value).normalize('NFKC').toLowerCase()
     .replace(/[\u200B-\u200F\u202A-\u202E\u2060\uFEFF]/g, '')
@@ -72,9 +53,6 @@ function seedWords() {
   wordCache = null;
 }
 
-/** 创始管理员：按**玩家编号**（不是账户主键）认，默认 100000。
- *  种入成功后写 meta；之后即使管理员被撤销也不回填。
- *  但「一个管理员都不剩」时允许重新补一次，避免删掉最后一个管理员后论坛失管。 */
 function seedFounder() {
   const hasAdmin = !!db.get('SELECT 1 AS x FROM forum_admins LIMIT 1');
   if (hasAdmin && metaGet('forum.founder.seeded') === '1') return;
@@ -88,14 +66,12 @@ function seedFounder() {
   }
 }
 
-/** 启动 / 第一次访问时幂等补齐默认词与创始管理员。失败只警告，不阻断服务。 */
 function bootstrap() {
   try { seedWords(); seedFounder(); } catch (e) {
     console.warn('[forum] bootstrap failed:', e && e.message);
   }
 }
 
-/* ---------------- 管理员 ---------------- */
 function roleOf(accountId) {
   const row = db.get('SELECT role FROM forum_admins WHERE account_id = ?', Number(accountId));
   return row ? String(row.role) : '';
@@ -150,7 +126,6 @@ function revoke(actorId, targetId) {
   return adminRows();
 }
 
-/* ---------------- 违禁词 ---------------- */
 function words() {
   if (!wordCache) {
     wordCache = db.all('SELECT word,match_key,category,note,created_at FROM forum_banned_words ORDER BY category,word');
@@ -163,7 +138,7 @@ function wordRows() {
     note: String(row.note || ''), createdAt: Number(row.created_at),
   }));
 }
-/** 返回命中的原始违禁词（最多 5 个，避免把整张表回给客户端）。 */
+// 返回命中的原始违禁词（最多 5 个，避免把整张表回给客户端）。
 function checkContent(...parts) {
   const list = words();
   if (!list.length) return [];
@@ -209,7 +184,6 @@ function removeWord(actorId, rawWord) {
   return wordRows();
 }
 
-/* ---------------- 每日额度 ---------------- */
 function todayCount(accountId, kind) {
   const row = db.get('SELECT count FROM daily_counts WHERE account_id = ? AND kind = ? AND date = ?',
     Number(accountId), String(kind), localDate());
@@ -235,7 +209,7 @@ function quota(accountId) {
     postsLeft: leftOf(postLimit, postsToday), repliesLeft: leftOf(replyLimit, repliesToday),
   };
 }
-/** 在事务内扣一次额度；到上限时抛 429，插入失败会随事务回滚。 */
+// 在事务内扣一次额度；到上限时抛 429，插入失败会随事务回滚。
 function consumeQuota(accountId, kind) {
   const limit = limitOf(kind), used = todayCount(accountId, kind === 'post' ? 'forum_post' : 'forum_reply');
   if (limit > 0 && used >= limit) {
@@ -247,7 +221,6 @@ function consumeQuota(accountId, kind) {
   return quota(accountId);
 }
 
-/* ---------------- 容量 ---------------- */
 function stats(force) {
   const now = Date.now();
   if (!force && statsCache.value && now - statsCache.at < 2000) return statsCache.value;
@@ -288,7 +261,7 @@ function stats(force) {
   return value;
 }
 function invalidateStats() { statsCache = { at: 0, value: null }; }
-/** 写之前检查硬上限；80% 只报警，不拦正常发帖。 */
+// 写之前检查硬上限；80% 只报警，不拦正常发帖。
 function assertWritable(kind, replyCount) {
   const cap = stats();
   if (kind === 'post' && cap.posts >= cap.maxPosts) {
@@ -302,7 +275,6 @@ function assertWritable(kind, replyCount) {
   }
 }
 
-/** 管理员手动清理：删掉 N 天前的帖子（回复随外键级联删除）。 */
 function prune(days, actorId) {
   const n = Math.max(7, Math.min(3650, Math.floor(Number(days) || 180)));
   const cutoff = Date.now() - n * DAY;

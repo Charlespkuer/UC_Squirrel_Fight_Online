@@ -1,21 +1,7 @@
 'use strict';
-/* ============================================================
- * server/game/fight.js — 所有战斗的服务端编排
- * ------------------------------------------------------------
- * 客户端只负责**播**服务端返回的 `result`；胜负、经验、金币、金杯、积分、
- * 掉落、每日次数全在服务端算。支持的种类：
- *
- *   random   随机挑战（服务端 genAI 造对手）—— 与单机同一套奖励口径
- *   rank     天梯赛（对手是真实玩家的战斗快照）—— 积分/金杯/每日次数
- *   friend   好友切磋（对手快照，不发奖、不计次数）
- *   stage    关卡连战（服务端跑 begin/finishStageBattle）
- *   arena    竞技场（4 人两轮，服务端跑报名/结算）
- *   campaign 征战（4 人组队，见 campaign.js）
- *
- * ⚠ 回调里的命名约定：`({ api: S, save: s })`
- *     · `S` = `window.State` 模块（`S.gainExp` / `S.totalStats` …）
- *     · `s` = 当前存档对象（`s.goldCup` / `s.props` …）
- * ============================================================ */
+// server/game/fight.js — 所有战斗的服务端编排
+// 客户端只负责播服务端返回的 `result`；胜负、经验、金币、金杯、积分、
+// 掉落、每日次数全在服务端算。支持的种类：
 
 const crypto = require('node:crypto');
 const db = require('../db');
@@ -23,6 +9,7 @@ const runtime = require('./runtime');
 const store = require('./store');
 const battle = require('./battle');
 const snapshots = require('./snapshot');
+const visibility = require('./visibility');
 const opponents = require('./opponents');
 const apprentice = require('./apprentice');
 const chests = require('./chests');
@@ -34,6 +21,12 @@ function newCombatId() {
   return 'c_' + crypto.randomBytes(10).toString('base64url');
 }
 
+// 战斗前把徒弟存档里的师父等级对齐到师父当前存档；客户端会主动请求一次，
+// 这里兜底，避免旧客户端/请求失败时仍用拜师时的旧等级。
+function refreshMasterFor(accountId, save) {
+  try { apprentice.refreshMasterLevelInto(accountId, save); } catch (_) {}
+}
+
 function recordCombat(row) {
   chests.create(row);
   if (row.packet && !row.revenge && ['random', 'rank', 'stage', 'arena'].includes(row.kind)
@@ -43,8 +36,8 @@ function recordCombat(row) {
   const saved = Object.assign({}, row.settlement || {});
   let repro = null;
   if (row.packet) {
-    /* 只留可复现面板；把 me/foe 从 settlement 里拆出来，避免重复存两份。
-     * result 也不再入库，客户端拿到的完整 result 会由客户端本地缓存。 */
+    // 只留可复现面板；把 me/foe 从 settlement 里拆出来，避免重复存两份。
+    // result 也不再入库，客户端拿到的完整 result 会由客户端本地缓存。
     const { me, foe, result: _result, rev: _rev, patch: _patch, save: _save, settlement, ...meta } = row.packet;
     if (me && foe) repro = store.encode({ me, foe });
     saved.__meta = Object.assign({}, meta, settlement ? { settlement } : {});
@@ -64,14 +57,13 @@ function recordCombat(row) {
   );
 }
 
-/** 用 seed + 双方面板复算；hash 校验能挡住 sim 版本/篡改导致的错录像。 */
+// 用 seed + 双方面板复算；hash 校验能挡住 sim 版本/篡改导致的错录像。
 function reproduceCombat(row, repro) {
   if (!repro || !repro.me || !repro.foe) return null;
   const result = simulate(Number(row.seed), repro.me, repro.foe);
   const hash = battle.hashResult(result);
   if (row.hash && String(hash) !== String(row.hash)) {
-    /* 只有老行才可能带着完整 result；新行没有可退的录像。
-     * 返回明确错误，避免播放一份和战报对不上的假录像。 */
+
     const stored = (() => { try { return store.decode(row.result); } catch (_) { return null; } })();
     if (stored && Array.isArray(stored.rounds) && stored.rounds.length) return stored;
     const e = new Error('这场录像的模拟版本已变化，无法回放');
@@ -146,16 +138,13 @@ function simVersion() {
   try { return runtime.boot().simVersion; } catch (_) { return 'unknown'; }
 }
 
-/* ============================================================
- * 随机挑战
- * ============================================================ */
 function buildRandomFoe(S, myLevel) {
   return opponents.buildRandomFoe(S, myLevel);
 }
 
 function runRandom({ accountId, snapshotId, rev, idemKey, revengeOf }) {
-  /* ssfight 的复仇只认天梯战报（`getRankMessage` / `revenge.do`）；
-   * 随机挑战的败绩没有复仇入口。旧客户端误传时明确拒绝，避免又开出一条无消耗重打。 */
+  // ssfight 的复仇只认天梯战报（`getRankMessage` / `revenge.do`）；
+  // 随机挑战的败绩没有复仇入口。旧客户端误传时明确拒绝，避免又开出一条无消耗重打。
   if (revengeOf) {
     const e = new Error('复仇只适用于天梯赛战报');
     e.code = 'BAD_REQUEST';
@@ -164,15 +153,18 @@ function runRandom({ accountId, snapshotId, rev, idemKey, revengeOf }) {
   const combatKind = 'random';
   const duplicate = duplicateCombat(accountId, combatKind, idemKey);
   if (duplicate) return duplicate;
-  const selected = snapshotId ? opponents.resolve(snapshotId, accountId, 'random') : null;
   const seed = battle.randomSeed();
   const id = newCombatId();
   let out, response;
   let myName = '';
+  let selected = null;
   db.tx(() => {
     out = store.runOnSave(accountId, ({ api: S, save: s }) => {
       if (!S.consumeEnergy(10)) { const e = new Error('体力不足（需要 10 点）'); e.code = 'CONFLICT'; throw e; }
-      const me = fighterFromState({ useProps: true });
+      refreshMasterFor(accountId, s);
+      const me = fighterFromState({ useProps: true, cheerAccountId: accountId });
+      // offer 或「查看」保存下来的原始快照号都能打：后者不受内存 offer 重启/TTL 影响。
+      selected = snapshotId ? opponents.resolveTarget(snapshotId, accountId, 'random', me.level) : null;
       const foe = selected ? fighterFromSnapshot(selected.fighter) : battle.withSeed(seed, () => buildRandomFoe(S, me.level));
       const opponent = selected ? selected.public : {
         source: 'bot', player: false, bot: true, practice: false, kind: 'random', accountId: 0,
@@ -219,10 +211,10 @@ function runRandom({ accountId, snapshotId, rev, idemKey, revengeOf }) {
       attackerRev: out.rev,
       packet: response,
     });
-    /* 被真人挑战的防守快照：给防守方留一条消息（主动挑战方自己**不**写消息，
-     * 所以主界面 NEW 红点不会被自己的战斗点亮）。消息带快照等级与胜负，
-     * 客户端按 `defense_win/defense_loss` 选胜败印章，`combatId` 走防守视角回放。 */
-    if (v.opponent && v.opponent.player && Number(v.opponent.accountId) > 0) {
+    // 被真人挑战的防守快照：给防守方留一条消息（主动挑战方自己不写消息，
+    // 所以主界面 NEW 红点不会被自己的战斗点亮）。消息带快照等级与胜负，
+    // 客户端按 `defense_win/defense_loss` 选胜败印章，`combatId` 走防守视角回放。
+    if (v.opponent && v.opponent.player && Number(v.opponent.accountId) > 0 && !visibility.isHidden(accountId)) {
       const defWin = v.result.winner !== 0;
       const level = Math.max(1, Number(selected && selected.fighter && selected.fighter.level) || (v.foe && v.foe.level) || 1);
       message(v.opponent.accountId, defWin ? 'defense_win' : 'defense_loss',
@@ -231,7 +223,7 @@ function runRandom({ accountId, snapshotId, rev, idemKey, revengeOf }) {
           combatId: id, fromId: accountId, fromName: myName,
           payload: {
             level,
-            snapshotId: String((selected && selected.playerSnapshotId) || ''),
+            snapshotId: String((selected && (selected.playerSnapshotId || (selected.public && selected.public.snapshotId))) || ''),
             defenderWin: defWin,
             attackerWin: !!v.win,
           },
@@ -241,9 +233,6 @@ function runRandom({ accountId, snapshotId, rev, idemKey, revengeOf }) {
   return response;
 }
 
-/* ============================================================
- * 天梯赛
- * ============================================================ */
 function loadSnapshotFor(accountId, snapshotId) {
   const snap = snapshots.snapshotById(snapshotId);
   if (!snap) { const e = new Error('对手不存在'); e.code = 'NOT_FOUND'; throw e; }
@@ -251,27 +240,23 @@ function loadSnapshotFor(accountId, snapshotId) {
   return snap;
 }
 
-/**
- * 天梯「复仇」读原版 `alertRevenge` / `revenge.do` 的口径：
- *   · 只认天梯（kind=rank）战报；
- *   · 第 n 次（从 0 起）复仇要 `(n+1)*20` 金松果，胜利抢 `(n+1)*5+3` 个金杯；
- *   · 不占每日天梯次数、不扣天梯入场金松果、不发战后宝箱/飘物；
- *   · 可以反复复仇，每次成功后计数 +1，费用与金杯都按上式递增。
- * 这里把计数存在原战斗 settlement 的 `__revenge[accountId]`，旧的 `__revenged`
- * 时间戳只作为兼容迁移（旧数据算一次）。
- */
+// 时间戳只作为兼容迁移（旧数据算一次）。
 function revengeInfoFor(accountId, revengeOf) {
   const id = String(revengeOf || '');
   if (!id) return null;
   const row = db.get('SELECT attacker_id, defender_id, kind, winner, settlement, created_at FROM combats WHERE id = ?', id);
   if (!row || String(row.kind) !== 'rank') return null;
+  // 隐身方发起的挑战不留下可复仇的战报；即使旧战报已经存在，也不让防守方进入复仇。
+  if (visibility.isHidden(Number(row.attacker_id))) return null;
   const mine = Number(accountId);
-  /* 原版「被抢方可复仇」：只有**被动方**、原战斗**输掉**、且确实被抢过金杯，
-   * 并且只在战报当天有效。主动挑战失败不产生复仇入口。 */
+  // 原版「被抢方可复仇」：只有被动方、原战斗输掉、且确实被抢过金杯，
+  // 并且只在战报当天有效。主动挑战失败不产生复仇入口。
   if (Number(row.defender_id) !== mine || Number(row.winner) !== 0) return null;
   let saved;
   try { saved = JSON.parse(row.settlement || '{}'); } catch (_) { return null; }
-  /* 复仇战本身产生的战报不能再拿去复仇。 */
+  // 隐身方发起时写入的标记要永久生效：对方之后取消隐身，也不能把旧战报变成复仇入口。
+  if (saved && saved.hiddenAttacker) return null;
+  // 复仇战本身产生的战报不能再拿去复仇。
   if (saved && saved.revenge) return null;
   const robbed = Math.max(0, Number(saved && saved.defender && saved.defender.robbed) || 0);
   if (robbed <= 0) return null;
@@ -299,7 +284,6 @@ function isRevengeOf(accountId, snap, revengeOf) {
   return !!row && Number(row.defender_id) === mine && Number(row.attacker_id) === other;
 }
 
-/** 复仇开打一次就把计数 +1（胜负都算，和原版递增费用一致）。 */
 function markRevenge(combatId, accountId, win) {
   const id = String(combatId || '');
   if (!id) return;
@@ -313,13 +297,11 @@ function markRevenge(combatId, accountId, win) {
   saved.__revenge = Object.assign({}, saved.__revenge || {}, {
     [key]: { count, lastAt: Date.now(), lastWin: !!win },
   });
-  /* 兼容旧客户端/旧字段：胜利也写一次 `__revenged`，但新逻辑不再用它拦截重复复仇。 */
+  // 兼容旧客户端/旧字段：胜利也写一次 `__revenged`，但新逻辑不再用它拦截重复复仇。
   if (win) saved.__revenged = Object.assign({}, saved.__revenged || {}, { [key]: Date.now() });
   db.run('UPDATE combats SET settlement = ? WHERE id = ?', JSON.stringify(saved), id);
 }
 
-/** 被动方经验：原版天梯消息里被动胜/负分别给 3/2 点上下，挑战者高 10 级以上再 +1，
- *  总区间 2~4；不按挑战者的完整 `challengeExp` 发，避免两个人互刷高经验。 */
 function rankDefenderExp(defWin, defenderLevel, attackerLevel) {
   const base = defWin ? 3 : 2;
   const diff = Math.max(0, (Number(attackerLevel) || 1) - (Number(defenderLevel) || 1));
@@ -342,7 +324,7 @@ function runRank({ accountId, snapshotId, rev, idemKey, revengeOf }) {
   if (duplicate) return duplicate;
   const selected = opponents.isOffer(snapshotId) ? opponents.resolve(snapshotId, accountId, 'rank') : null;
   if (selected && selected.source === 'bot') return runRankBot({ accountId, selected, rev, idemKey });
-  /* 天梯赛 30 级开启（与客户端、帮助页同一口径）；服务端不能只靠界面拦。 */
+
   const meSave = store.peek(accountId);
   if (!meSave) {
     const e = new Error('还没有存档'); e.code = 'CONFLICT'; throw e;
@@ -350,8 +332,7 @@ function runRank({ accountId, snapshotId, rev, idemKey, revengeOf }) {
   if (Number(meSave.level) < 30) {
     const e = new Error('天梯赛需要达到30级。'); e.code = 'CONFLICT'; throw e;
   }
-  /* 赛区制：真人对手必须和自己同一个赛区（10 级一档）。复仇是唯一例外 ——
-   * 被同一个人抢了杯，无论他现在升到哪一级都要能打回去。 */
+  // 赛区制：真人对手必须和自己同一个赛区（10 级一档）。复仇是唯一例外 ——
   if (selected && !revengeOf) {
     const myDiv = settlement.divisionOf(Number(meSave.level));
     const foeDiv = settlement.divisionOf(Number(selected.fighter.level) || 0);
@@ -361,8 +342,7 @@ function runRank({ accountId, snapshotId, rev, idemKey, revengeOf }) {
       throw e;
     }
   }
-  /* 【复仇】原版 `alertRevenge`：第 n 次复仇要 `(n+1)*20` 金松果；不占每日天梯次数、
-   * 不收天梯入场金松果。费用在**开打前**由服务端扣，输赢都付。 */
+  // 不收天梯入场金松果。费用在开打前由服务端扣，输赢都付。
   const revenge = revengeOf ? revengeInfoFor(accountId, revengeOf) : null;
   if (revengeOf && !revenge) {
     const e = new Error('这条天梯战报不能复仇（不是你的战报或已失效）');
@@ -384,8 +364,7 @@ function runRank({ accountId, snapshotId, rev, idemKey, revengeOf }) {
       throw e;
     }
     if (daily.cost > 0) {
-      const save = store.peek(accountId);
-      if (Math.max(0, Number(save.goldPoint) || 0) < daily.cost) {
+      if (Math.max(0, Number(meSave.goldPoint) || 0) < daily.cost) {
         const e = new Error('金松果不足：今天第 ' + daily.tierStart + ' 场起每场需要 ' + daily.cost + ' 金松果。');
         e.code = 'CONFLICT';
         e.extra = { daily };
@@ -394,22 +373,21 @@ function runRank({ accountId, snapshotId, rev, idemKey, revengeOf }) {
     }
   }
   let snap = selected ? { id: selected.playerSnapshotId, accountId: selected.accountId, fighter: selected.fighter } : loadSnapshotFor(accountId, snapshotId);
-  /* 不接受任意 snapshot 直连：普通挑战必须来自服务端候选；只有战报里的
-   * 「再次挑战」可以用 raw snapshot，且必须能对上那条败绩。 */
+  // 不接受任意 snapshot 直连：普通挑战必须来自服务端候选；只有战报里的
+  // 「再次挑战」可以用 raw snapshot，且必须能对上那条败绩。
   if (!selected && !isRevengeOf(accountId, snap, revengeOf)) {
     const e = new Error('请从对手列表选择对手（或从战报中再次挑战）。');
     e.code = 'FORBIDDEN'; throw e;
   }
-  /* 天梯所有真人都用**最近存档**参战（用户 2026-10-29 口径）：战报里的旧 raw snapshot
-   * 只用来确认「和谁再打一场」，真正上场的换成对方当前的 is_current 快照。
-   * 这样低等级/过期的旧快照不会再被当成对手面板。 */
+  // 只用来确认「和谁再打一场」，真正上场的换成对方当前的 is_current 快照。
+  // 这样低等级/过期的旧快照不会再被当成对手面板。
   if (!selected) {
     const current = snapshots.currentSnapshot(snap.accountId, 'classic');
     if (current && current.fighter) snap = { id: current.id, accountId: current.accountId, fighter: current.fighter };
   }
   const foeFighter = fighterFromSnapshot(snap.fighter);
   if (!foeFighter) { const e = new Error('对手快照已失效'); e.code = 'CONFLICT'; throw e; }
-  /* 候选是 10 分钟内发的票：对方这期间升过级、刚跨出赛区时，换完当前快照再核一次。 */
+  // 候选是 10 分钟内发的票：对方这期间升过级、刚跨出赛区时，换完当前快照再核一次。
   if (!revenge) {
     const myDiv2 = settlement.divisionOf(Number(meSave.level));
     const foeDiv2 = settlement.divisionOf(Number(foeFighter.level) || 0);
@@ -430,7 +408,7 @@ function runRank({ accountId, snapshotId, rev, idemKey, revengeOf }) {
     accountId: snap.accountId, snapshotId: snap.id, name: target.name, tag: target.tag,
     level: foeFighter.level, score: foeScore, display: target.name,
   };
-  /* 复仇抢杯是零和：先看防守方当前金杯，最多抢到对方实际拥有的数量。 */
+
   const defenderBefore = revenge ? store.peek(snap.accountId) : null;
   const defenderCups = revenge ? Math.max(0, Number(defenderBefore && defenderBefore.goldCup) || 0) : 0;
   let out, response;
@@ -438,7 +416,8 @@ function runRank({ accountId, snapshotId, rev, idemKey, revengeOf }) {
   let myName = '';
   db.tx(() => {
     out = store.runOnSave(accountId, ({ api: S, save: s }) => {
-      const me = fighterFromState({ useProps: false });
+      refreshMasterFor(accountId, s);
+      const me = fighterFromState({ useProps: false, cheerAccountId: accountId });
       const result = simulate(seed, me, foeFighter);
       const win = result.winner === 0;
       if (revenge) {
@@ -447,7 +426,7 @@ function runRank({ accountId, snapshotId, rev, idemKey, revengeOf }) {
           e.code = 'CONFLICT';
           throw e;
         }
-        /* 原版复仇费用在开打前扣，输赢都付；不占每日天梯次数。 */
+
         S.addGold(-revenge.cost, { count: false });
       } else if (daily.cost > 0) S.addGold(-daily.cost, { count: false });
       const pair = settlement.rankDeltaPair(myScore, foeScore, win);
@@ -458,11 +437,11 @@ function runRank({ accountId, snapshotId, rev, idemKey, revengeOf }) {
         : (win ? S.challengeExp(foeFighter.level, s.level) : config.rankLoseExp);
       const ups = exp > 0 ? S.gainExp(exp) : [];
       const stolen = revenge && win ? Math.min(revenge.cups, defenderCups) : 0;
-      s.goldCup = Math.max(0, (Number(s.goldCup) || 0) + (revenge ? stolen : (win ? config.rankWinCup : config.rankLoseCup)));
+      S.addGoldCup(revenge ? stolen : (win ? config.rankWinCup : config.rankLoseCup));
       s.integral = newScore;
-      /* 抢杯：普通天梯才走随机抢 3 杯；复仇的杯子已按原版公式单独结算。 */
+
       const canRob = !revenge && win && Math.random() < config.rankRobChance;
-      const drop = null; // 战后四选一由 chests.claim 入账，避免重复奖励。
+      const drop = null;
       myName = String(s.name || '');
       const entry = S.recordBattle({
         me, foe: foeFighter, result, region: 0, kind: 'rank',
@@ -472,7 +451,7 @@ function runRank({ accountId, snapshotId, rev, idemKey, revengeOf }) {
         },
       });
       if (revenge) {
-        /* 把费用与次数写回**那条败绩**，消息页下一次打开就能显示 40/60… 的新价格。 */
+
         const old = (Array.isArray(s.battles) ? s.battles : [])
           .find((b) => b && b.online && String(b.online.combatId) === String(revengeOf));
         if (old) {
@@ -489,15 +468,15 @@ function runRank({ accountId, snapshotId, rev, idemKey, revengeOf }) {
 
     const v = out.value;
     const won = v.win;
-    /* 防守方结算：**积分固定 ±1**（挑战方赢 → -1、挑战方输 → +1，见 `rankDefenderDelta`），
-     * 另有金杯与原版被动经验 2~4 点；经验有上限，不能按主动挑战全额发。 */
+    // 防守方结算：积分固定 ±1（挑战方赢 → -1、挑战方输 → +1，见 `rankDefenderDelta`），
+    // 另有金杯与原版被动经验 2~4 点；经验有上限，不能按主动挑战全额发。
     defenderOut = store.runOnSave(snap.accountId, ({ api: S2, save: s2 }) => {
       const defWin = !won;
       let robbed = 0;
       const defExp = rankDefenderExp(defWin, s2.level, foeFighter.level);
       const defUps = defExp > 0 ? S2.gainExp(defExp) : [];
       if (revenge) {
-        /* 复仇只按原版「抢夺」转移金杯，不再叠加普通天梯的胜 3 / 负 1。 */
+
         robbed = won ? Math.min(v.stolen, Math.max(0, Number(s2.goldCup) || 0)) : 0;
         if (robbed > 0) s2.goldCup = Math.max(0, Number(s2.goldCup) - robbed);
         const dDelta = v.defenderDelta;
@@ -510,30 +489,32 @@ function runRank({ accountId, snapshotId, rev, idemKey, revengeOf }) {
       }
       const dDelta = v.defenderDelta;
       s2.integral = settlement.clampScore(foeScore + dDelta);
-      s2.goldCup = Math.max(0, Number(s2.goldCup) + (defWin ? config.rankWinCup : config.rankLoseCup));
+      S2.addGoldCup(defWin ? config.rankWinCup : config.rankLoseCup);
       return { defWin, dDelta, robbed, newScore: s2.integral, goldCup: s2.goldCup, exp: defExp, ups: defUps };
     }, { snapshotSource: 'defense' });
 
     applyRating(accountId, won, v.newScore);
     applyRating(snap.accountId, !won, defenderOut.value.newScore);
-    /* 复仇不占每日天梯次数。 */
+
     if (!revenge) settlement.bumpDaily(accountId, 'rank', 1);
 
     const defenseLevel = Math.max(1, Number(foeFighter.level) || Number(snap.level) || 1);
-    message(snap.accountId, won ? 'rank_loss' : 'rank_win',
-      '【' + (myName || '对手') + '】在' + (revenge ? '复仇战' : '天梯赛') + (won ? '击败了' : '输给了') + '你（你 Lv.'
-        + defenseLevel + ' 的防守快照），获得'
-        + (defenderOut.value.exp || 0) + '点经验。',
-      {
-        combatId: id, fromId: accountId, fromName: myName,
-        payload: {
-          level: defenseLevel,
-          defenderWin: !won,
-          delta: defenderOut.value.dDelta, robbed: defenderOut.value.robbed, score: defenderOut.value.newScore,
-          exp: defenderOut.value.exp || 0,
-          revenge: !!revenge, revengeCount: revenge ? revenge.count : 0,
-        },
-      });
+    if (!visibility.isHidden(accountId)) {
+      message(snap.accountId, won ? 'rank_loss' : 'rank_win',
+        '【' + (myName || '对手') + '】在' + (revenge ? '复仇战' : '天梯赛') + (won ? '击败了' : '输给了') + '你（你 Lv.'
+          + defenseLevel + ' 的防守快照），获得'
+          + (defenderOut.value.exp || 0) + '点经验。',
+        {
+          combatId: id, fromId: accountId, fromName: myName,
+          payload: {
+            level: defenseLevel,
+            defenderWin: !won,
+            delta: defenderOut.value.dDelta, robbed: defenderOut.value.robbed, score: defenderOut.value.newScore,
+            exp: defenderOut.value.exp || 0,
+            revenge: !!revenge, revengeCount: revenge ? revenge.count : 0,
+          },
+        });
+    }
 
     response = {
       ok: true, combatId: id, seed, simVersion: simVersion(), me: v.me, foe: v.foe, result: v.result, opponent,
@@ -562,21 +543,19 @@ function runRank({ accountId, snapshotId, rev, idemKey, revengeOf }) {
         defender: { delta: defenderOut.value.dDelta, robbed: defenderOut.value.robbed, score: defenderOut.value.newScore, exp: defenderOut.value.exp || 0 },
         drop: v.drop || null,
         revengeOf: revengeOf || '',
+        hiddenAttacker: visibility.isHidden(accountId),
         revenge: revenge ? { count: revenge.count, cost: revenge.cost, cups: revenge.cups, stolen: v.stolen } : null,
       },
       attackerRev: out.rev, defenderRev: defenderOut.rev,
       packet: response,
     });
-    /* 开打就递增复仇计数（胜负都算），原版下一次费用/金杯随之上涨。 */
+
     if (revenge) markRevenge(revengeOf, accountId, won);
   });
 
   return response;
 }
 
-/** 天梯人机（赛区人机）：**所有分段**都按正常天梯规则结算 —— 挑战方按积分档位 ±，
- *  人机作为防守方只固定 ±1（用户 2026-11 口径）。300 分以后人机只是候选权重降到 1/3
- *  （见 `opponents.rankCandidates`），不再有「回落场次不结算积分」的分支。 */
 function runRankBot({ accountId, selected, rev, idemKey }) {
   const meSave = store.peek(accountId);
   if (!meSave) { const e = new Error('还没有存档'); e.code = 'CONFLICT'; throw e; }
@@ -606,7 +585,8 @@ function runRankBot({ accountId, selected, rev, idemKey }) {
   let out, response;
   db.tx(() => {
     out = store.runOnSave(accountId, ({ api: S, save: s }) => {
-      const me = fighterFromState({ useProps: false });
+      refreshMasterFor(accountId, s);
+      const me = fighterFromState({ useProps: false, cheerAccountId: accountId });
       const result = simulate(seed, me, foeFighter);
       const win = result.winner === 0;
       if (daily.cost > 0) S.addGold(-daily.cost, { count: false });
@@ -615,7 +595,7 @@ function runRankBot({ accountId, selected, rev, idemKey }) {
       const newScore = settlement.clampScore(myScore + delta);
       const exp = win ? S.challengeExp(foeFighter.level, s.level) : config.rankLoseExp;
       const ups = exp > 0 ? S.gainExp(exp) : [];
-      s.goldCup = Math.max(0, (Number(s.goldCup) || 0) + (win ? config.rankWinCup : config.rankLoseCup));
+      S.addGoldCup(win ? config.rankWinCup : config.rankLoseCup);
       s.integral = newScore;
       const entry = S.recordBattle({
         me, foe: foeFighter, result, region: 0, kind: 'rank',
@@ -632,7 +612,7 @@ function runRankBot({ accountId, selected, rev, idemKey }) {
     const v = out.value;
     applyRating(accountId, v.win, v.newScore);
     settlement.bumpDaily(accountId, 'rank', 1);
-    /* 人机作为防守方只固定 ±1（50 分硬下限由 `applyBotResult` 兜住）。 */
+
     if (bot) settlement.applyBotResult(bot.id, v.win, v.defenderDelta);
     response = {
       ok: true, combatId: id, seed, simVersion: simVersion(), me: v.me, foe: v.foe, result: v.result,
@@ -663,9 +643,6 @@ function runRankBot({ accountId, selected, rev, idemKey }) {
   return response;
 }
 
-/* ============================================================
- * 收徒（收真人为徒：有师父打师父，没有师父打本人）
- * ============================================================ */
 function mergePatch(a, b) {
   if (!a) return b || null;
   if (!b) return a;
@@ -699,7 +676,7 @@ function runRecruit({ accountId, targetAccountId, rev, idemKey }) {
   if (prentices.length >= apprentice.capFor(meSave.level)) {
     const e = new Error('收徒名额已满（' + apprentice.capFor(meSave.level) + '）'); e.code = 'CONFLICT'; throw e;
   }
-  /* 打谁由服务端决定：有师父先打师父（原版 text7841）；没有师父才打本人。 */
+  // 打谁由服务端决定：有师父先打师父（原版 text7841）；没有师父才打本人。
   const foeInfo = apprentice.recruitFoe(targetId);
   const foeFighter = foeInfo.fighter;
   const targetFighter = apprentice.targetStats(targetId) || { name: targetAccount.name, level: 1 };
@@ -717,9 +694,10 @@ function runRecruit({ accountId, targetAccountId, rev, idemKey }) {
       if (!S.consumeEnergy(energy)) {
         const e = new Error('体力不足 ' + energy + ' 点，无法进行收徒挑战'); e.code = 'CONFLICT'; throw e;
       }
-      /* 原版：收徒成功与否都要花 10 个金松果（text4724），输了不退。 */
+
       if (cost > 0) S.addGold(-cost, { count: false });
-      const me = fighterFromState({ useProps: false });
+      refreshMasterFor(accountId, s);
+      const me = fighterFromState({ useProps: false, cheerAccountId: accountId });
       const result = simulate(seed, me, foeFighter);
       const win = result.winner === 0;
       const exp = win ? 20 : 0;
@@ -735,7 +713,7 @@ function runRecruit({ accountId, targetAccountId, rev, idemKey }) {
       return { me, foe: foeFighter, result, win, exp, ups, battleId: entry ? entry.id : null };
     }, { expectRev: rev, snapshotSource: 'recruit' });
     const v = out.value;
-    /* 关系与两边的存档在同一个事务里落地；失败只投递一条「被打退」的消息。 */
+    // 关系与两边的存档在同一个事务里落地；失败只投递一条「被打退」的消息。
     committed = apprentice.commitRecruit(accountId, targetId, v.win, myName, id);
     const current = store.getRow(accountId);
     response = {
@@ -754,7 +732,7 @@ function runRecruit({ accountId, targetAccountId, rev, idemKey }) {
         via: foeInfo.via, masterAccountId: foeInfo.masterAccountId || 0,
       },
       battleId: v.battleId, rev: Number(current.revision), patch: mergePatch(out.patch, committed && committed.masterPatch),
-      /* 同时带整份存档：网络重试拿到 duplicate 时客户端也能一次性对齐（不会漏掉扣费/收徒）。 */
+      // 同时带整份存档：网络重试拿到 duplicate 时客户端也能一次性对齐（不会漏掉扣费/收徒）。
       save: settlement.syncIntegral(accountId, store.decode(current.payload)),
     };
     recordCombat({
@@ -771,9 +749,6 @@ function runRecruit({ accountId, targetAccountId, rev, idemKey }) {
   return response;
 }
 
-/* ============================================================
- * 好友切磋（不发奖、不计每日、不改积分）
- * ============================================================ */
 function runWood({ accountId, rev, idemKey }) {
   const duplicate = duplicateCombat(accountId, 'wood', idemKey);
   if (duplicate) return duplicate;
@@ -783,7 +758,8 @@ function runWood({ accountId, rev, idemKey }) {
     weapons:[], skills:[], gears:[], effects:{}, practice:true, practiceRounds:10 };
   let response;
   db.tx(() => {
-    const out = store.runOnSave(accountId, ({ api: S }) => {
+    const out = store.runOnSave(accountId, ({ api: S, save: s }) => {
+      refreshMasterFor(accountId, s);
       const me = fighterFromState({ useProps:false });
       const result = simulate(seed, me, foe);
       const record = S.recordWoodBattle(result);
@@ -800,6 +776,17 @@ function runWood({ accountId, rev, idemKey }) {
   return response;
 }
 
+function isKin(accountId, targetId) {
+  const a = Number(accountId), b = Number(targetId);
+  if (!(a > 0 && b > 0) || a === b) return false;
+  return !!db.get(
+    `SELECT 1 AS x FROM apprenticeships
+      WHERE status = 'active' AND master_kind = 'account'
+        AND ((master_id = ? AND prentice_id = ?) OR (master_id = ? AND prentice_id = ?))`,
+    a, b, b, a
+  );
+}
+
 function runFriend({ accountId, snapshotId, rev, idemKey }) {
   const duplicate = duplicateCombat(accountId, 'friend', idemKey);
   if (duplicate) return duplicate;
@@ -809,8 +796,9 @@ function runFriend({ accountId, snapshotId, rev, idemKey }) {
     const foe = fighterFromSnapshot(JSON.parse(row.fighter)), seed = battle.randomSeed(), id = newCombatId();
     let response;
     db.tx(() => {
-      const out = store.runOnSave(accountId, ({ api: S }) => {
-        const me = fighterFromState({ useProps: false }), result = simulate(seed, me, foe);
+      const out = store.runOnSave(accountId, ({ api: S, save: s }) => {
+        refreshMasterFor(accountId, s);
+        const me = fighterFromState({ useProps: false, cheerAccountId: accountId }), result = simulate(seed, me, foe);
         const entry = S.recordBattle({ me, foe, result, region: 0, kind: 'friend', online: { combatId: id, source: 'bot', opponentId: 0 } });
         return { me, result, battleId: entry ? entry.id : null };
       }, { expectRev: rev });
@@ -824,10 +812,21 @@ function runFriend({ accountId, snapshotId, rev, idemKey }) {
     });
     return response;
   }
-  const snap = loadSnapshotFor(accountId, snapshotId);
-  const friend = db.get('SELECT 1 AS x FROM friendships WHERE account_id = ? AND friend_id = ?', Number(accountId), Number(snap.accountId));
-  if (!friend) {
-    const e = new Error('只能和好友切磋'); e.code = 'FORBIDDEN'; throw e;
+  let snap;
+  if (/^\d+$/.test(String(snapshotId))) {
+    // 师徒行有时只有账号 id（`masterView` 的旧档/快照缺失）：按当前快照开打。
+    const targetId = Number(snapshotId);
+    if (!isKin(accountId, targetId)) {
+      const e = new Error('只能和好友或师徒切磋'); e.code = 'FORBIDDEN'; throw e;
+    }
+    snap = snapshots.currentSnapshot(targetId, 'classic');
+    if (!snap || !snap.fighter) { const e = new Error('对方还没有战斗快照，稍后再试'); e.code = 'NOT_FOUND'; throw e; }
+  } else {
+    snap = loadSnapshotFor(accountId, snapshotId);
+    const friend = db.get('SELECT 1 AS x FROM friendships WHERE account_id = ? AND friend_id = ?', Number(accountId), Number(snap.accountId));
+    if (!friend && !isKin(accountId, snap.accountId)) {
+      const e = new Error('只能和好友或师徒切磋'); e.code = 'FORBIDDEN'; throw e;
+    }
   }
   const foeFighter = fighterFromSnapshot(snap.fighter);
   const seed = battle.randomSeed();
@@ -836,7 +835,8 @@ function runFriend({ accountId, snapshotId, rev, idemKey }) {
   let myName = '';
   db.tx(() => {
     out = store.runOnSave(accountId, ({ api: S, save: s }) => {
-      const me = fighterFromState({ useProps: false });
+      refreshMasterFor(accountId, s);
+      const me = fighterFromState({ useProps: false, cheerAccountId: accountId });
       const result = simulate(seed, me, foeFighter);
       myName = String(s.name || '');
       const entry = S.recordBattle({ me, foe: foeFighter, result, region: 0, kind: 'friend', online: { combatId: id, opponentId: snap.accountId } });
@@ -855,7 +855,7 @@ function runFriend({ accountId, snapshotId, rev, idemKey }) {
       simVersion: simVersion(), winner: v.result.winner, settlement: { friendly: true },
       attackerRev: out.rev, packet: response,
     });
-    /* 好友切磋也是被动事件：防守方收到消息，带快照等级与胜负，可回看防守视角录像。 */
+    // 好友切磋也是被动事件：防守方收到消息，带快照等级与胜负，可回看防守视角录像。
     const friendDefWin = v.result.winner !== 0;
     message(snap.accountId, 'friend_spar',
       '【' + (myName || '好友') + '】找你切磋了一场（你 Lv.' + Math.max(1, Number(snap.level) || 1) + ' 的防守快照），你'
@@ -872,17 +872,19 @@ function runFriend({ accountId, snapshotId, rev, idemKey }) {
   return response;
 }
 
-/* ============================================================
- * 关卡（连战）
- * ============================================================ */
 function runStage({ accountId, stageId, rev, idemKey }) {
   const duplicate = duplicateCombat(accountId, 'stage', idemKey);
   if (duplicate) return duplicate;
   const seed = battle.randomSeed();
   const id = newCombatId();
+  // 徒弟镜像只用于选谁先上阵；它的三维必须按徒弟当前存档刷新，不能停在收徒那一刻。
+  // 在进入 runOnSave 前算好，回调里只赋值（嵌套 withState 会串档）。
+  let livePrentices = null;
+  try { livePrentices = apprentice.livePrenticeStats(accountId); } catch (_) { livePrentices = null; }
   let out, response;
   db.tx(() => {
     out = store.runOnSave(accountId, ({ api: S, save: s }) => {
+      apprentice.applyPrenticeStatsInto(s, livePrentices);
       const G = globalThis.GData;
       const started = S.beginStageBattle(stageId);
       if (!started.ok) {
@@ -906,6 +908,12 @@ function runStage({ accountId, stageId, rev, idemKey }) {
         ? Math.min(1, prevRun.carryHp + 0.25) : undefined;
       const dailyCount = S.challengeDailyCount ? S.challengeDailyCount() : 0;
       const foe = G.stageFoe(npc, stageId, type.anim, dailyCount);
+      // 徒弟战败后师父接手同一名对手：按徒弟打完时对手的剩余血量入场。
+      if (started.role === 'master' && prevRun && Number.isFinite(prevRun.foeCarryHp)) {
+        const fullHp = Math.max(1, Math.round(Number(foe.maxHp || foe.hp) || 1));
+        foe.maxHp = fullHp;
+        foe.hp = Math.max(1, Math.round(fullHp * prevRun.foeCarryHp));
+      }
       let me;
       const ratio = carryHp == null ? 1 : Math.min(1, Math.max(0.01, carryHp));
       if (prenticeRole) {
@@ -913,7 +921,8 @@ function runStage({ accountId, stageId, rev, idemKey }) {
         me.maxHp = Math.max(1, Math.round(Number(me.maxHp || me.hp) || 1));
         me.hp = Math.max(1, Math.round(Math.min(me.maxHp, Number(me.hp) || me.maxHp) * ratio));
       } else {
-        me = fighterFromState({ useProps: false });
+        refreshMasterFor(accountId, s);
+        me = fighterFromState({ useProps: false, cheerAccountId: accountId });
         me.hp = Math.max(1, Math.round(me.maxHp * ratio));
       }
       const result = simulate(seed, me, foe);
@@ -925,8 +934,11 @@ function runStage({ accountId, stageId, rev, idemKey }) {
       let settle;
       let prenticeLost = false;
       if (prenticeRole && !win) {
-        /* 徒弟战败：不扣复活、不结束本轮，只清 attempt 并标记「师父接手」。 */
-        S.stagePrenticeLost(stageId, started.token);
+
+        const foeHp = lastRound && Array.isArray(lastRound.hpAfter) ? lastRound.hpAfter[1] : null;
+        const foeCap = Array.isArray(result.maxHp) ? result.maxHp[1] : 0;
+        const foeRatio = Number.isFinite(foeHp) && foeCap > 0 ? Math.max(0, Math.min(1, foeHp / foeCap)) : null;
+        S.stagePrenticeLost(stageId, started.token, foeRatio);
         prenticeLost = true;
         settle = { ok: true, win: false, prenticeLost: true, run: S.stageRun(stageId) };
       } else {
@@ -973,9 +985,6 @@ function summarizeStageSettle(settle) {
   };
 }
 
-/* ============================================================
- * 竞技场（4 人两轮）
- * ============================================================ */
 const ARENA_FALLBACK = { exp: [150, 100, 50, 30], shards: [8, 6, 4, 3], hatch: [40, 35, 30, 25], entryCost: 30 };
 
 function arenaTables() {
@@ -1002,10 +1011,7 @@ function payArenaEntry(S, s, kind, need) {
     return { ok: true, by: 'energy' };
   }
   if (takeItem(admission)) return { ok: true, by: 'item', itemId: admission };
-  const potion = S.autoEnergyPotion ? S.autoEnergyPotion(need) : { ok: false };
-  if (!potion.ok || s.energy < need) return { ok: false, reason: 'none' };
-  if (!S.consumeEnergy(need)) return { ok: false, reason: 'energy' };
-  return { ok: true, by: 'energy', potionUsed: potion.used || 0 };
+  return { ok: false, reason: 'none' };
 }
 
 function arenaJoin({ accountId, kind, rev }) {
@@ -1019,7 +1025,7 @@ function arenaJoin({ accountId, kind, rev }) {
       if (s.level < need) { const e = new Error('等级不足：' + need + ' 级才能参加'); e.code = 'CONFLICT'; throw e; }
       if (s.classicArenaRun) { const e = new Error('已经报过名了，先把这一轮打完'); e.code = 'CONFLICT'; throw e; }
       const pay = payArenaEntry(S, s, k, tables.entryCost);
-      if (!pay.ok) { const e = new Error('体力不足 30，也没有可用的入场券或体力药'); e.code = 'CONFLICT'; throw e; }
+      if (!pay.ok) { const e = new Error('体力不足 30，也没有可用的入场券'); e.code = 'CONFLICT'; throw e; }
       const foes = battle.withSeed(seed, () => [
         S.genAI(s.level, '', { statScale: S.RANDOM_FOE_SCALE || 1.08 }),
         S.genAI(s.level, '', { statScale: S.RANDOM_FOE_SCALE || 1.08 }),
@@ -1065,22 +1071,23 @@ function arenaFight({ accountId, rev, idemKey }) {
       }
       const phase = run.phase;
       const foeRaw = phase === 'final' ? run.finalist : phase === 'third' ? run.consolation : run.foe;
-      /* 2026-10 用户口径：竞技场战斗面板也吃药丸（属性丸在竞技场生效）。
-       * 每场按 `tickPropStates({kind:'stat'})` 扣 1 次；经验丸仍在发经验时单独扣。 */
-      const me = fighterFromState({ useProps: true });
+
+      refreshMasterFor(accountId, s);
+      const me = fighterFromState({ useProps: false, cheerAccountId: accountId });
       const foeF = normalizeFoe(foeRaw);
-      const result = simulate(seed, me, foeF);
-      S.tickPropStates({ kind: 'stat' });
-      const win = result.winner === 0;
+      const result = simulate(seed, me, foeF);      const win = result.winner === 0;
       let rewards;
       if (phase === 'semi') {
         run.phase = win ? 'final' : 'third';
         run.matching = false;
-        /* 原版竞技场没有「获胜送宝石」这一条（那是复刻新增），联机版删掉。 */
+
         rewards = { phase: 'semi', next: run.phase, win, gem: null };
       } else {
         const position = phase === 'final' ? (win ? 0 : 1) : (win ? 2 : 3);
         const kind = Number(run.kind) || 0;
+        // 任一竞技场（经验 / 碎片 / 幻兽）的冠军都固定多给 1 个金杯。
+        const championCup = position === 0 ? 1 : 0;
+        if (championCup) S.addGoldCup(championCup);
         let baseExp = kind === 0 ? tables.exp[position] : 0;
         let shards = kind === 1 ? tables.shards[position] : 0;
         const hatch = kind === 2 ? tables.hatch[position] : 0;
@@ -1097,12 +1104,13 @@ function arenaFight({ accountId, rev, idemKey }) {
         const boosted = baseExp ? S.gainExpWithBoost(baseExp) : { exp: 0, ups: [] };
         if (shards) s.props[26] = (Number(s.props[26]) || 0) + shards;
         if (hatch) s.hatchPoint = Math.max(0, (Number(s.hatchPoint) || 0) + hatch);
-        /* 原版竞技场不掉宝石（复刻新增的那条已删）。 */
+
         const gem = null;
         if (baseExp) S.tickPropStates({ kind: 'exp' });
         s.classicArenaRun = null;
         rewards = {
           phase: 'final', position, win, exp: boosted.exp, ups: boosted.ups, shards, hatch, gem,
+          goldCup: championCup,
           boostPct, buffNote, title: ['冠军', '亚军', '季军', '第四名'][position],
         };
       }
@@ -1126,9 +1134,6 @@ function arenaFight({ accountId, rev, idemKey }) {
   return response;
 }
 
-/* ============================================================
- * 回放
- * ============================================================ */
 function loadCombat(combatId, accountId, as) {
   const row = db.get('SELECT * FROM combats WHERE id = ?', String(combatId));
   if (!row) { const e = new Error('录像不存在'); e.code = 'NOT_FOUND'; throw e; }
@@ -1136,8 +1141,8 @@ function loadCombat(combatId, accountId, as) {
   const meta = cachedMeta(saved) || {};
   const isAttacker = Number(row.attacker_id) === Number(accountId);
   const isDefender = Number(row.defender_id) === Number(accountId);
-  /* 征战是四人接力：同房间成员要看得到其它座位（包括助战/人机）的战报。
-   * 只放行同一 roomCode 的成员，不能凭 combatId 看陌生人的战斗。 */
+  // 征战是四人接力：同房间成员要看得到其它座位（包括助战/人机）的战报。
+  // 只放行同一 roomCode 的成员，不能凭 combatId 看陌生人的战斗。
   let spectator = false;
   if (!isAttacker && !isDefender) {
     const roomCode = String((meta.settlement && meta.settlement.roomCode) || '');
@@ -1173,6 +1178,7 @@ function loadCombat(combatId, accountId, as) {
     } : meta.opponent) : undefined,
     attackerId: Number(row.attacker_id),
     defenderId: Number(row.defender_id),
+    snapshotId: String(row.snapshot_id || ''),
     createdAt: Number(row.created_at),
     view: wantDefender ? 'defender' : 'attacker',
   };

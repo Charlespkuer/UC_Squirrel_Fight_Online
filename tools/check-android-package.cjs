@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict';
-// Reusable build gate: check the actual ELF segments and APK storage alignment.
+// Reusable build gate: check the actual ELF segments (ABI + LOAD alignment).
+// ZIP entry alignment is `zipalign -c`'s job — do not check the same fact twice.
 // No-argument usage checks the newest APK in src-tauri/dist.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -98,9 +99,6 @@ async function checkPackage(file) {
   for (const entry of nativeEntries(file)) {
     try {
       const info = elfInfo(await entryHeader(file, entry), entry.abi);
-      if (entry.method === 0 && entry.start % info.required !== 0) {
-        throw Error('Uncompressed library is not ZIP-aligned to ' + info.required + ' bytes');
-      }
       results.push({ name: entry.name, ...info });
     } catch (err) { throw Error(entry.name + ': ' + err.message); }
   }
@@ -124,7 +122,7 @@ async function main(args) {
   if (!file) throw Error('No APK found; pass the package path');
   const results = await checkPackage(file);
   for (const row of results) console.log('PASS ' + row.name + ': ELF LOAD ' + row.alignment.join('/'));
-  console.log('PASS APK ELF / ZIP alignment: ' + path.basename(file));
+  console.log('PASS APK ELF LOAD alignment: ' + path.basename(file));
 }
 module.exports = { elfInfo, nativeEntries, checkPackage };
 if (require.main === module) main(process.argv.slice(2)).catch(err => { console.error('FAIL ' + err.message); process.exitCode = 1; });

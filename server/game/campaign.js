@@ -1,38 +1,13 @@
 'use strict';
-/* ============================================================
- * server/game/campaign.js — 征战（四人组队副本）
- * ------------------------------------------------------------
- * 原版取证（官方 2013-07-25 预告 + MainMovie.as）：
- *   · 4 人报名，服务端按报名顺序凑人；客户端 10 秒轮询 checkCopy.do；
- *   · 凑够 4 人后，服务端一次算完整队战斗，客户端按顺序播放；
- *   · 队内按报名顺序“轮流上场单挑”，共享同一只 BOSS 的血量；
- *   · 胜利后 3~5 份奖品，每份按骰子点数分给一个人。
- *
- * 本服 2026-11 用户口径：
- *   · 真人匹配：报名后**后台等待最多 5 分钟**，不要求停在界面；4 人齐直接结算；
- *     5 分钟没凑齐 → 失败，不扣门票、不扣每日次数。
- *   · 随机匹配：立刻抽 3 个等级相近的玩家快照 / 人机队友（抽签规则同随机挑战），
- *     立即结算。随机匹配也走同一套共享血量接力。
- *   · 门票只在**真正进入战斗**（resolveRoom）时扣；匹配超时不扣。
- *   · 分奖：还原原版 3~5 份 `rollDatas`，每份 4 个座位掷骰、最高者得；助战/人机
- *     赢了不发货，若整局没有真人赢，第一份保底给真人最高点数。单份期望约
- *     210 金松果等值，4 份约 840，四人各约 200；不再固定“一人一份低级材料”。
- *   · 「随机幻兽」档在 `rewardPlan` 时就把种类/星级/等级掷定并写进 `prize.pet`，
- *     分奖页直接显示那只幻兽的原版头像；等级期望随首领（35→60）提升。幻兽栏满时
- *     折回 400 孵化点，不会把一份奖励吞掉。
- *   · BOSS 血量跨座位共享；BOSS 死亡后剩余座位不再出手，但所有真人参战者照常分奖。
- *
- * 房间状态：
- *   waiting  — 真人匹配中，可继续加入；resolve_at 到点后转 failed
- *   done     — 已结算；members.reward 里是个人结果
- *   failed   — 5 分钟超时/无有效参战者；不扣票
- *   cancelled— 等待期间所有人离队
- * ============================================================ */
+// server/game/campaign.js — 征战（四人组队副本）
+// · 4 人报名，服务端按报名顺序凑人；客户端 10 秒轮询 checkCopy.do；
+// · 凑够 4 人后，服务端一次算完整队战斗，客户端按顺序播放；
 
 const crypto = require('node:crypto');
 const db = require('../db');
 const store = require('./store');
 const battle = require('./battle');
+const apprentice = require('./apprentice');
 const { fighterFromState } = require('./fighter');
 const { config } = require('../config');
 const settlement = require('./settlement');
@@ -82,7 +57,7 @@ function realMembers(roomId) {
 
 function countReal(roomId) { return realMembers(roomId).length; }
 
-/* 把房间的 4 个座位拼出来：真人优先，空位看 seats_json 里的助战快照。 */
+// 把房间的 4 个座位拼出来：真人优先，空位看 seats_json 里的助战快照。
 function seatList(room, members, accountId) {
   const stored = unz(room.seats_json) || [];
   const out = [];
@@ -159,8 +134,8 @@ function roomView(room, accountId) {
       isMe: Number(m.account_id) === Number(accountId),
     })),
     seats: seatList(room, members, accountId),
-    /* 原版 `rollDatas`（3437 第 5 帧）：只有已结算房间才有；老房间 / 失败房间为空，
-     * 客户端会回落到文字结果。 */
+    // 原版 `rollDatas`（3437 第 5 帧）：只有已结算房间才有；老房间 / 失败房间为空，
+    // 客户端会回落到文字结果。
     roll: String(room.status) === 'done' ? unz(room.roll_json) : null,
     me: mine ? {
       dice: Number(mine.dice),
@@ -172,9 +147,6 @@ function roomView(room, accountId) {
   };
 }
 
-/* ============================================================
- * 资格 / 扣费
- * ============================================================ */
 function ensureEligible(accountId, bossId) {
   const save = store.peek(accountId);
   if (!save) { const e = new Error('还没有存档'); e.code = 'CONFLICT'; throw e; }
@@ -200,7 +172,6 @@ function ensureEligible(accountId, bossId) {
   return { save, boss, level: Number(save.level) || 1 };
 }
 
-/** 真正进入战斗时扣 1 个征战令 + 1 次每日次数。失败时调用方把成员标 missed。 */
 function consumeEntry(accountId) {
   const data = Data();
   const out = store.runOnSave(accountId, ({ api: S, save: s }) => {
@@ -242,9 +213,6 @@ function message(accountId, text, payload) {
   );
 }
 
-/* ============================================================
- * 建房 / 报名
- * ============================================================ */
 function createRoom({ accountId, boss, mode, resolveAt, seats }) {
   const id = newRoomId();
   let code = roomCode();
@@ -297,12 +265,11 @@ function enqueue({ accountId, bossId }) {
     }
     roomId = String(room.id);
   });
-  /* 满 4 人时直接开打：resolveRoom 会在这笔请求里扣票、算接力、写结果。 */
+
   pump();
   return { ok: true, joined: true, room: roomView(roomOf(roomId), accountId) };
 }
 
-/** 随机匹配：立即抽 3 个助战队友并结算，不进入等待。 */
 function randomMatch({ accountId, bossId }) {
   pump();
   const active = activeRoom(accountId);
@@ -334,9 +301,6 @@ function randomMatch({ accountId, bossId }) {
   return { ok: true, joined: true, mode: 'random', room: roomView(roomOf(roomId), accountId) };
 }
 
-/* ============================================================
- * 共享血量接力 + 一人一份分奖
- * ============================================================ */
 function lastHpAfter(result) {
   const rounds = Array.isArray(result && result.rounds) ? result.rounds : [];
   for (let i = rounds.length - 1; i >= 0; i--) {
@@ -371,8 +335,8 @@ function applyPrize(S, save, prize, seed, index) {
     return { gold: 0, value: Number(prize.value) || 0, item: { id: 0, count, name: String(prize.name || '孵化点'), kind: 'hatch' } };
   }
   if (prize.kind === 'pet') {
-    /* 幻兽在 rewardPlan 时已经掷定（prize.pet 随公开 rollDatas 下发），这里只按
-     * 那份结果入栏，不再重随机 —— 否则分奖页看到的幻兽和中奖拿到的会对不上。 */
+    // 幻兽在 rewardPlan 时已经掷定（prize.pet 随公开 rollDatas 下发），这里只按
+    // 那份结果入栏，不再重随机 —— 否则分奖页看到的幻兽和中奖拿到的会对不上。
     const spec = prize.pet || {};
     let got = null;
     try { got = S.grantPet({ id: spec.id, level: spec.level }); } catch (e) { got = null; }
@@ -386,7 +350,7 @@ function applyPrize(S, save, prize, seed, index) {
         },
       };
     }
-    /* 幻兽栏满 / 未知幻兽：折回原版等价的 400 孵化点，不能吞掉一份奖励。 */
+    // 幻兽栏满 / 未知幻兽：折回原版等价的 400 孵化点，不能吞掉一份奖励。
     save.hatchPoint = (Number(save.hatchPoint) || 0) + 400;
     return {
       gold: 0, value: 400, fallback: true,
@@ -399,14 +363,23 @@ function applyPrize(S, save, prize, seed, index) {
     const cap = Number(S.gearCapacity ? S.gearCapacity() : 0);
     if (state && Array.isArray(state.gears) && cap > 0 && state.gears.length < cap) {
       const part = Math.abs((Number(seed) + Number(index)) % 4);
-      const ids = S.gearIdsOf ? S.gearIdsOf(part, Number(prize.quality) || 3) : [];
+      const quality = Math.max(0, Math.min(5, Number(prize.quality) || 3));
+      const ids = S.gearIdsOf ? S.gearIdsOf(part, quality) : [];
       if (Array.isArray(ids) && ids.length) {
         const id = ids[Math.abs((Number(seed) + Number(index)) % ids.length)];
-        const gear = S.addGear(id);
-        if (gear) return { gold: 0, value: Number(prize.value) || 0, item: { id, count: 1, name: String(prize.name || '紫色装备'), kind: 'gear' } };
+        // 装备奖励要和普通掉落一样按品质带随机词条；`addGear` 只负责基础属性浮动。
+        const ext = S.randomExtForQuality ? S.randomExtForQuality(quality) : [];
+        const gear = S.addGear(id, ext);
+        if (gear) return {
+          gold: 0, value: Number(prize.value) || 0,
+          item: {
+            id, count: 1, name: String(prize.name || '紫色装备'), kind: 'gear',
+            key: gear.key, ext: gear.ext, attr: gear.attr, quality,
+          },
+        };
       }
     }
-    /* 装备格满或抽不到紫装时折 200 金松果，不能把一份奖励吞掉。 */
+    // 装备格满或抽不到紫装时折 200 金松果，不能把一份奖励吞掉。
     S.addGold(200, { count: false });
     return { gold: 200, value: 200, item: null, fallback: true, name: '金松果（装备位已满折算）' };
   }
@@ -442,7 +415,7 @@ function resolveRoomTx(roomId) {
   const members = membersOf(room.id);
   const stored = unz(room.seats_json) || [];
 
-  /* 1) 进入战斗才扣票：扣不到的人标记 missed，空位由助战补。 */
+
   for (const m of members) {
     if (Number(m.missed)) continue;
     let pay;
@@ -464,7 +437,7 @@ function resolveRoomTx(roomId) {
     return { ok: false, status: 'failed', reason: 'no_player' };
   }
 
-  /* 2) 排座位：真人按报名顺序占自己的 seat；空位用助战快照/人机。 */
+  // 2) 排座位：真人按报名顺序占自己的 seat；空位用助战快照/人机。
   const seats = [];
   for (let seat = 0; seat < partySize(); seat++) {
     const real = live.find((m) => Number(m.seat) === seat);
@@ -499,7 +472,7 @@ function resolveRoomTx(roomId) {
     });
   }
 
-  /* 3) 共享 BOSS 血量：每个座位接着上一场剩余血量打。 */
+
   const bossFull = data.buildFoe(globalThis.State, room.boss_id);
   const bossMaxHp = Math.max(1, Number(bossFull.maxHp) || 1);
   let bossHp = bossMaxHp;
@@ -512,10 +485,13 @@ function resolveRoomTx(roomId) {
     }
     let fighter;
     if (seat.kind === 'player') {
-      const out = store.runOnSave(seat.accountId, ({ api: S, save }) => ({
-        fighter: fighterFromState({ useProps: false }),
-        level: Number(save.level) || 1,
-      }));
+      const out = store.runOnSave(seat.accountId, ({ api: S, save }) => {
+        try { apprentice.refreshMasterLevelInto(seat.accountId, save); } catch (_) {}
+        return {
+          fighter: fighterFromState({ useProps: false, cheerAccountId: seat.accountId }),
+          level: Number(save.level) || 1,
+        };
+      });
       fighter = out.value.fighter;
       seat.level = out.value.level;
     } else {
@@ -538,17 +514,13 @@ function resolveRoomTx(roomId) {
   }
   const teamWin = bossHp <= 0;
   const plan = teamWin ? data.rewardPlan(seed, seats, boss) : { count: 0, prizes: [] };
-  /* 每份奖品实际落到哪个赢家的哪件物品：分奖时按 `win.index` 记下来，
-   * 后面和 `plan.prizes` 合并成给界面看的 `rollData`（分奖页要显示中奖物品图标）。 */
+
   const prizeAwards = new Map();
 
-  /* 4) 结算：每个真人一份经验；原版 3~5 份 rollDatas 按骰子分给真人。
-   *    BOSS 提前死亡没出手的人也按参战算；助战赢走的奖不发货，整局无真人
-   *    赢家时 rewardPlan 已把第一份保底改判给真人。 */
+
   const settled = [];
   const combatIds = [];
-  /* 同一份奖品（index）最多只发一次：plan 正常就唯一，这里防异常数据重复进入
-   * `wins` 时把一份奖励发两遍。 */
+  // 同一份奖品（index）最多只发一次：plan 正常就唯一，这里防异常数据重复进入
   const awardedPrizeIndexes = new Set();
   for (const m of live) {
     const accountId = Number(m.account_id);
@@ -577,7 +549,7 @@ function resolveRoomTx(roomId) {
           count: got.item ? Math.max(1, Number(got.item.count) || 1) : Number(got.gold) || 0,
           name: got.item ? String(got.item.name) : String(got.name || '金松果'),
           gold: Number(got.gold) || 0, fallback: !!got.fallback,
-          /* 幻兽奖品的实际到手等级也带一份，分奖页以 `award.pet` 为准。 */
+
           pet: got.item && got.item.pet ? got.item.pet : null,
         });
       }
@@ -599,7 +571,7 @@ function resolveRoomTx(roomId) {
             attackerRev: 0,
           });
           combatId = id;
-        } catch (e) { /* 录像失败不影响发奖 */ }
+        } catch (e) {  }
         try {
           const entry = S.recordBattle({
             me: seatResult.fighter, foe: seatResult.foe, result: seatResult.result,
@@ -607,7 +579,7 @@ function resolveRoomTx(roomId) {
             online: { roomCode: String(room.code), bossId: room.boss_id, seat: Number(m.seat), combatId },
           });
           battleId = entry && entry.id ? entry.id : '';
-        } catch (e) { /* 战报失败不影响发奖 */ }
+        } catch (e) {  }
       }
       if (!Array.isArray(s.campaignRecords)) s.campaignRecords = [];
       s.campaignRecords.unshift({
@@ -619,14 +591,14 @@ function resolveRoomTx(roomId) {
       s.campaignRecords = s.campaignRecords.slice(0, 20);
       return { exp, gold: gains.gold, loot, lootList: gains.items, value: gains.value,
         fallback: gains.fallback, prizeAwards: awards,
-        ups: (ups || []).length, combatId, battleId, seat: Number(m.seat) };
+        ups: ups || [], combatId, battleId, seat: Number(m.seat) };
     }, { snapshotSource: 'campaign' });
     const v = out.value || {};
     const reward = {
       win: teamWin, exp: v.exp || 0, gold: v.gold || 0,
       loot: v.loot || null, lootList: Array.isArray(v.lootList) ? v.lootList : [],
       value: v.value || 0, fallback: !!v.fallback,
-      ups: v.ups || 0, combatId: v.combatId || '', battleId: v.battleId || '',
+      ups: Array.isArray(v.ups) ? v.ups : [], combatId: v.combatId || '', battleId: v.battleId || '',
       prizeAwards: Array.isArray(v.prizeAwards) ? v.prizeAwards : [],
       seat: Number(m.seat), teamWin, bossHp, bossMaxHp, missed: false,
     };
@@ -643,8 +615,8 @@ function resolveRoomTx(roomId) {
     settled.push({ accountId, reward, seat: Number(m.seat), member: m });
   }
 
-  /* 4b) 接力回放：助战/人机座位没有个人 `campaign_members`，补一份“旁观视角”战报；
-   *     真人座位仍用自己那份（带真实奖励）。客户端按 seat 顺序依次回放整条接力。 */
+  // 4b) 接力回放：助战/人机座位没有个人 `campaign_members`，补一份“旁观视角”战报；
+  // 真人座位仍用自己那份（带真实奖励）。客户端按 seat 顺序依次回放整条接力。
   const seatByNo = new Map(seats.map((s) => [Number(s.seat), s]));
   const haveCombat = new Set(combatIds.map((c) => Number(c.seat)));
   for (const sr of seatResults) {
@@ -668,13 +640,12 @@ function resolveRoomTx(roomId) {
       });
       combatIds.push({ seat: Number(sr.seat), combatId: id });
       haveCombat.add(Number(sr.seat));
-    } catch (e) { /* 回放补录失败不影响发奖 */ }
+    } catch (e) {  }
   }
 
-  /* 公开版 `rollDatas`：界面只读这一份，别把内部 plan 原样丢给客户端。
-   * 每份奖品 4 个座位点数 + 赢家 + 实际发放物（若赢家是真人）；失败局 count=0。
-   * `index` 去重：正常情况下 plan 就是唯一的，这一层只防旧数据/异常路径把同一份奖品
-   * 带两遍，客户端不会因此多画一格。 */
+  // 公开版 `rollDatas`：界面只读这一份，别把内部 plan 原样丢给客户端。
+  // `index` 去重：正常情况下 plan 就是唯一的，这一层只防旧数据/异常路径把同一份奖品
+  // 带两遍，客户端不会因此多画一格。
   const seenPrize = new Set();
   const publicPrizes = (plan.prizes || []).filter((p) => {
     const index = Number(p.index);
@@ -689,7 +660,7 @@ function resolveRoomTx(roomId) {
       id: Number(p.prize.id) || 0, count: Math.max(1, Number(p.prize.count) || 1),
       gold: Number(p.prize.gold) || 0, quality: Number(p.prize.quality) || 0,
       value: Number(p.prize.value) || 0,
-      /* 随机幻兽：种类/星级/等级已在 rewardPlan 时掷定，分奖页据此直接画头像。 */
+
       pet: p.prize.pet ? {
         id: Number(p.prize.pet.id) || 0, name: String(p.prize.pet.name || '幻兽'),
         grade: Number(p.prize.pet.grade) || 1, level: Math.max(1, Number(p.prize.pet.level) || 1),
@@ -729,21 +700,23 @@ function resolveRoomTx(roomId) {
   return { ok: true, status: 'done', seed, teamWin, bossHp, bossMaxHp, seats: publicSeats, roll: rollData, settled };
 }
 
-/* ============================================================
- * 队列推进 / 查询
- * ============================================================ */
 function pump() {
   reap(false);
-  const rows = db.all("SELECT * FROM campaign_rooms WHERE status = 'waiting' ORDER BY created_at ASC LIMIT 50");
+  // 一次带出每个等待房的真实人数，避免每房一次 membersOf（50 房 = 50 次 JOIN）。
+  const rows = db.all(
+    `SELECT r.*, (SELECT COUNT(*) FROM campaign_members m
+                    WHERE m.room_id = r.id AND m.missed = 0) AS real_count
+       FROM campaign_rooms r WHERE r.status = 'waiting' ORDER BY r.created_at ASC LIMIT 50`
+  );
   const ts = now();
   for (const room of rows) {
-    const count = countReal(room.id);
+    const count = Number(room.real_count) || 0;
     if (!count) {
       db.run("UPDATE campaign_rooms SET status = 'cancelled', closed_at = ? WHERE id = ? AND status = 'waiting'", ts, String(room.id));
       continue;
     }
     if (count >= partySize()) {
-      try { resolveRoom(room.id); } catch (e) { /* 单间失败不阻塞其它房间 */ }
+      try { resolveRoom(room.id); } catch (e) {  }
       continue;
     }
     if (String(room.mode) === 'random') {
@@ -756,14 +729,18 @@ function pump() {
 }
 
 let lastReapAt = 0;
-/** 只做轻量清理：没有真人的等待房直接取消；到点的超时交给 pump。 */
+// 只做轻量清理：没有真人的等待房直接取消；到点的超时交给 pump。
 function reap(force) {
   const ts = now();
   if (force === false && ts - lastReapAt < 5000) return;
   lastReapAt = ts;
-  const rows = db.all("SELECT id FROM campaign_rooms WHERE status = 'waiting'");
+  const rows = db.all(
+    `SELECT r.id FROM campaign_rooms r
+      WHERE r.status = 'waiting'
+        AND NOT EXISTS (SELECT 1 FROM campaign_members m WHERE m.room_id = r.id AND m.missed = 0)`
+  );
   for (const r of rows) {
-    if (!countReal(r.id)) db.run("UPDATE campaign_rooms SET status = 'cancelled', closed_at = ? WHERE id = ? AND status = 'waiting'", ts, String(r.id));
+    db.run("UPDATE campaign_rooms SET status = 'cancelled', closed_at = ? WHERE id = ? AND status = 'waiting'", ts, String(r.id));
   }
 }
 
@@ -816,7 +793,7 @@ function ack({ accountId, code }) {
   return { ok: true };
 }
 
-/* 兼容旧测试/管理入口：手动建房、按 code 加入、强制结算。 */
+// 兼容旧测试/管理入口：手动建房、按 code 加入、强制结算。
 function create({ accountId, bossId }) {
   pump();
   const { boss } = ensureEligible(accountId, bossId);

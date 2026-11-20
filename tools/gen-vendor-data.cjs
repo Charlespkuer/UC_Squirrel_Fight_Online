@@ -62,6 +62,10 @@ const DICTS = [
   ['giftMap', '礼包'],
 ];
 
+/* 原版 GameDict 有、本游戏永久移除的道具：6 松鼠拳套、9 绿松果。
+ * 重生成时跳过，避免手工删掉的行又被原版数据带回来。 */
+const RETIRED_PROPS = new Set([6, 9]);
+
 /** 从 GameDict.js 源码里精确抓出每一次 put 的「原始字符串 + 真正的分隔符」。
  *  为什么不用运行时的数组反推：`"a;b;c".split(";")` 之后，分隔符就看不出来了，
  *  而原版数据里**每条的分隔符并不一样**（武器 10 用 `;`、其余用空格，remark 里还带空格），
@@ -199,11 +203,6 @@ const ASSET_DIRS = [
       "shengbai.png", "tudi.png", "win.jpg"
     ]],
 ];
-/** 整目录搬家的**前缀规则**（文件名与子结构都不变）：原版 `images/equip/<部位>/<名>`
- *  → `images/battle/outfit/<部位>/<名>`。放在基名表之前判，命中就直接换前缀。 */
-const ASSET_DIR_PREFIXES = [
-  ['images/equip/', 'images/battle/outfit/'],
-];
 const ASSET_NAME_DIR = new Map();
 for (const [dir, names] of ASSET_DIRS) {
   for (const name of names) {
@@ -216,7 +215,6 @@ for (const [dir, names] of ASSET_DIRS) {
  *  （交给 assertAssetsExist 报错，不会悄悄生成 404）。 */
 function newAssetPath(src) {
   const p = String(src == null ? '' : src);
-  for (const [from, to] of ASSET_DIR_PREFIXES) if (p.startsWith(from)) return to + p.slice(from.length);
   const m = /^images\/(?:[^/]+\/)?([^/]+)$/.exec(p);
   if (!m) return p;
   const dir = ASSET_NAME_DIR.get(m[1]);
@@ -287,7 +285,8 @@ function build() {
   for (const [name, label] of DICTS) {
     const map = ctx[name];
     if (!map) { out.push('  /* ' + name + '（' + label + '）：原版数据里没有，跳过 */'); continue; }
-    const { fields, rows } = dumpDict(map, name, putTable);
+    let { fields, rows } = dumpDict(map, name, putTable);
+    if (name === 'propMap') rows = rows.filter((r) => !RETIRED_PROPS.has(Number(r.key)));
     // 键保持原类型（原版 keys 里是数字 1、2、3…，不是字符串）
     const rowsText = rows.map((r) => '[' + (typeof r.key === 'number' ? r.key : JSON.stringify(String(r.key))) + ', ' + jsString(r.raw) + ', ' + jsString(r.sep) + ']').join(',\n      ');
     out.push('  /* ' + label + '：' + rows.length + ' 条 */');
@@ -296,8 +295,9 @@ function build() {
   }
   out.push('');
   out.push('  /* ---------- 素材清单（engine.js 用 id 找图片路径） ---------- */');
-  const asstes = ctx.asstes;
-  if (!Array.isArray(asstes)) throw new Error('原版 assets.js 里没有 asstes 数组');
+  /* 原版 `images/equip/` 那批现代穿戴图层已停用，不再进入 asstes / 运行时路径表。 */
+  const asstes = (ctx.asstes || []).filter((a) => a && !String(a.src || '').startsWith('images/equip/'));
+  if (!Array.isArray(ctx.asstes)) throw new Error('原版 assets.js 里没有 asstes 数组');
   out.push('  const asstes = [');
   assertAssetsExist(asstes.map((a) => newAssetPath(a.src)));
   out.push(asstes.map((a) => '    { id: ' + jsString(a.id) + ', size: ' + Number(a.size || 0) + ', src: ' + jsString(newAssetPath(a.src)) + ' }').join(',\n'));

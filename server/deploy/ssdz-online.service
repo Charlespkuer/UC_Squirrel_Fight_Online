@@ -17,12 +17,15 @@ Environment=DATA_DIR=/var/lib/ssdz
 Environment=GAME_ROOT=/opt/ssdz
 Environment=TZ=Asia/Shanghai
 Environment=TZ_NAME=Asia/Shanghai
-Environment=SERVE_STATIC=false
+Environment=SERVE_STATIC=true
 Environment=TRUST_PROXY=false
-Environment=ALLOW_BROWSER_DEVICES=false
+Environment=ALLOW_BROWSER_DEVICES=true
+# 可选：静态资源交给 COS/CDN（只 301 /images /js /css /audio，/api 仍直连本机）
+# Environment=ASSET_BASE=https://<bucket>.cos.<region>.myqcloud.com
 Environment=ALLOW_ORIGIN=tauri://localhost,http://tauri.localhost,https://tauri.localhost,http://140.143.142.110:5896,http://127.0.0.1:5896,http://localhost:5896
 Environment=LOG_REQUESTS=0
 EnvironmentFile=-/etc/ssdz/creator.env
+EnvironmentFile=-/etc/ssdz/owner.env
 ExecStart=/opt/node22/bin/node index.js
 Restart=on-failure
 RestartSec=2

@@ -1,33 +1,21 @@
-/* ============================================================
- * tower-online.js — 联机版无尽塔的**本机对局存档**
- * ------------------------------------------------------------
- * 联机版的无尽塔是「零局外奖励」的局内 roguelike：
- *   · 不往账号存档写 tower / endless（服务端根本不知道这两个字段）；
- *   · 不发抽奖卷 / 黑卡 / 金松果 / 道具，也不消耗账号资源；
- *   · 战斗用本机 Sim 播，只有分数 / 最深层数 / 对局进度落在本机。
- *
- * 实现方式：在 `State.state()` 上装一对**可枚举访问器** `tower` / `endless`，
- * 指向本模块里按账号隔离的一份 localStorage 数据。塔代码仍然读写
- * `State.state().tower / .endless`，但值永远不会跟着服务端 patch 走。
- *
- * 为什么要重新 attach：`Online.adoptSave()` / `applyPatch()` 可能整档替换
- * 或删掉未知字段，把访问器一起收走；每次 `Online` 发出 `state` 事件后补一次
- * 即可。数据本身在闭包里，不随 State 对象替换而丢失。
- * ============================================================ */
+// tower-online.js — 联机版无尽塔的本机对局存档 + 周奖励领取队列
 (function () {
   'use strict';
 
   const PREFIX = 'ssdz-online-tower:';
-  const VERSION = 1;
+  const VERSION = 2;
   const FIELDS = ['tower', 'endless'];
+  const CLAIM_ACTION = 'claimEndlessTower';
+  const MAX_CLAIMS = 20;
   const Net = window.Net || null;
   const Online = window.Online || null;
 
-  let data = { tower: null, endless: null };
+  let data = { tower: null, endless: null, claims: [] };
   let key = '';
   let timer = 0;
   let attachedTo = null;
   let loadedKey = '';
+  const inflight = new Map();
 
   function accountId() {
     try {
@@ -40,31 +28,50 @@
 
   function plain(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
 
+  function claimNumber(value) {
+    const n = Math.floor(Number(value));
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
+  // 领取队列里只放「服务端结算所需的最小信息」，不缓存奖励结果。
+  function cleanClaim(raw) {
+    if (!plain(raw)) return null;
+    const id = String(raw.id == null ? '' : raw.id).slice(0, 64);
+    if (!id) return null;
+    return {
+      id,
+      layer: Math.min(1000000000, claimNumber(raw.layer)),
+      mint: Math.min(1000000000, claimNumber(raw.mint)),
+      trueEnd: raw.trueEnd === true,
+      at: claimNumber(raw.at),
+    };
+  }
+
   function read(keyName) {
     try {
       const raw = localStorage.getItem(keyName);
-      if (!raw) return { tower: null, endless: null };
+      if (!raw) return { tower: null, endless: null, claims: [] };
       const box = JSON.parse(raw);
-      if (!plain(box)) return { tower: null, endless: null };
+      if (!plain(box)) return { tower: null, endless: null, claims: [] };
       const clean = (run) => {
-        /* 与单机版 state.js 的 runShape 同口径：读档时作废「正在战斗」令牌，
-         * 否则关页面 / 杀进程时留下的 attempt 会让下一次「继续战斗」永远被挡住。 */
+        // 否则关页面 / 杀进程时留下的 attempt 会让下一次「继续战斗」永远被挡住。
         if (run && typeof run === 'object' && run.run && typeof run.run === 'object') delete run.run.attempt;
         return run;
       };
       return {
         tower: plain(box.tower) ? clean(box.tower) : null,
         endless: plain(box.endless) ? clean(box.endless) : null,
+        claims: (Array.isArray(box.claims) ? box.claims : []).map(cleanClaim).filter(Boolean).slice(-MAX_CLAIMS),
       };
-    } catch (e) { return { tower: null, endless: null }; }
+    } catch (e) { return { tower: null, endless: null, claims: [] }; }
   }
 
   function write() {
     try {
-      const box = { v: VERSION, savedAt: Date.now(), tower: data.tower, endless: data.endless };
+      const box = { v: VERSION, savedAt: Date.now(), tower: data.tower, endless: data.endless, claims: data.claims || [] };
       localStorage.setItem(key, JSON.stringify(box));
     } catch (e) {
-      /* 隐私模式 / 配额满：本局仍可继续玩，只是关掉页面后进度不保留。 */
+
     }
   }
 
@@ -78,7 +85,7 @@
     timer = setTimeout(() => { timer = 0; if (key) write(); }, 120);
   }
 
-  /** 切账号 / 首次进入时，换到该账号自己的那份本机进度。 */
+
   function refreshAccount() {
     const next = storageKey();
     if (next === loadedKey) return;
@@ -88,7 +95,7 @@
     data = read(key);
   }
 
-  /** 把 tower / endless 访问器装到当前 State 上。重复调用是幂等的。 */
+
   function attach() {
     const s = window.State && State.state ? State.state() : null;
     if (!s) return null;
@@ -115,14 +122,14 @@
     return s;
   }
 
-  /** 塔代码的 `S()` 从这里取：就是带本机 tower / endless 的 State 对象。 */
+
   function state() { return attach(); }
 
-  /** 塔代码的 `save()` 从这里落盘（服务端存档不被触碰）。 */
+  // 塔代码的 `save()` 从这里落盘（服务端存档不被触碰）。
   function save() { refreshAccount(); schedule(); }
 
   function reset() {
-    data = { tower: null, endless: null };
+    data = { tower: null, endless: null, claims: [] };
     flush();
   }
 
@@ -131,18 +138,112 @@
     catch (e) { return { tower: null, endless: null }; }
   }
 
+
+
+
+  function queueClaim(raw) {
+    const claim = cleanClaim(raw);
+    if (!claim) return false;
+    refreshAccount();
+    const list = Array.isArray(data.claims) ? data.claims : (data.claims = []);
+    const at = Date.now();
+    const row = list.find((x) => x.id === claim.id);
+    if (row) Object.assign(row, claim, { at });
+    else list.push(Object.assign({}, claim, { at }));
+    if (list.length > MAX_CLAIMS) list.splice(0, list.length - MAX_CLAIMS);
+    schedule();
+    return true;
+  }
+
+  function dropClaim(id) {
+    const claimId = String(id == null ? '' : id);
+    if (!claimId) return false;
+    const list = Array.isArray(data.claims) ? data.claims : [];
+    const at = list.findIndex((x) => x.id === claimId);
+    if (at < 0) return false;
+    list.splice(at, 1);
+    schedule();
+    return true;
+  }
+
+  function pendingClaims() {
+    refreshAccount();
+    return (Array.isArray(data.claims) ? data.claims : []).map((x) => Object.assign({}, x));
+  }
+
+  function emitClaim(result) {
+    if (!result || !(Number(result.granted) > 0)) return;
+    try {
+      if (typeof window.CustomEvent === 'function' && typeof window.dispatchEvent === 'function') {
+        window.dispatchEvent(new window.CustomEvent('ssdz-tower-claim', { detail: result }));
+      }
+    } catch (e) {  }
+  }
+
+  // 结算一局：本机队列 → `claimEndlessTower` → 成功后出队。
+  // 同一 runId 在飞行中去重；服务端本身也按 runId 幂等。
+  function claimRun(raw) {
+    const claim = cleanClaim(raw);
+    if (!claim) return Promise.reject(new Error('缺少对局编号'));
+    if (inflight.has(claim.id)) return inflight.get(claim.id);
+    refreshAccount();
+    const owner = loadedKey;
+    const task = (async () => {
+      queueClaim(claim);
+      if (!Online || !Online.ready) throw new Error('还没有连上服务器');
+      const result = await Online.call(CLAIM_ACTION, claim.layer, claim.mint, claim.id, claim.trueEnd === true);
+      // 请求期间切了账号：旧账号的队列已在 refreshAccount 时 flush，
+      // 这里不能再动新账号的 data。
+      if (loadedKey === owner) dropClaim(claim.id);
+      return result || {};
+    })().finally(() => { inflight.delete(claim.id); });
+    inflight.set(claim.id, task);
+    return task;
+  }
+
+  let retrying = false;
+
+  async function retryClaims() {
+    if (retrying || !Online || !Online.ready) return 0;
+    refreshAccount();
+    retrying = true;
+    let done = 0;
+    try {
+      for (const claim of pendingClaims()) {
+        try {
+          const result = await claimRun(claim);
+          done += 1;
+          emitClaim(result);
+        } catch (e) {
+          break;              // 网络/服务端还没恢复：保留队列，下次 ready 再试
+        }
+      }
+    } finally {
+      retrying = false;
+    }
+    return done;
+  }
+
   window.TowerLocal = Object.freeze({
     state, save, flush, reset, snapshot, attach,
+    claimRun, retryClaims, queueClaim, dropClaim,
+    get pendingClaims() { return pendingClaims(); },
     get key() { return key || storageKey(); },
     get data() { return snapshot(); },
-    noRewards: true,
+
+    noRewards: false,
   });
+  // 界面侧只认这个窄接口（领奖 / 补发 / 查看队列），不碰本机对局存档。
+  window.TowerOnline = Object.freeze({ claimRun, retryClaims, queueClaim, dropClaim, pendingClaims });
 
   if (Online && typeof Online.on === 'function') {
     const onAccount = () => { refreshAccount(); attach(); };
     Online.on('login', onAccount);
     Online.on('logout', onAccount);
     Online.on('state', attach);
+    Online.on('ready', () => {
+      if (typeof setTimeout === 'function') setTimeout(() => { void retryClaims(); }, 0);
+    });
   }
   if (typeof window.addEventListener === 'function') {
     window.addEventListener('pagehide', flush);

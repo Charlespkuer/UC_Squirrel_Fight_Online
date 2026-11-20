@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 'use strict';
-// Local read-only administration. No HTTP route, credentials, or raw device IDs.
 const fs = require('node:fs');
 const path = require('node:path');
 const net = require('node:net');
@@ -30,12 +29,12 @@ function report(handle, o) {
   if (o.ip) { where.push('e.ip = ?'); params.push(o.ip); }
   if (o.account) { where.push("(CAST(a.id AS TEXT) = ? OR a.name || '#' || a.tag = ?)"); params.push(o.account, o.account); }
   const from = 'FROM security_events e LEFT JOIN accounts a ON a.id = e.account_id WHERE ' + where.join(' AND ');
-  /* 开发者测试账号：在审计里单独列出，行上带 dev 标签（“绿灯”）。表不存在时按空处理。 */
+
   let devRows = [];
   try { devRows = all('SELECT account_id,label,note,created_at FROM dev_accounts ORDER BY created_at DESC'); } catch (_) {}
   const devMap = new Map(devRows.map((r) => [Number(r.account_id), String(r.label || 'dev')]));
   const withDev = (rows) => rows.map((r) => Object.assign({}, r, { dev: devMap.get(Number(r.accountId)) || null }));
-  /* 注册设备/IP 是独立留档字段（v12）；老库还没迁移时不要让整个审计失败。 */
+  // 注册设备/IP 是独立留档字段（v12）；老库还没迁移时不要让整个审计失败。
   let registrations = [];
   try {
     registrations = all(`SELECT a.id AS accountId, a.name || '#' || a.tag AS account,
@@ -49,11 +48,10 @@ function report(handle, o) {
   } catch (_) { registrations = []; }
   return {
     days: o.days,
-    policy: { deviceProtocol: 2, allowBrowserDevices: config.allowBrowserDevices, securityRetentionDays: config.securityRetentionDays },
+    policy: { deviceProtocol: 3, allowBrowserDevices: config.allowBrowserDevices, securityRetentionDays: config.securityRetentionDays },
     devAccounts: devRows.map((r) => ({ accountId: Number(r.account_id), label: String(r.label || ''), note: String(r.note || ''), createdAt: Number(r.created_at) })),
     registrations,
     summary: all('SELECT e.event,e.outcome,COUNT(*) AS count,COUNT(DISTINCT e.ip) AS ips,COUNT(DISTINCT e.account_id) AS accounts ' + from + ' GROUP BY e.event,e.outcome ORDER BY e.event,e.outcome', params),
-    // Multiple accounts on an IP are an observation, never an automatic ban.
     sharedIps: all(`SELECT ip,COUNT(DISTINCT account_id) AS accounts,MAX(last_seen) AS lastSeen
       FROM account_ips WHERE last_seen >= ? ${o.ip ? 'AND ip = ?' : ''}
       GROUP BY ip HAVING COUNT(DISTINCT account_id) > 1 ORDER BY accounts DESC,lastSeen DESC LIMIT ?`,

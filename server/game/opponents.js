@@ -1,12 +1,14 @@
 'use strict';
-/* 服务端候选票据：玩家只交 opaque ID，面板、来源、账号与用途由服务端保管。 */
+// 服务端候选票据：玩家只交 opaque ID，面板、来源、账号与用途由服务端保管。
 const crypto = require('node:crypto');
 const runtime = require('./runtime');
 const snapshots = require('./snapshot');
 const settlement = require('./settlement');
 const battle = require('./battle');
+const vip = require('./vip');
 const { fighterFromSnapshot } = require('./fighter');
 const { config } = require('../config');
+const visibility = require('./visibility');
 const db = require('../db');
 
 const offers = new Map();
@@ -22,40 +24,32 @@ function prune(owner) {
   while (offers.size > 20000) offers.delete(offers.keys().next().value);
 }
 
-/** 与单机随机挑战相同的等级范围、State.genAI、装备/武技与幻兽规则。 */
 function buildRandomFoe(S, myLevel) {
   const lo = Math.max(1, myLevel - 1);
   const hi = Math.min(S.MAX_PLAYER_LEVEL, myLevel + 3);
   const level = lo + Math.floor(Math.random() * (hi - lo + 1));
   const foe = S.genAI(level, '', { levelJitter: 0, statScale: S.RANDOM_FOE_SCALE || 1.08 });
-  /* `randomAIName` 现在保证 «前缀 + 核心 + 称号» 不超过 7 个汉字（称号只在放得下时追加），
-   * 这里不再事后裁剪 —— 否则会把「尾巴达人的师兄」这种刚好 7 个字、战场能完整显示的
-   * 原版风味名字也削成「尾巴达人」。 */
+  // `randomAIName` 现在保证 «前缀 + 核心 + 称号» 不超过 7 个汉字（称号只在放得下时追加），
+  // 这里不再事后裁剪 —— 否则会把「尾巴达人的师兄」这种刚好 7 个字、战场能完整显示的
   return foe;
 }
 
-/**
- * 列表条目。`withFighter` 时把**战斗体一起带回去**。
- *
- * 为什么要带：原版 `randomfriends.do` 一次响应就给了整页所需（名字/等级/三维/装备），
- * 客户端刷新只发**一个**请求（`MainMovie.as:2699-2704`）。我们以前是「列表 + 每个对手
- * 再来一次 `/api/fighter`」，4 次串行往返，刷新肉眼可见地慢。一页只有 3 个，带回来
- * 也就几 KB（gzip 后 1~2 KB），比多跑 3 个 RTT 划算得多。
- */
 function describe(value, withFighter) {
   const player = value.source === 'player';
   const out = {
     snapshotId: value.id, source: value.source, player, bot: !player,
     kind: value.kind,
-    /* 天梯人机：**所有分段**都按正常天梯规则结算（人机作为防守方固定 ±1）；
-     * 300 分以后只是候选位权重降到 1/3，见 `rankCandidates`。 */
+    // 真实快照号：查看 / 开战用它就不依赖内存 offer（10 分钟 TTL，服务重启即丢）。
+    snapshotRef: String(value.playerSnapshotId || ''),
+
     practice: value.practice != null ? !!value.practice : false,
     botId: String(value.botId || ''),
     accountId: value.accountId, name: value.name, tag: value.tag,
     level: value.fighter.level, score: value.score != null ? Number(value.score) : null,
+    // VIP 是账号的实时状态，不能跟战斗快照一起冻结；列表里直接带上，省一次查询。
+    vipLevel: Math.max(0, Number(value.vipLevel) || 0),
     historical: !!value.historical, expiresAt: value.expiresAt,
-    /* 列表里只写最短的标记：AI 生成的写「AI」，真人只写昵称（昵称已全服唯一）。
-     * 以前是 `名字（AI对手）`，又长又会挤到名字右边（用户 2026-10 口径）。 */
+    // 列表里只写最短的标记：AI 生成的写「AI」，真人只写昵称（昵称已全服唯一）。
     display: player ? value.name : value.name + ' AI',
   };
   if (withFighter) out.fighter = fighterFromSnapshot(value.fighter);
@@ -84,20 +78,57 @@ function resolve(id, owner, kind) {
   }
   if (value.owner !== Number(owner)) throw error('FORBIDDEN', '这个对手不属于当前账号');
   if (kind && value.kind !== kind) throw error('BAD_REQUEST', '对手用途不匹配，请刷新列表');
+  if (value.accountId && Number(value.accountId) !== Number(owner)
+    && visibility.isHidden(value.accountId) && !visibility.isHidden(owner))
+    throw error('NOT_FOUND', '对手不可挑战');
   return { ...value, fighter: fighterFromSnapshot(value.fighter), public: describe(value, false) };
 }
+// 直接用原始快照号开打：查看过的那颗快照在内存 offer 过期 / 服务重启后仍能继续战斗。
+// 只接受同等级段（与随机池同一口径）、非本人、未封禁账号的快照。
+function resolveSnapshotRef(id, owner, meLevel, kind) {
+  const snap = snapshots.snapshotById(String(id));
+  if (!snap) throw error('NOT_FOUND', '对手快照已失效，请刷新列表');
+  if (Number(snap.accountId) === Number(owner)) throw error('BAD_REQUEST', '不能挑战自己的快照');
+  const acc = db.get('SELECT name, tag, banned FROM accounts WHERE id = ?', Number(snap.accountId));
+  if (!acc || Number(acc.banned)) throw error('NOT_FOUND', '对手不可挑战');
+  if (visibility.isHidden(snap.accountId) && !visibility.isHidden(owner)) throw error('NOT_FOUND', '对手不可挑战');
+  const level = Number(snap.level) || 0;
+  if (meLevel && Math.abs(level - Number(meLevel)) > config.opponentLevelSpread)
+    throw error('BAD_REQUEST', '对手快照不在匹配范围，请刷新列表');
+  const fighter = fighterFromSnapshot(snap.fighter);
+  const name = String(acc.name || fighter.name || '');
+  return {
+    fighter,
+    public: {
+      snapshotId: String(snap.id), snapshotRef: String(snap.id), source: 'player', player: true, bot: false,
+      kind: String(kind || 'random'), practice: false, botId: '',
+      accountId: Number(snap.accountId), name, tag: String(acc.tag || ''),
+      level: level || fighter.level, score: null, vipLevel: vip.levelOf(Number(snap.accountId)),
+      historical: false, display: name,
+    },
+  };
+}
+// offer 与原始快照号都从这里进：随机页的「查看」保存原始快照号后，开战不再受 offer 生命周期影响。
+function resolveTarget(id, owner, kind, meLevel) {
+  const key = String(id || '');
+  if (!key) return null;
+  return isOffer(key) ? resolve(key, owner, kind) : resolveSnapshotRef(key, owner, meLevel, kind);
+}
 
-/* Every account has one chance in the roster, regardless of snapshot count.
- * First draw the same level distribution as the game's random AI (-1..+3),
- * then select its closest available level and the latest revision at that level. */
 function randomPlayers(owner, level, excluded) {
-  const rows = db.all(`SELECT b.id,b.account_id,b.level,b.revision,b.is_current,a.name,a.tag
+  const viewerHidden = visibility.isHidden(owner);
+  const params = [Number(owner), Math.max(1,level-config.opponentLevelSpread),
+    Math.min(90,level+config.opponentLevelSpread), Date.now()-config.opponentIdleDays*86400000];
+  if (!viewerHidden) params.push(Date.now());
+  const rows = db.all(`SELECT b.id,b.account_id,b.level,b.revision,b.is_current,a.name,a.tag,
+      sv.vip_level AS vip_level, sv.vip_until AS vip_until
     FROM battle_snapshots b JOIN accounts a ON a.id=b.account_id
+    LEFT JOIN saves sv ON sv.account_id=b.account_id AND sv.mode=b.mode
     WHERE b.mode='classic' AND b.account_id<>? AND b.level BETWEEN ? AND ? AND a.banned=0
       AND (a.last_seen>=? OR EXISTS (SELECT 1 FROM simulated_accounts sa WHERE sa.account_id=a.id))
+      AND ${visibility.hiddenSqlFor('b.account_id', viewerHidden)}
     ORDER BY b.account_id,b.level,b.revision DESC`,
-    Number(owner), Math.max(1,level-config.opponentLevelSpread),
-    Math.min(90,level+config.opponentLevelSpread), Date.now()-config.opponentIdleDays*86400000);
+    ...params);
   const groups = new Map(), banned = new Set(excluded.map(Number));
   for (const r of rows) {
     const id=Number(r.account_id); if (banned.has(id)) continue;
@@ -113,19 +144,12 @@ function randomPlayers(owner, level, excluded) {
     const best=Math.min(...choices.map(r=>Math.abs(r.level-target)));
     const nearest=choices.filter(r=>Math.abs(r.level-target)===best);
     const r=nearest[Math.floor(Math.random()*nearest.length)];
-    result.push({snapshotId:r.id,accountId,name:r.name,tag:r.tag,level:r.level,historical:!r.is_current});
+    result.push({snapshotId:r.id,accountId,name:r.name,tag:r.tag,level:r.level,
+      historical:!r.is_current,vipLevel:vip.levelAt(r.vip_level,r.vip_until)});
   }
   return result.map(row=>({row,order:Math.random()})).sort((a,b)=>a.order-b.order).map(x=>x.row);
 }
 
-/**
- * 随机挑战的「真人签 + 人机签」抽签。
- *  - 每个可匹配真人（`randomPlayers` 已按等级 / recentIds 过滤）占 **1 个签**；
- *  - 另外固定放 `botSlots` 个**空签**——抽到空签才用当前 `buildRandomFoe` / `genAI` 造对手，
- *    所以这 30 个“人机”不需要是具体账号，只是权重位；
- *  - 洗匀后取前 `limit` 个；真人一人最多一签，因此同一页不会重复同一位真人。
- * `rng` 参数只给回归用例注入确定性随机流用。
- */
 function drawRandomPool(realRows, limit, botSlots, rng) {
   const want = Math.max(0, Math.floor(Number(limit) || 0));
   const bots = Math.max(1, Math.floor(Number(botSlots) || 30));
@@ -147,13 +171,49 @@ function shuffle(list) {
   return out;
 }
 
-/** 天梯人机候选：从本赛区人机池里随机抽，战斗体当场用 State.genAI 生成。
- *  `want` 是「抽完后整页一共几个候选」，300 分以后的名额由 `botSlotsFor` 缩小。 */
-function addBots(accountId, save, division, chosen, want) {
+// 天梯抽取权重：积分差 0 → 1，差 `opponentRatingSpread` 分（默认 200）→ `opponentRatingWeightFloor`
+// （默认 1/5），更远也保底 1/5。权重只影响抽中概率，候选本身不再被积分差排除。
+function ratingWeight(myScore, foeScore) {
+  const spread = Math.max(1, Number(config.opponentRatingSpread) || 200);
+  const floor = Math.min(1, Math.max(0, Number(config.opponentRatingWeightFloor) || 0.2));
+  const diff = Math.abs((Number(foeScore) || 0) - (Number(myScore) || 0));
+  if (diff >= spread) return floor;
+  return 1 - (1 - floor) * (diff / spread);
+}
+
+// 无放回加权抽取：积分越接近，被抽中的概率越高；同一页不会重复同一个真人。
+function weightedPick(pool, count, weightOf, rng) {
+  const want = Math.max(0, Math.floor(Number(count) || 0));
+  const rand = typeof rng === 'function' ? rng : Math.random;
+  const left = pool.slice(), out = [];
+  while (out.length < want && left.length) {
+    let total = 0;
+    const weights = new Array(left.length);
+    for (let i = 0; i < left.length; i++) {
+      weights[i] = Math.max(0, Number(weightOf(left[i])) || 0);
+      total += weights[i];
+    }
+    let pick = left.length - 1;
+    if (total > 0) {
+      let r = rand() * total;
+      for (let i = 0; i < left.length; i++) {
+        r -= weights[i];
+        if (r < 0) { pick = i; break; }
+      }
+    } else {
+      pick = 0;
+    }
+    out.push(left.splice(pick, 1)[0]);
+  }
+  return out;
+}
+
+// 天梯人机候选：从本赛区人机池里随机抽，战斗体当场用 State.genAI 生成。
+function addBots(accountId, save, division, chosen, want, pool) {
   if (want <= 0) return;
-  const pool = shuffle(settlement.botsFor(division.key));
+  const bots = pool || shuffle(settlement.botsFor(division.key));
   runtime.withState(save, ({ api: S }) => {
-    for (const bot of pool) {
+    for (const bot of bots) {
       if (chosen.length >= want) break;
       const level = Math.max(1, Number(bot.level) || 1);
       const seed = battle.randomSeed();
@@ -172,21 +232,25 @@ function addBots(accountId, save, division, chosen, want) {
   });
 }
 
-/** 天梯候选页里人机候选位的个数（用户 2026-11 口径）：
- *  · 300 分**以前**：把真人之外的空位全用赛区人机补满（本赛区 30 个人机池里随机抽）；
- *  · 300 分**以后**：人机权重降到 `1/rankBotWeightDivisor`（默认 1/3，四舍五入）——
- *    空 3 位 → 1 个人机、空 2 位 → 1 个、空 1 位 → 0 个，真人永远排在前面。
- *  人机不再因为「300 分以上」被整体排除：它照样按正常天梯规则结算，只是出现得更少。 */
-function botSlotsFor(free, myScore) {
-  const n = Math.max(0, Math.floor(Number(free) || 0));
-  if (!n) return 0;
-  if (Number(myScore) < config.rankRealMatchScoreLimit) return n;
-  const divisor = Math.max(1, Number(config.rankBotWeightDivisor) || 3);
-  return Math.max(0, Math.round(n / divisor));
+function averageBotScore(bots) {
+  let sum = 0, count = 0;
+  for (const bot of bots || []) { sum += Number(bot.score) || 0; count += 1; }
+  return count ? sum / count : config.rankBotBaseScore;
 }
 
-/** 天梯候选：只看**自己赛区**。真人按等级/积分/最近 5 场筛完先补满，
- *  剩下的候选位按 `botSlotsFor` 的权重用赛区人机补（300 分以后降到 1/3）。 */
+function botSlotsFor(free, myScore, botScore, realCount) {
+  const n = Math.max(0, Math.floor(Number(free) || 0));
+  if (!n) return 0;
+  const mine = Number(myScore) || 0;
+  // 一个真人都没有时保持旧兜底：300 分以下补满，300 分以上只给一个人机。
+  if (!(Number(realCount) > 0)) return mine < config.rankRealMatchScoreLimit ? n : 1;
+  // 300 分以上人机按 0 分参与匹配；以下按池里人机的平均积分。权重只决定补位数量，
+  // 真人候选已经优先占位，所以积分接近的真人不会被远处人机挤掉。
+  const foe = mine >= config.rankRealMatchScoreLimit ? 0
+    : (botScore == null ? config.rankBotBaseScore : Number(botScore) || 0);
+  return Math.max(0, Math.round(n * ratingWeight(mine, foe)));
+}
+
 function rankCandidates(accountId, save, o, level) {
   const division = settlement.divisionOf(level);
   if (!division) return [];
@@ -196,22 +260,32 @@ function rankCandidates(accountId, save, o, level) {
   const list = snapshots.candidates('classic', {
     excludeAccountId: accountId, level, week: settlement.weekKey(),
     minLevel: division.lo, maxLevel: division.hi,
-    ratingSpread: config.opponentRatingSpread, myScore,
     recentIds: o.recentIds || [],
   });
+  const pool = [];
   for (const row of list) {
-    if (chosen.length >= limit) break;
     if (accounts.has(row.accountId)) continue;
+    accounts.add(row.accountId);
+    pool.push(row);
+  }
+  const picked = weightedPick(pool, limit, (row) => ratingWeight(myScore, row.score));
+  for (const row of picked) {
+    if (chosen.length >= limit) break;
     const snap = snapshots.snapshotById(row.snapshotId);
     if (!snap || !snap.fighter) continue;
-    accounts.add(row.accountId);
     chosen.push(issue(accountId, 'rank', snap.fighter, {
       source: 'player', accountId: row.accountId, name: row.name, tag: row.tag,
       score: row.score || 0, historical: !!row.historical, playerSnapshotId: snap.id,
+      vipLevel: row.vipLevel,
     }));
   }
-  const bots = botSlotsFor(limit - chosen.length, myScore);
-  if (bots > 0) addBots(accountId, save, division, chosen, chosen.length + bots);
+  const free = limit - chosen.length;
+  if (free > 0) {
+    const botPool = shuffle(settlement.botsFor(division.key));
+    const botScore = myScore >= config.rankRealMatchScoreLimit ? 0 : averageBotScore(botPool);
+    const bots = botSlotsFor(free, myScore, botScore, chosen.length);
+    if (bots > 0) addBots(accountId, save, division, chosen, chosen.length + bots, botPool);
+  }
   prune(Number(accountId));
   return chosen;
 }
@@ -232,10 +306,10 @@ function candidates(accountId, save, options) {
     chosen.push(issue(accountId, kind, snap.fighter, {
       source: 'player', accountId: row.accountId, name: row.name, tag: row.tag,
       score: row.score || 0, historical: !!row.historical, playerSnapshotId: snap.id,
+      vipLevel: row.vipLevel,
     }));
   };
-  /* 随机挑战：把真人签混进 `randomBotSlots` 个空签里抽；抽到空签的位子才用当前
-   * `buildRandomFoe` 造 bot（显示口径与以前完全一样）。rank 不走这个池子。 */
+
   const slots = drawRandomPool(list, limit, config.randomBotSlots);
   for (const row of slots) { if (chosen.length >= limit) break; if (row) addPlayer(row); }
   if (chosen.length < limit) {
@@ -253,12 +327,9 @@ function candidates(accountId, save, options) {
   return chosen;
 }
 
-/**
- * 征战随机匹配的助战队友：与随机挑战**同一套抽签**——
- * 等级相近的真人快照各占 1 个签，再混入 `randomBotSlots` 个空签；
- * 抽到空签就用 `buildRandomFoe` 造人机。返回 `{kind:'snapshot'|'bot', fighter,...}`。
- * 快照队友只作为战斗体参战，不写对方账号、不发奖。
- */
+// 征战随机匹配的助战队友：与随机挑战同一套抽签——
+// 等级相近的真人快照各占 1 个签，再混入 `randomBotSlots` 个空签；
+// 快照队友只作为战斗体参战，不写对方账号、不发奖。
 function drawTeammates(owner, save, level, count, excluded) {
   const want = Math.max(0, Math.floor(Number(count) || 0));
   if (!want) return [];
@@ -295,5 +366,6 @@ function drawTeammates(owner, save, level, count, excluded) {
 }
 
 module.exports = {
-  candidates, resolve, isOffer, buildRandomFoe, forgetAccount, drawRandomPool, drawTeammates, botSlotsFor,
+  candidates, resolve, resolveTarget, isOffer, buildRandomFoe, forgetAccount, drawRandomPool, drawTeammates,
+  botSlotsFor, randomPlayers, ratingWeight, weightedPick,
 };

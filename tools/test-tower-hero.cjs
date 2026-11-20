@@ -111,8 +111,8 @@ function modernUi(c) {
   const root = new Node('html'), body = root.appendChild(new Node('body')), ui = body.appendChild(new Node('div')); ui.setAttribute('id', 'ui');
   c.document = { documentElement: root, body, head: new Node('head'), createElement: tag => new Node(tag), querySelector: s => root.querySelector(s), querySelectorAll: s => root.querySelectorAll(s), addEventListener() {}, readyState: 'complete' };
   c.Image = class { constructor() { this.complete = false; } addEventListener() {} }; c.setTimeout = () => 0; c.clearTimeout = () => {};
-  c.Engine.loadWears = async () => []; c.State.setSettings({ uiMode: 'modern' });
-  for (const file of ['js/ui.js', 'js/classic-ui.js', 'js/tower-ui.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), c, { filename: file });
+  c.State.setSettings({ uiMode: 'modern' });
+  for (const file of ['js/ui-base.js', 'js/classic-ui.js', 'js/tower-ui.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), c, { filename: file });
   return { ui, find: s => ui.querySelector(s), click: s => { const n = ui.querySelector(s); assert.ok(n, s); n.click(); } };
 }
 
@@ -401,7 +401,7 @@ test('勇者每场胜利后按休息期血量上限的 5% 回血', () => {
   assert.ok(info.run.hpAbs >= 1 + expected, '战后血量至少 = 本场剩余 1 + 休息回血');
 });
 
-test('勇者剧本第 1~5 层敌方属性降 10%，第 6 层恢复原曲线', () => {
+test('勇者剧本第 1~5 层在通用 5% 之外再降 10%，第 6 层恢复原曲线', () => {
   const { c } = setup();
   start(c);
   const check = (layer) => {
@@ -412,10 +412,41 @@ test('勇者剧本第 1~5 层敌方属性降 10%，第 6 层恢复原曲线', ()
     assert.ok(nx && nx.ok !== false, layer + ' 层应当能开战：' + ((nx && nx.msg) || ''));
     const isLast = run.idx === run.plan.length - 1;
     const raw = c.Tower.buildFoeOf('endless', run.layer, run.plan[run.idx], run.salt, isLast).foe;
-    const mul = layer <= 5 ? 0.9 : 1;
+    /* 先落勇者 10%，再乘通用 5%；两段各自取整（与 nextBattle 同序）。 */
+    const scaled = (value) => {
+      let out = Math.max(1, Math.round(Number(value) || 1));
+      if (layer <= 5) out = Math.max(1, Math.round(out * 0.9));
+      if (layer <= 5) out = Math.max(1, Math.round(out * 0.95));
+      return out;
+    };
     for (const key of ['power', 'agility', 'speed', 'hp']) {
-      assert.equal(nx.foe[key], Math.max(1, Math.round(Number(raw[key]) * mul)),
-        layer + ' 层 ' + key + ' 应当按 ' + mul + ' 缩放');
+      assert.equal(nx.foe[key], scaled(raw[key]),
+        layer + ' 层 ' + key + ' 应当先 ×0.9 再 ×0.95');
+    }
+    /* 只是看预告，不能把这一场留成“进行中”，否则下一层开不了战。 */
+    c.Tower.interruptBattle('endless', nx.token);
+  };
+  check(1); check(5); check(6);
+});
+
+test('经典无尽塔第 1~5 层敌方属性降 5%，第 6 层恢复原曲线', () => {
+  const { c } = setup();
+  start(c, false);
+  const check = (layer) => {
+    c.Tower._debugSetEndlessLayer(layer);
+    const run = c.Tower._debugRun('endless');
+    run.choices = null; run.phase = null; run.finished = null;
+    const nx = c.Tower.nextBattle('endless');
+    assert.ok(nx && nx.ok !== false, layer + ' 层应当能开战：' + ((nx && nx.msg) || ''));
+    const isLast = run.idx === run.plan.length - 1;
+    const raw = c.Tower.buildFoeOf('endless', run.layer, run.plan[run.idx], run.salt, isLast).foe;
+    const scaled = (value) => {
+      const out = Math.max(1, Math.round(Number(value) || 1));
+      return layer <= 5 ? Math.max(1, Math.round(out * 0.95)) : out;
+    };
+    for (const key of ['power', 'agility', 'speed', 'hp']) {
+      assert.equal(nx.foe[key], scaled(raw[key]),
+        layer + ' 层 ' + key + ' 应当按 0.95 缩放');
     }
     /* 只是看预告，不能把这一场留成“进行中”，否则下一层开不了战。 */
     c.Tower.interruptBattle('endless', nx.token);
@@ -512,10 +543,8 @@ test.skip('现代勇者状态与武技页使用局内等级，训练、外观和
   assert.equal(dom.find('[data-action="hero-train"]').textContent, '铸币修炼');
   /* 现代外观页直接走 onEquip（纸娃娃 + 6 格列表在 classic-ui 里），
    * 不走旧的 onGears 自绘层；全装备池是 GEAR_BASE 的原始 288 件去掉
-   * 46/67、47/68 两组重复黑装后的 280 件，**现代界面只保留 `images/battle/outfit/`
-   * 真的画得出来的套装**：现代图集只画了套装序号 1~32 / 113，所以黑装 33~40、
-   * 深海 / 机器猫、以及没有 gearSetMap 行的 q5 黑装（54~66）都不进池子 → 184 件。
-   * 这样详情页 / 战斗里不会出现「选了却画不出来」的装备。 */
+   * 46/67、47/68 两组重复黑装后的 280 件；现代界面已不再有 outfit 图层，
+   * 只保留能用原版矢量卡面画出来的装备，避免「选了却画不出来」。 */
   assert.equal(typeof context.onEquip, 'function');
   assert.equal(context.gearList.length, 184, '现代外观池只保留有现代外观贴图的 184 件');
   const blackRaccoon = context.gearList.find((g) => Number(g.id) === 237);
@@ -566,7 +595,7 @@ test('现代勇者左下角立绘走现代图集，不再复用经典 7232', () 
   assert.match(src, /function paintHeroArtModern\(/, '现代立绘渲染器要存在');
   assert.match(src, /if \(isModernUi\(\) && window\.Engine[\s\S]{0,160}paintHeroArtModern\(/,
     '现代模式优先走现代战斗图集 + 装备图层的 canvas');
-  assert.match(src, /Engine\.drawFrame\(ctx, frame, \{ sheets: sheets, wears: wears \}\)/,
+  assert.match(src, /Engine\.drawFrame\(ctx, frame, \{ sheets: sheets \}\)/,
     '现代立绘用 Engine 的待机帧与装备图层绘制');
   assert.match(src, /host\.appendChild\(canvas\)/, '现代立绘画进 canvas 后挂到勇者头像容器');
 });
@@ -606,7 +635,6 @@ test.skip('现代勇者外观一套装备只有一张卡；经典仍按原版画
   assert.equal(out.ok, true, out && out.msg);
   const saved = plain(c.Tower._debugRun('endless').hero.appearance);
   assert.deepEqual(saved.map((g) => [g.id, g.tier]), [[49, 1]], '现代外观不保留差分档');
-  assert.equal(c.Engine.wearsFor(saved)[0].src, 'Head_19_1', '现代头饰固定用基础稿');
 
   /* 经典模式仍是原来的差分档：蓝 2 张、紫 3 张、单张画稿的套只有 1 张。 */
   c.State.setSettings({ uiMode: 'classic' });
@@ -621,7 +649,6 @@ test.skip('现代勇者外观一套装备只有一张卡；经典仍按原版画
   assert.equal(classicOut.ok, true, classicOut && classicOut.msg);
   const classicSaved = plain(c.Tower._debugRun('endless').hero.appearance);
   assert.deepEqual(classicSaved.map((g) => [g.id, g.tier]), [[49, 3]], '经典差分档要随外观一起存进本局勇者');
-  assert.equal(c.Engine.wearsFor(classicSaved)[0].src, 'Head_19_3', '经典头饰图集要贴第 3 档画稿');
   /* 用户 2026-10-28 口径：外观页**不再标档位数字** —— 同名差分卡直接同名显示（挑哪张看画稿/立绘）。
    * 断言先剥掉注释：上面这些说明里就写着 ②③，不剥会被自己的注释骗过。 */
   const bare = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8')

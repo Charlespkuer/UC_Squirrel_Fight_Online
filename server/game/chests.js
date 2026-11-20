@@ -1,6 +1,4 @@
 'use strict';
-// Original lottery semantics: four revealed items, exactly one server reward.
-// The selected box receives the first rolled prize; the other three are display.
 const db = require('../db');
 const store = require('./store');
 const battle = require('./battle');
@@ -13,8 +11,7 @@ function descriptor(row) {
 }
 
 function create({ id, attackerId, kind, seed, settlement, packet, revenge }) {
-  /* ssfight 原版 `rank.do` 只发积分/金杯/经验，没有战后宝箱；竞技/关卡/好友也没有。
-   * 现在只有随机挑战保留四选一宝箱；复仇战明确不发。 */
+
   if (revenge) return null;
   if (kind !== 'random' || (settlement && settlement.practice)) return null;
   const D = globalThis.BattleDrops;
@@ -75,12 +72,9 @@ function claim(accountId, combatId, index) {
         else if (prize.id !== 15) save.props[prize.id] = (Number(save.props[prize.id]) || 0) + prize.count;
         return { ups };
       }, { snapshotSource: 'battle-chest' });
-      // Same transaction as the save: neither a lost response nor a restart can
-      // turn one chest into a second grant. A different retry index is ignored.
       db.run('UPDATE combat_chests SET picked = ?, claimed_at = ? WHERE combat_id = ? AND picked IS NULL', picked, Date.now(), combatId);
     }
-    /* 首次领取直接用 `runOnSave` 返回的 after payload，不再回表解码一次；
-     * 重试（duplicate）才需要读当前行，因为那时没有任何写入。 */
+
     const current = out ? null : store.getRow(accountId);
     return { ok: true, combatId, duplicate, picked, prize: prizes[0], items: revealed(prizes, picked),
       chest: { ...descriptor(row), claimed: true }, ups: out ? out.value.ups : [],

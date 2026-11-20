@@ -35,6 +35,16 @@ test('狂战各品质使用完整 B 装备容器，护肩随对应衣服帧穿�
     '原版护肩挂点不能补成普通袖口的落点');
 });
 
+test('经典装备矢量图标带 SVG 命名空间（缺 xmlns 时 <img> 整张不渲染）', () => {
+  const dir = path.join(ROOT, 'images/ui/icons/gear');
+  const files = fs.readdirSync(dir).filter((name) => /-classic\.svg$/.test(name));
+  assert.ok(files.length >= 8, '经典装备矢量图必须存在');
+  for (const name of files) {
+    const head = fs.readFileSync(path.join(dir, name), 'utf8').slice(0, 300);
+    assert.match(head, /<svg[^>]*\sxmlns=["']http:\/\/www\.w3\.org\/2000\/svg["']/, name + ' 缺少 xmlns');
+  }
+});
+
 test('无尽塔经典预告的 7232 挂点使用 showFace 的非 B 容器', () => {
   const src = read('js/tower-ui.js');
   const start = src.indexOf('async function loadClassicGear');

@@ -1,15 +1,4 @@
-/* ============================================================
- * ui-compose.js — 经典模式的道具合成（碎片 / 种子 / 宝石 / 转化丸）
- * ------------------------------------------------------------
- * 原版链路：
- *   `showComposeWin(prop)`（MainMovie.as:21022）→ `loadMcs([["道具1","daojuSub"]])`
- *     并把 `daojuSub.gotoAndStop(5)`：道具图标 + 名称 + 费用 + 「合成 / 取消」。
- *   点合成 → `showCompose1()`（:16325）`loadMcs([["合成中","compose"]])`（库元件 4402）→
- *     服务端回包 → `showCompose2()`（:16329）把 4402 停在结果帧，写 `c1` / `t_name` /
- *     `t_temp` / `t_baseOther`，宝石成功走 `gotoAndPlay(31)`，失败走 `showTips`。
- * 复刻把数值交给 State（composeGear / composeSeed / composeConvertPill / mergeGems），
- * 这里只负责原版 4886 f5 的合成页、4402 的过场与结果页。
- * ========================================================== */
+// ui-compose.js — 经典模式的道具合成（碎片 / 种子 / 宝石 / 转化丸）
 (function () {
   'use strict';
 
@@ -23,35 +12,28 @@
     try { clip.gotoAndStop(frame); } catch (e) {}
   };
   const GEAR_QUALITY_COLOR = ['#542201', '#65a844', '#2365c9', '#6544a8', '#ff9900', '#000000'];
-  /** 空闲回调：没有 requestIdleCallback（老 WebView）就退到 300 ms 后。 */
+  // 空闲回调：没有 requestIdleCallback（老 WebView）就退到 300 ms 后。
   const idle = (fn) => {
     try {
       if (typeof requestIdleCallback === 'function') { requestIdleCallback(fn, { timeout: 2500 }); return; }
     } catch (e) {}
     setTimeout(fn, 300);
   };
-  /** 4402「合成中」播到结果帧的时长；道具合成与装备融合共用同一段 CG。
-   *  ⚠ 它是**总时长**，不是"等一会儿就跳到结果帧"：以前这里直接 `gotoAndPlay(1)` +
-   *  `setTimeout(1400)` + `gotoAndStop(44)`，而 4402 是按舞台帧率（14 fps）走的 ——
-   *  44 帧要 3.1 秒，1.4 秒时它停在第 20 帧上下，于是每次合成都会**从动画中间硬跳到结果页**
-   *  （手机上更明显：掉帧让它停得更靠前，观感是"合成动画一闪就没了"）。
-   *  现在由 `playComposeCg()` 自己按这个总时长把 1→44 帧**逐帧推完**：
-   *  总时长不变、动画每一帧都会被看到、慢设备上也不会停在中途。 */
+  // 4402「合成中」播到结果帧的时长；道具合成与装备融合共用同一段 CG。
+  // ⚠ 它是总时长，不是"等一会儿就跳到结果帧"：以前这里直接 `gotoAndPlay(1)` +
+  // 总时长不变、动画每一帧都会被看到、慢设备上也不会停在中途。
   const COMPOSE_CG_MS = 1400;
-  /** 结果帧（1 基）：`fillResultPage` 写的就是这一帧，`playCg:false` 也直接挂它。 */
+
   const COMPOSE_RESULT_FRAME = 44;
-  /** CG 逐帧推进时每帧的等待（按帧数摊平 COMPOSE_CG_MS；最快 16 ms）。 */
+
   const cgStepMs = (frames) => Math.max(16, Math.round(COMPOSE_CG_MS / Math.max(1, frames - 1)));
 
   let session = null;
-  let composeExtraLoaded = false;
 
+  // 不能缓存「已加载」：destroy() 会 releaseExtra('tags-compose.json')，下一轮再合成/看融合结果
+  // 时如果直接 return true，4402/4886 已经不在素材库里，会报「合成界面出错」。
   function loadComposeExtra() {
-    if (composeExtraLoaded) return Promise.resolve(true);
-    return Promise.resolve(SfRender.loadExtra('tags-compose.json')).then(() => {
-      composeExtraLoaded = true;
-      return true;
-    }).catch(() => false);
+    return Promise.resolve(SfRender.loadExtra('tags-compose.json')).then(() => true).catch(() => false);
   }
 
   function createHost() {
@@ -71,12 +53,11 @@
     if (rec.resultView) { try { rec.resultView.destroy(); } catch (e) {} }
     if (rec.pageView) { try { rec.pageView.destroy(); } catch (e) {} }
     if (rec.host && rec.host.parentNode) rec.host.parentNode.removeChild(rec.host);
+    if (window.SfRender && SfRender.releaseExtra) SfRender.releaseExtra('tags-compose.json');
     try { if (window.Main && Main.resizeLayout) Main.resizeLayout(); } catch (e) {}
   }
 
-  /** 会话还活着吗：宿主被别人整页清掉（`#ui.innerHTML = …` / 切到别的页）时，
-   *  只留下一个悬空 session —— `active()` 会一直说"合成页开着"、`busy` 也可能卡住，
-   *  之后再开合成就会对着已经不存在的节点写结果。开新会话前先按这个判据回收。 */
+
   function liveSession() {
     const rec = session;
     if (!rec) return null;
@@ -106,7 +87,7 @@
     for (const t of g.querySelectorAll('text')) t.setAttribute('fill', color);
   }
 
-  /** 把 PNG 图标放到原版 c1 的图标位里（居中，随 c1 的框大小缩放）。 */
+
   function paintIcon(clip, src) {
     if (!clip || !clip.g || !src) return;
     const host = clip.getContentHost ? clip.getContentHost() : clip.g;
@@ -155,7 +136,22 @@
   }
 
   function isComposeProp(id) {
-    return [24, 25, 26, 45, 46, 108, 109, 77, 78].includes(id) || id === (window.GData && GData.CONVERT_SHARD_ID) || !!(window.State && State.gemLevel(id));
+    return [24, 25, 26, 45, 46, 77, 78].includes(id) || id === (window.GData && GData.CONVERT_SHARD_ID) || !!(window.State && State.gemLevel(id));
+  }
+
+  // 碎片合成在服务端只有「背包满 / 材料不足 / 金松果不足」会拒绝；进合成页前先拦掉，
+  // 避免玩家点了「合成」才看到「无法合成」，也避免把可预期的前置检查当成合成失败。
+  function composeBlockedReason(id) {
+    if (![24, 25, 26, 77, 78].includes(id)) return '';
+    if (!window.State || !State.state) return '';
+    const s = State.state();
+    if (!s || !Array.isArray(s.gears)) return '';
+    if (s.gears.length >= State.gearCapacity()) return '装备已满（' + s.gears.length + '/' + State.gearCapacity() + '），先卖掉或融合几件';
+    if ((s.props[id] || 0) < 10) return '碎片不足10个！';
+    const quality = { 24: 0, 25: 1, 26: 2, 77: 5, 78: 5 }[id];
+    const cost = State.gearCostOf ? State.gearCostOf(quality) : 50;
+    if (s.goldPoint < cost) return '金松果不足' + cost + '！';
+    return '';
   }
 
   function costText(id) {
@@ -171,10 +167,12 @@
 
   function iconSrc(kind, id) {
     if (kind === 'gear') {
-      if ([201, 202, 203, 204].includes(Number(id))) return 'images/ui/icons/gear/gear-' + Number(id) + '-classic.svg';
-      return 'images/ui/icons/gear/gear-' + Number(id) + '.png';
+      if ([201, 202, 203, 204, 205, 206, 207, 208].includes(Number(id))) {
+        return 'images/ui/icons/gear/gear-' + Number(id) + '-classic.svg' + ([205, 206, 207, 208].includes(Number(id)) ? '?v=3' : '');
+      }
+      return 'images/ui/icons/gear/gear-' + Number(id) + '.png' + ([205, 206, 207, 208].includes(Number(id)) ? '?v=3' : '');
     }
-    /* 道具：背包/商店同一张路径表（`UI.classic.propIconSrc`，原版无框矢量优先）。 */
+    // 道具：背包/商店同一张路径表（`UI.classic.propIconSrc`，原版无框矢量优先）。
     const classic = window.UI && window.UI.classic;
     if (classic && typeof classic.propIconSrc === 'function') return classic.propIconSrc(id);
     if ([10, 11, 12, 14].includes(Number(id))) return 'images/ui/icons/prop/prop-' + Number(id) + '.svg';
@@ -191,11 +189,9 @@
     paintIcon(c1, iconSrc('prop', id));
   }
 
-  /** 用户 2026-10 口径：合成页的「合成 / 取消」左右对调，取消在左、合成在右。
-   *  ⚠ 两颗按钮是**不同元件**（4878 合成 / 4419 取消），画稿原点也不一样，
-   *  不能像使用窗那样只按 `__baseMa` 的 x 差平移（实测会叠在一起）。
-   *  这里按**屏幕包围盒中心**互换，再用各自的「屏幕矩形 ÷ 本地包围盒」折回局部单位
-   *  （不用 getScreenCTM：iOS 15 会漏掉祖先 CSS transform 的 scale，WebKit 209220）。 */
+  // ⚠ 两颗按钮是不同元件（4878 合成 / 4419 取消），画稿原点也不一样，
+  // 不能像使用窗那样只按 `__baseMa` 的 x 差平移（实测会叠在一起）。
+  // （不用 getScreenCTM：iOS 15 会漏掉祖先 CSS transform 的 scale，WebKit 209220）。
   function swapComposeButtons(view) {
     const compose = clipOf(view, 'b_hc');
     const cancel = clipOf(view, 'b_back');
@@ -204,8 +200,8 @@
     const cCenter = (cr.left + cr.right) / 2, bCenter = (br.left + br.right) / 2;
     const scaleOf = (clip) => {
       try {
-        /* 屏幕矩形 ÷ 本地包围盒 = 含所有祖先 CSS transform 的总比例。
-         * iOS 15 的 getScreenCTM 漏掉祖先 scale（WebKit 209220），不能再拿 m.a 折回。 */
+        // 屏幕矩形 ÷ 本地包围盒 = 含所有祖先 CSS transform 的总比例。
+        // iOS 15 的 getScreenCTM 漏掉祖先 scale（WebKit 209220），不能再拿 m.a 折回。
         const rr = clip.g.getBoundingClientRect();
         const bb = clip.g.getBBox();
         const s = bb && bb.width ? rr.width / bb.width : (bb && bb.height ? rr.height / bb.height : 0);
@@ -232,17 +228,18 @@
     wireButton(clipOf(view, 'b_back'), close, { idle: 1, hover: 2, press: 1 });
   }
 
-  /** 联机版：合成含随机数（装备词条 / 宝石成败 / 转化丸产物），一律等服务端。 */
+  // 联机版：合成含随机数（装备词条 / 宝石成败 / 转化丸产物），一律等服务端。
   async function composeAction(id) {
     if ([24, 25, 26, 77, 78].includes(id)) return StateCall('composeGear', id);
-    if ([45, 46, 108, 109].includes(id)) return State.composeSeed(id);
+    if ([45, 46].includes(id)) return State.composeSeed(id);
     if (id === (window.GData && GData.CONVERT_SHARD_ID)) return StateCall('composeConvertPill');
     if (State.gemLevel(id)) return StateCall('mergeGems', id);
     return { ok: false, msg: '这个道具不能合成' };
   }
 
-  /** `t_temp` / `t_baseOther` 的框宽只放得下约 11 个全角字；原版服务端会断好行，
-   *  复刻自己断，避免长描述横向裁掉。 */
+  // 道具说明这类长文案按固定字数硬折（原版服务端会断好行，这里自己断）。
+  // ⚠ 装备结果不要走这里：基础属性带 `(+10%)` 后一折就断在括号中间，第二行会压到
+  // 附加属性上（用户 2026-11 安卓实拍）；装备结果见 `layoutResultFields`。
   function wrapText(value, cols) {
     const s = String(value == null ? '' : value);
     const width = Math.max(4, cols || 11);
@@ -261,9 +258,13 @@
       const name = (window.UI && UI.classic && UI.classic.gearName)
         ? UI.classic.gearName(Number(r.gear.id)) : ((info && info.name) || '装备');
       const quality = State.gearQuality ? State.gearQuality(r.gear) : ((info && info.quality) || 0);
-      const extra = State.extText ? (State.extText(r.gear.ext) || []) : [];
-      const temp = info ? ('基本属性:' + (info.attrName || '') + '+' + Math.max(0, Math.round(Number(info.abilityVal) || 0))) : '';
-      return { name: name, temp: wrapText(temp), extra: extra.length ? wrapText('附加属性:' + extra.join(' / ')) : '', icon: 'gear', id: r.gear.id, gear: r.gear, quality: quality };
+      const extra = (State.extText ? (State.extText(r.gear.ext) || []) : []).filter(Boolean);
+      // 基础属性**不硬折**（`(+10%)` 会被劈成两行）；附加属性**每条一行**，
+      // 不再用 " / " 串成一段再按 11 字硬折（那正是安卓截图里压字的两处来源）。
+      // 字号与行距由 `layoutResultFields` 按实际行数统一收。
+      const temp = info ? ('基本属性:' + State.gearAttrText(info, { name: true })) : '';
+      const extraText = extra.length ? '附加属性:' + extra[0] + (extra.length > 1 ? '\n' + extra.slice(1).join('\n') : '') : '';
+      return { name: name, temp: temp, extra: extraText, icon: 'gear', id: r.gear.id, gear: r.gear, quality: quality };
     }
     if (kind === 'gem') {
       const gid = id + 1;
@@ -281,32 +282,123 @@
     return { name: '合成成功', temp: '', extra: '', icon: '', id: 0, quality: -1 };
   }
 
-  function fillResultPage(view, result) {
+  // 结果页两段文本的排版（`t_temp` = 基础属性，`t_baseOther` = 附加属性）。
+  // 用户 2026-11 安卓实拍：`t_temp` 把「基本属性:速度 11(+10%)」按 11 字硬折成两行，
+  // 第二行 `+10%)` 正好压在 `t_baseOther` 第一行「附加属性:…」上；附加词条又被
+  // " / " 拼成一段折成 5 行，末尾已经贴到「确定」。这里统一按“先内容、后字号”处理：
+  //   · 基础属性保持**一行**；附加属性**每条一行**（由 `resultOf` 拼好）；
+  //   · 字号先按两段里最宽的字段缩到框内，再按各自行数与框高收一档；
+  //   · 最后用 `SfRender.layoutText` 按最终字号重算基线/行距，两段共用同一字号，
+  //     这样第一条附加属性不会落回基础属性第二行的位置。
+  function layoutResultFields(view, tempLines, extraLines) {
+    const prep = (name, lines) => {
+      const clip = clipOf(view, name);
+      if (!clip || !clip.__textBox) return null;
+      const b = clip.__textBox;
+      const meta = b.meta || {};
+      // 同一视图二次填充时，上一轮缩过的字号会留在 lines[0].h 里 —— 先回素材字号。
+      b.lines[0].h = meta.fh || (b.lines[0] && b.lines[0].h) || 12;
+      SfRender.setText(clip, lines.join('\n'));
+      return clip;
+    };
+    const fields = [
+      { clip: prep('t_temp', tempLines), lines: tempLines },
+      { clip: prep('t_baseOther', extraLines), lines: extraLines },
+    ].filter((f) => f.clip);
+    if (!fields.length) return 0;
+    let size = 12;
+    for (const f of fields) {
+      const b = f.clip.__textBox;
+      const meta = b.meta || {};
+      // 估算里的 ASCII 字宽按 0.56 会偏窄（实测 Chrome 的 `+30%` 约 0.6em）；
+      // 再留 3% 余量，保证最后一位 `％` 不会探出框外。
+      const boxW = meta.bd ? (meta.bd[1] - meta.bd[0]) : 0;
+      const fitOpts = { ascii: 0.62, min: 8 };
+      if (boxW > 0) fitOpts.width = boxW * 0.97;
+      const fit = SfRender.fitTextWidth ? SfRender.fitTextWidth(f.clip, fitOpts) : 0;
+      if (fit > 0) size = Math.min(size, fit);
+      // 纵向：末行基线不能越过字段框底（框高 = 原版给这一列留的行数）。
+      const H = meta.bd ? (meta.bd[3] - meta.bd[2]) : 0;
+      if (H > 0 && f.lines.length > 1) {
+        const lead = meta.lead || 0;
+        const byHeight = (H - 2 - lead * f.lines.length) / (0.88 + 1.15 * (f.lines.length - 1));
+        if (byHeight > 0) size = Math.min(size, byHeight);
+      }
+    }
+    size = Math.max(8, Math.floor(size * 10) / 10);
+    for (const f of fields) {
+      if (SfRender.layoutText) SfRender.layoutText(f.clip, { size: size });
+    }
+    return size;
+  }
+
+  function paintResultIcon(view, result) {
     const c1 = clipOf(view, 'c1');
+    if (!c1) return false;
     stopAt(c1, 2);
-    setText(view, 't_name', result.name);
-    setText(view, 't_temp', result.temp);
-    setText(view, 't_baseOther', result.extra);
-    if (result.quality >= 0) setTextColor(view, 't_name', GEAR_QUALITY_COLOR[Math.max(0, Math.min(5, result.quality))]);
-    /* 装备结果按原版 `showFusionResult()` 挂 `convertLink` 的**整张预上色卡**
-     * （MainMovie.as:19024）；查不到符号（老包 / 缺品质）才退回原来的 PNG。 */
     let painted = false;
     if (result.icon === 'gear' && result.gear && window.SfStatus && SfStatus.paintGearCard) {
       painted = !!SfStatus.paintGearCard(c1, result.gear);
     }
     if (!painted && result.icon) paintIcon(c1, iconSrc(result.icon, result.id));
-    for (const n of ['button2', 'button3']) {
-      const b = clipOf(view, n);
-      if (b && b.g) b.g.style.display = 'none';
-    }
-    const ok = clipOf(view, 'button1');
-    if (ok && ok.g) ok.g.style.display = '';
-    wireButton(ok, close, { idle: 2, hover: 2, press: 1 });
+    return painted;
   }
 
-  /** 把 4402 的「合成中」按 **COMPOSE_CG_MS** 的总时长逐帧推到结果帧（见常量注释）。
-   *  自己推帧（`gotoAndStop` 后 `playing=false`，节拍器不会插手），并在每一帧检查会话身份：
-   *  中途关页 / 换页就立刻停下，不要对已经销毁的实例继续 `showFrame`。 */
+  // 结果帧的原版画稿自带「痘痘拳套 / 两条基本属性 / 三颗叠放按钮」占位内容。
+  // 必须先在隐藏状态切到结果帧、填完文本和按钮再显示；先显示会露出占位与重影。
+  function fillResultPage(view, result) {
+    const layer = view && view.g;
+    const previous = layer && layer.style ? layer.style.visibility : '';
+    if (layer && layer.style) layer.style.visibility = 'hidden';
+    try {
+      stopAt(view, COMPOSE_RESULT_FRAME);
+      const c1 = clipOf(view, 'c1');
+      stopAt(c1, 2);
+      setText(view, 't_name', result.name);
+      const tempLines = String(result.temp == null ? '' : result.temp).split(/\r\n|\r|\n/);
+      const extraLines = String(result.extra == null ? '' : result.extra).split(/\r\n|\r|\n/);
+      layoutResultFields(view, tempLines, extraLines);
+      if (result.quality >= 0) setTextColor(view, 't_name', GEAR_QUALITY_COLOR[Math.max(0, Math.min(5, result.quality))]);
+
+      paintResultIcon(view, result);
+      for (const n of ['button2', 'button3']) {
+        const b = clipOf(view, n);
+        if (b && b.g) b.g.style.display = 'none';
+      }
+      const ok = clipOf(view, 'button1');
+      if (ok && ok.g) ok.g.style.display = '';
+      wireButton(ok, close, { idle: 2, hover: 2, press: 1 });
+    } finally {
+      if (layer && layer.style) layer.style.visibility = previous;
+    }
+  }
+
+  // 装备卡配色是可选装饰；网络慢时不能挡住结果页，先画道具图标，表到了再补原版卡面。
+  function preloadGearColors() {
+    try {
+      if (window.SfStatus && SfStatus.ensureGearColors) return Promise.resolve(SfStatus.ensureGearColors()).catch(() => {});
+    } catch (e) {}
+    return null;
+  }
+  function refreshGearIcon(rec, view, result, colors) {
+    if (!colors) return;
+    colors.then(async () => {
+      if (session !== rec || rec.resultView !== view || !view.g || !view.g.isConnected) return;
+      if (result.icon !== 'gear' || !result.gear) return;
+      try {
+        if (!paintResultIcon(view, result) && SfRender.loadExtra) {
+          // 配色表缓存可能比 tags 包活得久：符号被释放时补拉一次再重画卡面。
+          await SfRender.loadExtra('tags-gear-color.json');
+          if (session === rec && rec.resultView === view && view.g && view.g.isConnected) {
+            paintResultIcon(view, result);
+          }
+        }
+      } catch (e) {}
+    });
+  }
+
+  // 把 4402 的「合成中」按 COMPOSE_CG_MS 的总时长逐帧推到结果帧前一帧；
+  // 结果帧由 `fillResultPage` 隐藏填充后再显示。中途关页 / 换页立刻停，不碰已销毁实例。
   async function playComposeCg(view, rec) {
     if (!view || !view.showFrame) return false;
     const total = Math.max(1, Math.min(COMPOSE_RESULT_FRAME, view.frames ? view.frames.length : COMPOSE_RESULT_FRAME));
@@ -319,7 +411,8 @@
       try { view.frame = f - 1; view.showFrame(); } catch (e) {}
     }
     if (session !== rec || rec.resultView !== view || !view.g || !view.g.isConnected) return false;
-    stopAt(view, COMPOSE_RESULT_FRAME);
+    // 结果帧（44）带原版占位文字和三颗叠放按钮，只由 `fillResultPage` 隐藏后切帧再显示；
+    // 这里停在结果前一帧，慢网络 / 配色表未到也不能把占位页露出来。
     if (view.holdAnim) view.holdAnim(false);
     return true;
   }
@@ -331,11 +424,10 @@
     const view = await SfRender.mountSymbol(host, '4402', { frame: 1, label: '合成中' });
     if (session !== rec || !host.isConnected) { try { view.destroy(); } catch (e) {} return; }
     rec.resultView = view;
+    const colors = result.icon === 'gear' ? preloadGearColors() : null;
     if (!(await playComposeCg(view, rec))) return;
-    if (result.icon === 'gear' && window.SfStatus && SfStatus.ensureGearColors) {
-      try { await SfStatus.ensureGearColors(); } catch (e) {}
-    }
     fillResultPage(view, result);
+    refreshGearIcon(rec, view, result, colors);
   }
 
   async function playFailure(rec, msg) {
@@ -354,14 +446,15 @@
     if (session === rec) { destroy(); showFailure(msg); }
   }
 
-  function showFailure(msg) {
+  function showFailure(msg, title) {
+    const text = msg || '合成失败';
     const c = C();
     if (c && c.modal) {
-      c.modal('合成失败', '<div class="extra-result"><p>' + esc(msg || '合成失败') + '</p></div>',
+      c.modal(title || '合成失败', '<div class="extra-result"><p>' + esc(text) + '</p></div>',
         [{ label: '知道了', cls: 'gold' }], { small: true });
       return;
     }
-    if (window.UI && UI.toast) UI.toast(msg || '合成失败');
+    if (window.UI && UI.toast) UI.toast(text);
   }
 
   async function runCompose(rec) {
@@ -369,20 +462,26 @@
     if (!r || r.ok === false) {
       rec.busy = false;
       destroy();
-      showFailure((r && r.msg) || '合成失败');
+      // 背包已满 / 材料或金松果不足 / 数据异常：不是本次随机失败，标题不能写「合成失败」。
+      showFailure((r && r.msg) || '无法合成', r && r.ok === false ? '无法合成' : '合成失败');
       return;
     }
     if (r.success === false) {
       await playFailure(rec, r.msg || '合成失败');
       return;
     }
-    await playResult(rec, resultOf(r, rec.propId));
+    const result = resultOf(r, rec.propId);
+    try {
+      await playResult(rec, result);
+    } catch (e) {
+      // 服务端已经扣材料并发出装备；这时只是结果页素材加载失败，不能报「合成失败」让玩家再合一次。
+      if (window.__errs) window.__errs.push('compose result: ' + (e && e.message));
+      destroy();
+      showFailure('合成已完成：' + (result.name || '新装备') + '，但结果页加载失败，请回背包查看。', '合成完成');
+    }
   }
 
-  /** 装备融合结果。
-   *  `opts.playCg` = 先完整播一遍 4402「合成中」（与道具合成同一颗 CG），再停在结果帧；
-   *  不传则只挂 f44（旧行为，保留给不需要过场的调用方）。
-   *  融合页的 3763「融合中」不再叠加播放，避免两段过场串在一起。 */
+
   async function showGearResult(gear, opts) {
     if (!gear) return false;
     destroy();
@@ -398,20 +497,18 @@
       if (!extra) throw new Error('tags-compose.json');
       if (session !== rec || !host.isConnected) return false;
       const view = await SfRender.mountSymbol(host, '4402', {
-        frame: playCg ? 1 : COMPOSE_RESULT_FRAME, label: playCg ? '合成中' : '融合结果',
+        frame: 1, label: playCg ? '合成中' : '融合结果',
       });
       if (session !== rec || !host.isConnected) { try { view.destroy(); } catch (e) {} return false; }
       rec.resultView = view;
+      const colors = preloadGearColors();
       if (playCg) {
-        /* 与道具合成同一段逐帧 CG（见 `playComposeCg`）：总时长不变，但不会再停在半路。 */
+        // 与道具合成同一段逐帧 CG（见 `playComposeCg`）：总时长不变，但不会再停在半路。
         if (!(await playComposeCg(view, rec))) return false;
-      } else {
-        stopAt(view, COMPOSE_RESULT_FRAME);
       }
-      if (window.SfStatus && SfStatus.ensureGearColors) {
-        try { await SfStatus.ensureGearColors(); } catch (e) {}
-      }
-      fillResultPage(view, resultOf({ gear: gear }, 0));
+      const result = resultOf({ gear: gear }, 0);
+      fillResultPage(view, result);
+      refreshGearIcon(rec, view, result, colors);
       try { if (window.Main && Main.resizeLayout) Main.resizeLayout(); } catch (e) {}
       return true;
     } catch (e) {
@@ -426,6 +523,8 @@
     const id = Number(propId);
     if (!propMap.getValue(id) || !isComposeProp(id)) return false;
     destroy();
+    const blocked = composeBlockedReason(id);
+    if (blocked) { showFailure(blocked, '无法合成'); return false; }
     const host = createHost();
     if (!host) return false;
     const rec = { host: host, propId: id, pageView: null, resultView: null, busy: false,
@@ -440,13 +539,10 @@
       if (session !== rec || !host.isConnected) { try { view.destroy(); } catch (e) {} return false; }
       rec.pageView = view;
       fillPage(view, id);
-      /* 取消在左、合成在右（用户 2026-10 口径；碎片/种子/宝石/转化丸共用这一页）。 */
+
       swapComposeButtons(view);
       wirePage(view, rec);
-      /* 装备类碎片（24/25/26/77/78）的结果页要给装备挂「原版预上色整卡」
-       * （`tags-gear-color.json` ≈1.9 MB + 配色表）：第一次合成时才去拉，会在手机上
-       * 正好卡在"点完合成"那一下（解析 JSON + 建表）。页面已经画出来了，趁空闲先预热；
-       * 拉不到也无所谓，结果页自己还会再试一次。宝石 / 种子 / 转化丸不走这条，不预热。 */
+
       if ([24, 25, 26, 77, 78].includes(id)) {
         idle(() => { try { if (window.SfStatus && SfStatus.ensureGearColors) SfStatus.ensureGearColors(); } catch (e) {} });
       }
@@ -465,8 +561,8 @@
     showGearResult: showGearResult,
     close: close,
     destroy: destroy,
-    /** 只有**宿主还在页面上**才算开着：宿主被整页重建清掉之后不能继续报告 active
-     *  （否则背包那边的入口会以为合成页还开着而不再开新的）。 */
+    // 只有宿主还在页面上才算开着：宿主被整页重建清掉之后不能继续报告 active
+    // （否则背包那边的入口会以为合成页还开着而不再开新的）。
     active: () => !!liveSession(),
     isComposeProp: isComposeProp,
   });

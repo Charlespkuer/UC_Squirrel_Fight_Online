@@ -1,19 +1,4 @@
-/* ============================================================
- * ui-prop-use.js — 经典背包「道具使用」弹窗（原版「道具1」4886 第 1 帧）
- * ------------------------------------------------------------
- * 原版链路：
- *   `seeProp()`（MainMovie.as:20852）对 `useType == 1` 的道具走
- *   `showUsePropWin(prop)`（:20992）：
- *     `loadMcs([["道具1","daojuSub"]])` → `daojuSub.gotoAndStop(1)`
- *     填 `c1` 图标 / `name` / `vipDes`，`useDaojuButtons = [button1, button2]`。
- *   输入处理（:20545 的 state 1）左边 = 使用、右边 = 取消。
- *
- * 用户 2026-10 口径：**界面本身必须拉 ssfight 的素材替换**，但把「使用 / 取消」两颗
- * 按钮的左右位置对调。这里不画 DOM 弹窗：用 4886 第 1 帧原画，挂载后把 button1（使用）
- * 与 button2（取消）的 x 平移互换；文字/图标仍写进原版字段（name / vipDes / c1）。
- *
- * 素材包：`tags-daoju.json`（道具页 + 4886 闭包）。只有真的开「使用」弹窗才拉。
- * ========================================================== */
+// ui-prop-use.js — 经典背包「道具使用」弹窗（原版「道具1」4886 第 1 帧）
 (function () {
   'use strict';
 
@@ -23,8 +8,7 @@
     if (!clip || !clip.gotoAndStop) return;
     try { clip.gotoAndStop(frame); } catch (e) {}
   };
-  /* 兜底图标：与背包/商店共用同一张路径表（`UI.classic.propIconSrc`，原版无框矢量优先）。
-   * 矢量图挂载失败或 UI 还没就绪时也不会裂图。 */
+  // 兜底图标：与背包/商店共用同一张路径表（`UI.classic.propIconSrc`，原版无框矢量优先）。
   const iconSrc = (id) => {
     const classic = window.UI && window.UI.classic;
     if (classic && typeof classic.propIconSrc === 'function') return classic.propIconSrc(id);
@@ -39,18 +23,15 @@
     const ui = document.getElementById('ui');
     if (!ui) return null;
     const host = document.createElement('section');
-    /* 与 ui-compose / 状态页同一套宿主约定：ssfight-view 保住经典层，
-     * ssfight-sub 抬到二级页之上；classic-home 的 pointer-events:none 由按钮自己覆盖。
-     * ⚠ 不要加 `ssfight-home`：`main.js` 的 fitCanvas 把 `.ssfight-home` 当成
-     *   320×196 整页，一挂弹窗就会把 #ui 从 690 改成 716.625，底下的背包/商店
-     *   背景跟着纵向拉伸、漂移（用户 2026-10 报的“打开使用窗口背景漂移”）。 */
+    // 与 ui-compose / 状态页同一套宿主约定：ssfight-view 保住经典层，
+    // ⚠ 不要加 `ssfight-home`：`main.js` 的 fitCanvas 把 `.ssfight-home` 当成
     host.className = 'classic-home ssfight-sub ssfight-view sf-prop-use-view' + (extra ? ' ' + extra : '');
     host.setAttribute('aria-label', '道具使用');
     ui.appendChild(host);
     return host;
   }
 
-  /** 只拆这一份 session，不碰后来打开的那一份（异步/旧 handle 回来时尤其重要）。 */
+  // 只拆这一份 session，不碰后来打开的那一份（异步/旧 handle 回来时尤其重要）。
   function dispose(rec) {
     if (!rec || rec.closed) return;
     rec.closed = true;
@@ -82,7 +63,7 @@
     if (clip) SfRender.setText(clip, String(value == null ? '' : value));
   }
 
-  /** 把道具图集图标放进原版 c1（3414 第 2 帧的空图标位），与合成页同一条做法。 */
+
   function paintIcon(clip, src) {
     if (!clip || !clip.g || !src) return;
     const host = clip.getContentHost ? clip.getContentHost() : clip.g;
@@ -105,16 +86,15 @@
     host.appendChild(img);
   }
 
-  /* ---------- 矢量道具图标：原版 `c1.attachMovie(<道具名>)` 的库元件 ----------
-   * `prop-icons.json` 是 `gen-ssfight-ui.cjs daoju` 从 SWF 导出的 id→元件号；
-   * `tags-daoju.json` 现在含这些库元件的闭包。先画一张 PNG 兜底，矢量挂上来后
-   * 再把它删掉，所以素材缺失/慢加载时不会出现空图标。 */
+
   let propIconMapPromise = null;
   function propIconMap() {
     if (!propIconMapPromise) {
-      propIconMapPromise = (typeof fetch === 'function'
-        ? fetch('images/ssfight/ui/prop-icons.json').then((r) => (r.ok ? r.json() : null)).catch(() => null)
-        : Promise.resolve(null));
+      propIconMapPromise = (window.SfRender && typeof SfRender.loadTable === 'function')
+        ? SfRender.loadTable('prop-icons.json').catch(() => null)
+        : (typeof fetch === 'function'
+          ? fetch('images/ssfight/ui/prop-icons.json').then((r) => (r.ok ? r.json() : null)).catch(() => null)
+          : Promise.resolve(null));
     }
     return propIconMapPromise;
   }
@@ -131,8 +111,8 @@
     let view = null;
     try {
       view = await SfRender.mountSymbol(host, sym, {
-        /* 87（征战令）取的是 SWF 3105 红色战令本体；用 3105/3106 的包围盒，
-         * 不能套 3107 带底卡时的 47×47 舞台坐标，否则底部会裁掉约 1px。 */
+        // 87（征战令）取的是 SWF 3105 红色战令本体；用 3105/3106 的包围盒，
+        // 不能套 3107 带底卡时的 47×47 舞台坐标，否则底部会裁掉约 1px。
         frame: 1, label: '道具矢量图标',
         viewBox: String(id) === '87' ? '-3 -1 47 47' : '0 -2 47 47',
       });
@@ -164,7 +144,7 @@
     }
   }
 
-  /** 原版按钮的放置矩阵（`0.927963,0,0,0.927963,x,y`）。 */
+
   function baseMatrix(clip) {
     const raw = clip && clip.g && clip.g.__baseMa;
     if (typeof raw !== 'string') return null;
@@ -172,8 +152,7 @@
     return p.length === 6 && p.every((v) => Number.isFinite(v)) ? p : null;
   }
 
-  /** 用户口径：把 ssfight 的「使用 / 取消」左右位置对调。
-   * 两颗按钮的 y / 缩放不变，只把 x 平移到对方原来的位置。 */
+  // （主路径现在走 `layoutActionButtons`；这里保留为拿不到几何时的兜底。）
   function swapButtons(use, cancel) {
     const a = baseMatrix(use), b = baseMatrix(cancel);
     if (!a || !b) return;
@@ -183,11 +162,48 @@
     if (cancel.setExtraTransform) cancel.setExtraTransform('translate(' + (-dx / sb).toFixed(3) + ',0)');
   }
 
-  /** 商店购买窗：挂 4886 第 1 帧（与背包详情窗同一份画稿），再把第 2 帧的
-   *  两颗按钮（d22 购买 4505 / d26 取消 4419，含原版位置与缩放）并进来。
-   *  用户 2026-10 口径：除「取消 / 购买」外，其余排版必须和背包详情完全一致；
-   *  按钮位置/缩放沿用购买窗（f2），左右由 `swapButtons` 对调。
-   *  f1 自带的「使用」(d9) 与「取消」(d13) 不能留，否则会和并入的两颗叠在一起。 */
+
+  const BUTTON_USE_SCALE = 1.03;
+  const BUTTON_GAP_RATIO = 0.45;
+  // 按钮排版只依赖画稿 bbox + 原版 base matrix，不依赖屏幕缩放；
+  // 首帧未布局/窗口缩放都不会把两键挤到一起。先包反馈壳再调用，`__hitBox` 是画稿尺寸。
+  function layoutActionButtons(view, right, cancel, mode) {
+    if (!right || !cancel || !right.g || !cancel.g || !right.setExtraTransform) return false;
+    const svg = right.g.ownerSVGElement || view.g.ownerSVGElement;
+    const vb = svg && svg.viewBox && svg.viewBox.baseVal;
+    const centerX = vb && vb.width ? vb.x + vb.width / 2 : 160;
+    const measure = (clip) => {
+      const m = baseMatrix(clip);
+      if (!m) return null;
+      const s = Math.abs(m[0]) || 1;
+      const k = mode === 'use' ? BUTTON_USE_SCALE / s : 1;
+      let b = clip.__hitBox;
+      if (!b || !b.w) {
+        try {
+          const box = clip.g.getBBox();
+          b = { x: box.x, y: box.y, w: box.width, h: box.height };
+        } catch (e) { return null; }
+      }
+      if (!b || !(b.w > 0)) return null;
+      return {
+        m, s, k, width: b.w * s * k,
+        centerLocal: (Number(b.x) || 0) + (Number(b.w) || 0) / 2,
+      };
+    };
+    const a = measure(cancel), b = measure(right);
+    if (!a || !b) { swapButtons(right, cancel); return false; }
+    const gap = Math.min(a.width, b.width) * BUTTON_GAP_RATIO;
+    const place = (clip, info, targetCenter) => {
+      const tx = (targetCenter - info.m[4]) / info.m[0] - info.k * info.centerLocal;
+      clip.setExtraTransform('translate(' + tx.toFixed(3) + ',0) scale(' + info.k.toFixed(5) + ')');
+    };
+    place(cancel, a, centerX - gap / 2 - a.width / 2);
+    place(right, b, centerX + gap / 2 + b.width / 2);
+    return true;
+  }
+
+  // 商店购买窗：挂 4886 第 1 帧（与背包详情窗同一份画稿），再把第 2 帧的
+  // f1 自带的「使用」(d9) 与「取消」(d13) 不能留，否则会和并入的两颗叠在一起。
   function mergeBuyFrame(view) {
     if (!view || !view.tag || !SfRender.buildFrames) return false;
     const all = SfRender.buildFrames(view.tag.Sf);
@@ -202,11 +218,13 @@
     }
     view.frames = [merged];
     view.frame = 0;
+    // ⚠ 帧数组被整体换掉了，必须强制重建显示列表：`showFrame()` 对“同帧重复调用”
+    view.__shownFrame = -1;
     view.showFrame();
     return true;
   }
 
-  /** 把一颗按钮水平移到弹窗中心（不可使用道具的详情只留一颗取消键）。 */
+
   function centerClip(clip, centerX) {
     if (!clip || !clip.g) return;
     const m = baseMatrix(clip);
@@ -219,8 +237,8 @@
     const dx = (Number(centerX) - current) / scale;
     if (clip.setExtraTransform) clip.setExtraTransform('translate(' + dx.toFixed(3) + ',0)');
   }
-  /** 接一颗原版按钮：默认第 1 帧常态（奶油灰）/ 第 2 帧悬停（绿）。
-   *  `opts.idle` / `opts.hover` 可覆盖（合成页等也复用同一套约定）。 */
+  // 接一颗原版按钮：默认第 1 帧常态（奶油灰）/ 第 2 帧悬停（绿）。
+  // `opts.idle` / `opts.hover` 可覆盖（合成页等也复用同一套约定）。
   function wireButton(clip, onFire, role, opts) {
     if (!clip || !clip.g) return;
     const idle = opts && opts.idle != null ? opts.idle : 1;
@@ -249,15 +267,14 @@
     clip.g.addEventListener('click', (e) => {
       if (e && e.preventDefault) e.preventDefault();
       if (e && e.stopPropagation) e.stopPropagation();
-      /* 点完指针仍在按钮上：保持悬停色；真正移开时 mouseleave 再回常态。 */
+
       stopAt(clip, hover);
       onFire();
     });
   }
 
-  /** 道具说明：背包使用窗 / 不可使用道具的详情窗 / 商店购买窗共用同一套排版
-   *  （10px、最多两行、黑色，行高沿用素材烘焙值）。用户 2026-10 口径：
-   *  购买窗除两颗按钮外必须与背包详情逐项一致，所以这里只留一份实现。 */
+  // 道具说明：背包使用窗 / 不可使用道具的详情窗 / 商店购买窗共用同一套排版
+  // 购买窗除两颗按钮外必须与背包详情逐项一致，所以这里只留一份实现。
   function writeRemark(view, text) {
     setWrappedField(clipOf(view, 'vipDes'), text == null ? '' : text, 10, 2);
   }
@@ -273,11 +290,7 @@
     void paintVectorIcon(c1, id);
   }
 
-  /* ---------- 商店购买窗：4886 第 1 帧版式 + 第 2 帧的两颗按钮 ----------
-   * 用户 2026-10 口径：除「取消 / 购买」两颗按钮外，其余排版必须与背包详情
-   * （4886 f1，同一个元件）完全一致；按钮位置/缩放沿用购买窗 f2 的 4505/4419，
-   * 左右由 `swapButtons` 对调（取消在左、购买在右）。
-   * f2 原版的数量条 / 左右箭头 / UC 会员提示都不进合并帧。 */
+
   function hideClip(clip) {
     const node = clip && (clip.g || clip);
     if (node && node.style) node.style.display = 'none';
@@ -292,11 +305,7 @@
     void paintVectorIcon(c1, id);
   }
 
-  /**
-   * 打开商店购买窗。`opts`：
-   *   desc / stock / max / onBuy(qty, handle) / onClose()
-   * `onBuy` 返回 true 表示买完关窗；返回 false 则保留（多件限购继续买）。
-   */
+
   async function openBuy(propId, opts) {
     opts = opts || {};
     const id = Number(propId);
@@ -338,22 +347,18 @@
         return null;
       }
       rec.view = view;
-      /* 用户 2026-10 口径：按钮外必须与背包详情（4886 f1）一致；f2 只借两颗按钮。 */
+
       mergeBuyFrame(view);
       fillBuy(view, id, base);
       const buy = clipOf(view, 'button2');
       const cancel = clipOf(view, 'button3');
-      /* 用户口径：商店购买窗与背包使用窗一样，取消在左、购买在右。 */
-      swapButtons(buy, cancel);
+
       const setReason = (text) => writeRemark(view, text == null ? '' : text);
       const draw = () => {
         if (!buy) return;
         const off = rec.stock <= 0;
-        /* 售罄：把购买键从"点击路由"里摘掉（路由是按包围盒判归属的，只关
-         * `pointer-events` 没用——鼠标扫过仍会派发 mouseenter 变绿）。
-         * ⚠ 售罄时**不压透明度**：以前 `opacity:.65` 会把购买键整颗调浅，
-         * 英雄帖/勇气徽章这类每天能买多件的商品买满后看着像"颜色不一样"。
-         * 售罄只用路由注销 + 介绍文字说明，按钮颜色保持与取消键一致。 */
+        // 售罄：把购买键从"点击路由"里摘掉（路由是按包围盒判归属的，只关
+        // ⚠ 售罄时不压透明度：以前 `opacity:.65` 会把购买键整颗调浅，
         const t = T();
         if (t && t.unregisterHit && t.registerHit) {
           if (off && !rec.buyUnregistered) {
@@ -364,8 +369,8 @@
         }
         if (buy.g) buy.g.style.opacity = '';
         if (off) {
-          /* 路由一撤，mouseleave 不会再回来；把购买键拨回常态帧，
-           * 否则点完最后一件时它会停在点击那一刻的悬停绿色。 */
+          // 路由一撤，mouseleave 不会再回来；把购买键拨回常态帧，
+          // 否则点完最后一件时它会停在点击那一刻的悬停绿色。
           stopAt(buy, 1);
         }
         if (off && !rec.soldOutNoted) {
@@ -387,8 +392,7 @@
         get view() { return rec.view; },
         propId: id,
       };
-      /* 购买键：4505 第 1 帧 = 4504（奶油灰 3150，与取消同画稿），第 2 帧才是绿色 3152。
-       * 不再用第 3 帧深灰 + 换 fill 的旧做法。 */
+
       wireButton(buy, () => {
         if (rec.stock <= 0) return;
         let ok = false;
@@ -399,6 +403,9 @@
         else draw();
       }, 'buy', { idle: 1, hover: 2 });
       wireButton(cancel, () => closeSession(rec), 'cancel');
+      // 必须等 popWrap 量完画稿再排版：先排版会把按钮旧宽度当成间距基准，
+      // 反馈壳把按钮撑大后两键会挤在一起。见 open() 同一顺序。
+      layoutActionButtons(view, buy, cancel, 'buy');
       draw();
       try { if (window.Main && Main.resizeLayout) Main.resizeLayout(); } catch (e) {}
       return handle;
@@ -410,7 +417,7 @@
     }
   }
 
-  /** 把 4886 的长文本字段（vipDes）压成小字号、按框宽断行；原版字段只有一两行。 */
+  // 把 4886 的长文本字段（vipDes）压成小字号、按框宽断行；原版字段只有一两行。
   function setWrappedField(clip, text, size, maxLines, dy, maxCols) {
     if (!clip) return;
     size = Number(size) || 10;
@@ -439,8 +446,7 @@
     });
   }
 
-  /** 不可使用道具的详情：仍用原版 4886 f1，但不显示「使用」，只留「取消/返回」。
-   *  卷轴、挑战书、英雄帖、勇气徽章、抽奖卷等走这里；介绍写 vipDes，矢量图标同背包。 */
+
   function fillInfo(view, id, base) {
     setText(view, 'name', base.name);
     writeRemark(view, base.remark);
@@ -448,7 +454,7 @@
     stopAt(c1, 2);
     paintIcon(c1, iconSrc(id));
     void paintVectorIcon(c1, id);
-    hideClip(clipOf(view, 'button1'));       // 不可使用：不显示「使用」
+    hideClip(clipOf(view, 'button1'));
   }
 
   async function openInfo(propId, opts) {
@@ -507,12 +513,7 @@
     writeRemark(rec.view, base.remark);
   }
 
-  /**
-   * 打开「使用」弹窗。返回 handle（`{ close, sync, element, view, propId }`）；
-   * 素材/挂载失败返回 null，调用方可以退回原 DOM 弹窗。
-   * opts.onUse(handle) —— 玩家点「使用」（已换到右边）；
-   * opts.onClose()    —— handle.close() 时回调。
-   */
+
   async function open(propId, opts) {
     const id = Number(propId);
     const base = propMap.getValue(id);
@@ -525,15 +526,13 @@
       onUse: opts && opts.onUse, onClose: opts && opts.onClose, onCancel: opts && opts.onCancel,
     };
     session = rec;
-    /* #ui 被整页换掉（切页 / 回首页 / 重开一局）时宿主会被直接摘掉，这里主动拆 view，
-     * 别让 SfRender 的播放注册表留着一棵已经离开文档的子树。 */
+
     if (window.MutationObserver) {
       try {
         rec.observer = new MutationObserver(() => {
           if (!host.isConnected && !rec.closed) closeSession(rec);
         });
-        /* 宿主是 #ui 的直接子节点：只盯 #ui 的直接子树变化，外加 body 一层防 #ui 整体被换；
-         * 不用 subtree，避免页面里的 SVG 动画每帧都触发一遍。 */
+
         if (host.parentNode) rec.observer.observe(host.parentNode, { childList: true });
         rec.observer.observe(document.body, { childList: true });
       } catch (e) { rec.observer = null; }
@@ -558,9 +557,11 @@
       fill(view, id);
       const use = clipOf(view, 'button1');
       const cancel = clipOf(view, 'button2');
-      swapButtons(use, cancel);
+
       wireButton(use, () => { if (rec.onUse) rec.onUse(handle); }, 'use');
       wireButton(cancel, () => { closeSession(rec); if (rec.onCancel) rec.onCancel(); }, 'cancel');
+      // popWrap 会加一层反馈壳；先包壳再排版，尺寸从画稿 bbox 读，不受屏幕缩放影响。
+      layoutActionButtons(view, use, cancel, 'use');
       try { if (window.Main && Main.resizeLayout) Main.resizeLayout(); } catch (e) {}
     } catch (e) {
       if (window.__errs) window.__errs.push('prop use: ' + (e && e.message));
@@ -585,7 +586,7 @@
     close: close,
     destroy: destroy,
     active: () => !!session,
-    /** 供回归/探针核对：使用/详情挂 f1；购买窗挂 f1 后并入 f2 的两颗按钮。 */
+
     frame: 1,
     buyFrame: 1,
     buyButtonsFrame: 2,

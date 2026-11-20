@@ -1,0 +1,123 @@
+/* web.css — 纯网页端（手机浏览器 / 平板 / 桌面浏览器）的补充样式。
+   经典界面本身按 1170×690 的固定画布缩放，这里只处理浏览器环境特有的安全区、
+   竖屏提示与登录卡片留白，不改原版元件。 */
+
+#rotate-hint {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  inset: 0;
+  z-index: 3000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 28px 24px calc(28px + env(safe-area-inset-bottom, 0px));
+  background:
+    radial-gradient(circle at 50% 38%, rgba(86, 64, 34, .55), transparent 60%),
+    linear-gradient(180deg, #2b2016 0%, #1a120b 100%);
+  color: #ffe6a0;
+  text-align: center;
+  font-family: "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", sans-serif;
+}
+#rotate-hint.show { display: flex; }
+
+.web-rotate-card { max-width: 360px; }
+
+.web-rotate-phone {
+  width: 62px;
+  height: 104px;
+  margin: 0 auto 22px;
+  border: 4px solid #ffe6a0;
+  border-radius: 12px;
+  position: relative;
+  animation: web-rotate-tilt 1.8s ease-in-out infinite;
+  box-shadow: 0 0 0 5px rgba(255, 230, 160, .08), 0 10px 28px rgba(0, 0, 0, .45);
+}
+.web-rotate-phone::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 8px;
+  width: 18px;
+  height: 3px;
+  margin-left: -9px;
+  border-radius: 3px;
+  background: #ffe6a0;
+  opacity: .8;
+}
+.web-rotate-phone::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 7px;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  border: 3px solid #ffe6a0;
+  border-radius: 50%;
+  opacity: .7;
+}
+@keyframes web-rotate-tilt {
+  0%, 25% { transform: rotate(0deg); }
+  55%, 75% { transform: rotate(90deg); }
+  100% { transform: rotate(0deg); }
+}
+
+.web-rotate-title {
+  margin: 0 0 8px;
+  font-size: 22px;
+  letter-spacing: 2px;
+  color: #ffd76b;
+}
+.web-rotate-text {
+  margin: 0 0 22px;
+  font-size: 14px;
+  line-height: 1.8;
+  color: #d9c39a;
+}
+.web-rotate-continue {
+  min-height: 44px;
+  padding: 10px 26px;
+  border: 2px solid #b98b47;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fff6de 0%, #f0d9a9 100%);
+  color: #5a3c16;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.web-rotate-continue:active { transform: translateY(1px); }
+
+@media (orientation: landscape) {
+  #rotate-hint.show { display: none; }
+}
+
+@supports (padding: env(safe-area-inset-top)) {
+  .online-login {
+    padding-top: max(16px, env(safe-area-inset-top));
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+  #boot-note { bottom: max(6px, env(safe-area-inset-bottom)); }
+}
+
+@media (max-width: 420px) {
+  .online-login-card { width: min(360px, 92vw); }
+}
+
+/* iOS 在 input 字号 <16px 时聚焦会自动放大整页；手机端统一按 16px 起。 */
+@media (pointer: coarse) {
+  .online-login-card input { font-size: 16px; }
+}
+
+/* 登录卡片贴到底部时，首次点击前的音频提示会压住「已连接 / 版本」一行；登录页不显示它。 */
+body:has(.online-login) .audio-hint { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .web-rotate-phone { animation: none; }
+}

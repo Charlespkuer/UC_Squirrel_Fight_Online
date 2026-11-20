@@ -1,17 +1,13 @@
 'use strict';
-/* ============================================================
- * server/db.js — SQLite（node:sqlite）建表/迁移/事务
- * ------------------------------------------------------------
- * 一次性建全表；`PRAGMA user_version` 记迁移版本，后续只追加。
- * 单进程 + WAL，写操作都走 `tx()` 包成事务；读用 `all()/get()`。
- * ============================================================ */
+// server/db.js — SQLite（node:sqlite）建表/迁移/事务
+// 一次性建全表；`PRAGMA user_version` 记迁移版本，后续只追加。
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { config } = require('./config');
 
-const SCHEMA_VERSION = 17;
+const SCHEMA_VERSION = 21;
 
 let db = null;
 const stmtCache = new Map();
@@ -34,8 +30,7 @@ const SCHEMA = [
      ban_reason    TEXT    NOT NULL DEFAULT '',
      device        TEXT    NOT NULL DEFAULT '',
      ip            TEXT    NOT NULL DEFAULT '',
-     /* 注册当时那台设备/网络：账号可能换手机、换网络，但注册信息要长期保留。
-      * account_ips/account_devices 是历史表且有保留期，这里单独存一份不会被清理的锚点。 */
+
      reg_ip            TEXT NOT NULL DEFAULT '',
      reg_device_hash   TEXT NOT NULL DEFAULT '',
      reg_platform      TEXT NOT NULL DEFAULT '',
@@ -56,22 +51,29 @@ const SCHEMA = [
      PRIMARY KEY(account_id, opponent_id)
    )`,
 
-  /* Administrator-created progression simulations, kept eligible for random
-   * challenges without falsifying a player's last-seen/online status. */
+
   `CREATE TABLE IF NOT EXISTS simulated_accounts (
      account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
      note TEXT NOT NULL DEFAULT ''
    )`,
 
-  /* Developer/test registry. Written only by tools/seed-test-account.cjs (no HTTP
-   * route); auth.publicAccount exposes it as `dev` so the client can show a badge
-   * and admin-audit can treat the account as sanctioned instead of suspicious. */
+
   `CREATE TABLE IF NOT EXISTS dev_accounts (
      account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
      label      TEXT    NOT NULL DEFAULT '',
      note       TEXT    NOT NULL DEFAULT '',
      created_at INTEGER NOT NULL
    )`,
+
+  // 临时隐身：hidden_until 到点自动失效；只影响天梯/公开匹配，不改存档、天梯分数与社交关系。
+  `CREATE TABLE IF NOT EXISTS hidden_accounts (
+     account_id   INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+     hidden_until INTEGER NOT NULL,
+     reason       TEXT    NOT NULL DEFAULT '',
+     created_at   INTEGER NOT NULL,
+     updated_at   INTEGER NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS ix_hidden_until ON hidden_accounts(hidden_until)`,
 
   `CREATE TABLE IF NOT EXISTS sessions (
      token_hash TEXT    PRIMARY KEY,
@@ -86,8 +88,7 @@ const SCHEMA = [
    )`,
   `CREATE INDEX IF NOT EXISTS ix_sessions_account ON sessions (account_id)`,
 
-  /* 被顶掉的旧会话墓碑：旧令牌下一次请求时能明确提示“账号已在其他设备登录”，
-   * 而不是只看到一句笼统的“登录已失效”。保留期由 maintenance 清理。 */
+
   `CREATE TABLE IF NOT EXISTS session_kicks (
      token_hash TEXT PRIMARY KEY,
      account_id INTEGER NOT NULL,
@@ -135,7 +136,7 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS ix_security_time ON security_events(created_at)`,
   `CREATE INDEX IF NOT EXISTS ix_security_ip ON security_events(ip, created_at)`,
 
-  /* 服务器权威存档：一人一份（联机版只有 classic 槽）。 */
+  // 服务器权威存档：一人一份（联机版只有 classic 槽）。
   `CREATE TABLE IF NOT EXISTS saves (
      account_id INTEGER NOT NULL,
      mode       TEXT    NOT NULL DEFAULT 'classic',
@@ -150,12 +151,14 @@ const SCHEMA = [
      gold       INTEGER NOT NULL DEFAULT 0,
      gold_cup   INTEGER NOT NULL DEFAULT 0,
      integral   INTEGER NOT NULL DEFAULT 0,
+     vip_level  INTEGER NOT NULL DEFAULT 0,
+     vip_until  INTEGER NOT NULL DEFAULT 0,
      updated_at INTEGER NOT NULL,
      PRIMARY KEY (account_id, mode),
      FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
    )`,
 
-  /* 每级战斗快照：升级时落一条，同级换装写新 revision；只读战斗字段。 */
+  // 每级战斗快照：升级时落一条，同级换装写新 revision；只读战斗字段。
   `CREATE TABLE IF NOT EXISTS battle_snapshots (
      id         TEXT    PRIMARY KEY,
      account_id INTEGER NOT NULL,
@@ -197,8 +200,7 @@ const SCHEMA = [
      snapshot_id  TEXT    NOT NULL DEFAULT '',
      seed         INTEGER NOT NULL,
      result       BLOB    NOT NULL,
-     /* 可复现战斗的双方面板（JSON）；有它时 result 只存 winner/maxHp/names 摘要，
-      * 回放时用 seed + 双方面板重新跑 Sim。老录像没有此列，仍直接读 result。 */
+
      repro        BLOB,
      hash         TEXT    NOT NULL,
      sim_version  TEXT    NOT NULL DEFAULT '',
@@ -214,7 +216,7 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS ix_combats_attacker ON combats (attacker_id, created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS ix_combats_defender ON combats (defender_id, created_at DESC)`,
 
-  /* 战后四选一：奖池只在服务器保存；领取状态不依赖录像保留数量。 */
+  // 战后四选一：奖池只在服务器保存；领取状态不依赖录像保留数量。
   `CREATE TABLE IF NOT EXISTS combat_chests (
      combat_id TEXT PRIMARY KEY,
      account_id INTEGER NOT NULL,
@@ -247,8 +249,7 @@ const SCHEMA = [
    )`,
   `CREATE INDEX IF NOT EXISTS ix_messages_account ON messages (account_id, created_at DESC)`,
 
-  /* 消息页「看过哪一档」：消息本身用 `messages.read_at`；好友验证没有 read 标记，
-   * 用一个时间戳表示「验证消息看到哪了」，主界面 NEW 红点只按**新到达**算。 */
+
   `CREATE TABLE IF NOT EXISTS notice_seen (
      account_id       INTEGER PRIMARY KEY,
      requests_seen_at INTEGER NOT NULL DEFAULT 0,
@@ -269,9 +270,7 @@ const SCHEMA = [
      FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
    )`,
 
-  /* 好友申请（原版 `addFriend.do` → `messages.do?type=3` → `validateFriend.do`）：
-   * **申请不等于好友**，只有收件人 accept 之后才写 `friendships` 两行。
-   * `id` 就是原版消息里的 `messageId`；同一对玩家只允许一条 pending（UNIQUE）。 */
+
   `CREATE TABLE IF NOT EXISTS friend_requests (
      id         TEXT    PRIMARY KEY,
      from_id    INTEGER NOT NULL,
@@ -283,7 +282,7 @@ const SCHEMA = [
    )`,
   `CREATE INDEX IF NOT EXISTS ix_friend_requests_to ON friend_requests (to_id, created_at DESC)`,
 
-  /* 每日次数：rank / arena / campaign / stage 各自一行 */
+
   `CREATE TABLE IF NOT EXISTS daily_counts (
      account_id INTEGER NOT NULL,
      kind       TEXT    NOT NULL,
@@ -293,7 +292,18 @@ const SCHEMA = [
      FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
    )`,
 
-  /* 每一条服务端动作都记账，只追加；出问题能回放。 */
+
+  `CREATE TABLE IF NOT EXISTS account_daily_actions (
+     ip         TEXT    NOT NULL,
+     date       TEXT    NOT NULL,
+     action     TEXT    NOT NULL,
+     count      INTEGER NOT NULL DEFAULT 0,
+     updated_at INTEGER NOT NULL,
+     PRIMARY KEY (ip, date, action)
+   )`,
+  `CREATE INDEX IF NOT EXISTS ix_account_daily_actions_date ON account_daily_actions(date)`,
+
+  // 每一条服务端动作都记账，只追加；出问题能回放。
   `CREATE TABLE IF NOT EXISTS action_log (
      id         INTEGER PRIMARY KEY AUTOINCREMENT,
      account_id INTEGER NOT NULL,
@@ -308,7 +318,7 @@ const SCHEMA = [
    )`,
   `CREATE INDEX IF NOT EXISTS ix_action_log_account ON action_log (account_id, created_at DESC)`,
 
-  /* 征战：4 人组队房 */
+
   `CREATE TABLE IF NOT EXISTS campaign_rooms (
      id         TEXT    PRIMARY KEY,
      code       TEXT    NOT NULL,
@@ -345,9 +355,7 @@ const SCHEMA = [
      FOREIGN KEY (room_id) REFERENCES campaign_rooms(id) ON DELETE CASCADE
    )`,
 
-  /* 师徒：真实账号关系（师傅可查徒弟成长，徒弟日贡由服务端结算）。
-   * `master_kind = 'bot'` 时 `master_id = 0`，师父面板存 `master_json`（原版允许拜人机师父）；
-   * 只有 `master_id > 0` 的真人徒弟会给师父产生日供。 */
+  // 师徒：真实账号关系（师傅可查徒弟成长，徒弟日贡由服务端结算）。
   `CREATE TABLE IF NOT EXISTS apprenticeships (
      prentice_id       INTEGER PRIMARY KEY,
      master_id         INTEGER NOT NULL DEFAULT 0,
@@ -361,7 +369,14 @@ const SCHEMA = [
    )`,
   `CREATE INDEX IF NOT EXISTS ix_apprentice_master ON apprenticeships (master_id, status)`,
 
-  /* 天梯周奖励领取记录 */
+
+  `CREATE TABLE IF NOT EXISTS apprentice_cheers (
+     prentice_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+     stat        TEXT    NOT NULL CHECK(stat IN ('power','agility','speed')),
+     created_at  INTEGER NOT NULL
+   )`,
+
+
   `CREATE TABLE IF NOT EXISTS rank_awards (
      account_id INTEGER NOT NULL,
      week       TEXT    NOT NULL,
@@ -371,14 +386,13 @@ const SCHEMA = [
      PRIMARY KEY (account_id, week)
    )`,
 
-  /* 服务端键值（目前只存天梯最近一次周结算的周标识；`meta` 通用，后续可复用）。 */
+  // 服务端键值（目前只存天梯最近一次周结算的周标识；`meta` 通用，后续可复用）。
   `CREATE TABLE IF NOT EXISTS meta (
      key   TEXT PRIMARY KEY,
      value TEXT NOT NULL
    )`,
 
-  /* 天梯赛区人机：每个赛区每个等级 3 个（80-90 共 33 个），每周一 0 点回到 300 分。
-   * id 形如 `bot:d40:45:0`，跨周保持同一个人；分数/胜负跟着赛区榜一起结算，积分下限 50。 */
+
   `CREATE TABLE IF NOT EXISTS rank_bots (
      id         TEXT    PRIMARY KEY,
      division   TEXT    NOT NULL,
@@ -393,7 +407,7 @@ const SCHEMA = [
    )`,
   `CREATE INDEX IF NOT EXISTS ix_rank_bots_week ON rank_bots (week, division, score DESC)`,
 
-  /* 好友留言板（原版 留言板） */
+
   `CREATE TABLE IF NOT EXISTS friend_messages (
      id         TEXT    PRIMARY KEY,
      to_id      INTEGER NOT NULL,
@@ -426,8 +440,7 @@ const SCHEMA = [
    )`,
   `CREATE INDEX IF NOT EXISTS ix_forum_replies_post ON forum_replies (post_id, id)`,
 
-  /* 论坛管理员：只认账号主键；role 预留给将来的版主分级。
-   * 创始管理员由 server/game/forum.js 的 bootstrap() 按玩家编号种入。 */
+
   `CREATE TABLE IF NOT EXISTS forum_admins (
      account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
      role       TEXT    NOT NULL DEFAULT 'admin',
@@ -435,8 +448,7 @@ const SCHEMA = [
      created_by INTEGER NOT NULL DEFAULT 0,
      note       TEXT    NOT NULL DEFAULT ''
    )`,
-  /* 违禁词：match_key 是归一化后的唯一键（去空白/标点/零宽、全角转半角）。
-   * 管理员删除默认词后不会被重新种入（meta.forum.words.seeded）。 */
+  // 违禁词：match_key 是归一化后的唯一键（去空白/标点/零宽、全角转半角）。
   `CREATE TABLE IF NOT EXISTS forum_banned_words (
      match_key  TEXT    PRIMARY KEY,
      word       TEXT    NOT NULL,
@@ -445,7 +457,7 @@ const SCHEMA = [
      created_by INTEGER NOT NULL DEFAULT 0,
      created_at INTEGER NOT NULL
    )`,
-  /* 论坛管理操作留痕：删帖/删回复/词库/管理员/清理都写一条。 */
+
   `CREATE TABLE IF NOT EXISTS forum_admin_log (
      id          INTEGER PRIMARY KEY AUTOINCREMENT,
      actor_id    INTEGER NOT NULL,
@@ -473,8 +485,7 @@ const SCHEMA = [
    )`,
   `CREATE INDEX IF NOT EXISTS ix_ai_friends_owner ON ai_friends(account_id, created_at DESC)`,
 
-  /* 保留期清理（server/game/maintenance.js）用的时间索引：
-   * 这些表只追加，没有索引时每次清理都要全表扫。 */
+
   `CREATE INDEX IF NOT EXISTS ix_combats_created ON combats(created_at)`,
   `CREATE INDEX IF NOT EXISTS ix_action_log_created ON action_log(created_at)`,
   `CREATE INDEX IF NOT EXISTS ix_messages_created ON messages(created_at)`,
@@ -505,7 +516,6 @@ function migrate() {
   tx(() => {
     const columns = db.prepare('PRAGMA table_info(sessions)').all();
     if (!columns.some(c => c.name === 'device_hash')) db.exec("ALTER TABLE sessions ADD COLUMN device_hash TEXT NOT NULL DEFAULT ''");
-    // 只在旧版迁移时清理历史 User-Agent，不覆盖新版设备资料。
     if (version < 5) db.exec("UPDATE accounts SET device = ''");
     if (version < 6) {
       const rows = db.prepare('SELECT id FROM accounts ORDER BY created_at,id').all();
@@ -526,11 +536,14 @@ function migrate() {
     if (version < 15) migrateV15();
     if (version < 16) migrateV16();
     if (version < 17) migrateV17();
+    if (version < 18) migrateV18();
+    if (version < 19) migrateV19();
+    if (version < 20) migrateV20();
+    if (version < 21) migrateV21();
     db.exec('PRAGMA user_version = ' + SCHEMA_VERSION);
   });
 }
 
-/** v7：师徒表支持「人机师父」，天梯默认积分 1500 → 0。 */
 function migrateV7() {
   const cols = db.prepare('PRAGMA table_info(apprenticeships)').all();
   if (!cols.some((c) => c.name === 'master_kind')) {
@@ -551,7 +564,7 @@ function migrateV7() {
     db.exec('ALTER TABLE apprenticeships_v7 RENAME TO apprenticeships');
     db.exec('CREATE INDEX IF NOT EXISTS ix_apprentice_master ON apprenticeships (master_id, status)');
   }
-  /* 旧默认值：没打过天梯的账号从 1500 起。现在默认 0；有战绩的账号保持原分。 */
+
   db.exec('UPDATE ratings SET score = 0 WHERE score = 1500 AND wins = 0 AND losses = 0');
   const rows = db.prepare('SELECT account_id, payload FROM saves').all();
   for (const row of rows) {
@@ -566,10 +579,6 @@ function migrateV7() {
   }
 }
 
-/** v8：2026-10-29 用户点名的一次性天梯数据修正。
- *  · player_id=100000（用户当前账号）天梯分归零；
- *  · 魔王等模拟账号如果已经有天梯分，调整到 1000（它们不再出现在天梯榜/真人匹配池）。
- *  同时把 `saves.integral` 镜像改成同值，避免登录后先看到旧分。 */
 function migrateV8() {
   const saveIntegral = (accountId, integral) => {
     const row = db.prepare('SELECT payload FROM saves WHERE account_id = ? AND mode = ?').get(Number(accountId), 'classic');
@@ -583,7 +592,7 @@ function migrateV8() {
   };
   const mine = db.prepare('SELECT account_id FROM player_ids WHERE player_id = 100000').get();
   if (mine) {
-    /* 所有赛季一起改：否则下次换季滚动会把旧赛季的 1500 再折算回来。 */
+    // 所有赛季一起改：否则下次换季滚动会把旧赛季的 1500 再折算回来。
     db.prepare('UPDATE ratings SET score = 0 WHERE account_id = ?').run(Number(mine.account_id));
     saveIntegral(mine.account_id, 0);
   }
@@ -597,8 +606,7 @@ function migrateV8() {
   }
 }
 
-/** 当前天梯周（周一，Asia/Shanghai）。db.js 不能 require settlement（会循环依赖），
- *  这里按同一口径单独算一次；只给迁移用。 */
+// 当前天梯周（周一，Asia/Shanghai）。db.js 不能 require settlement（会循环依赖），
 function currentRankWeek(nowMs) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: config.timezone, year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short',
@@ -611,11 +619,8 @@ function currentRankWeek(nowMs) {
   return dt.getUTCFullYear() + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0') + '-' + String(dt.getUTCDate()).padStart(2, '0');
 }
 
-/** v9：天梯改为「赛区 + 周结算 + 赛区人机」。
- *  · 旧的月赛季行（`season = YYYY-MM`）迁到**本周**行：每个账号取最新一个月、保留分数、
- *    胜负清零 —— 第一次上线不抹掉玩家已有积分；
- *  · `rank_bots` 由 SCHEMA 建表，人机行在 `settlement.ensureBots()` 里按周懒生成；
- *  · `saves.integral` 镜像由登录时的 `syncIntegral()` 覆盖。 */
+// v9：天梯改为「赛区 + 周结算 + 赛区人机」。
+// · `rank_bots` 由 SCHEMA 建表，人机行在 `settlement.ensureBots()` 里按周懒生成；
 function migrateV9() {
   const week = currentRankWeek();
   const rows = db.prepare('SELECT account_id, season, score FROM ratings WHERE LENGTH(season) = 7 ORDER BY account_id, season DESC').all();
@@ -628,19 +633,13 @@ function migrateV9() {
   }
 }
 
-/** v10：新增 `meta` 表（天梯周结算标记 `rank_week`）。表由 SCHEMA 的
- *  `CREATE TABLE IF NOT EXISTS` 建好，这里只占版本位。 */
 function migrateV10() {}
 
-/** v11：天梯真人冷却已改成「最近 N 场天梯」查询（settlement.recentRealOpponents），
- *  旧的 `rank_refresh_*` 两表不再有任何读写；直接删掉，避免留一张永远不用的表。 */
 function migrateV11() {
   db.exec('DROP TABLE IF EXISTS rank_refresh_exclusions');
   db.exec('DROP TABLE IF EXISTS rank_refresh_state');
 }
 
-/** v12：账号注册设备/IP 独立留档（不随 account_ips/account_devices 的保留期消失）。
- *  老库按「最早一条 IP / 最早绑定设备」回填；没有历史时保留空串。 */
 function migrateV12() {
   const cols = db.prepare('PRAGMA table_info(accounts)').all().map((c) => String(c.name));
   const add = (name, ddl) => { if (!cols.includes(name)) db.exec('ALTER TABLE accounts ADD COLUMN ' + ddl); };
@@ -668,16 +667,13 @@ function migrateV12() {
     WHERE reg_device_hash = ''`);
 }
 
-/** v13：战斗录像最小化。新录像把双方面板存进 `repro`，`result` 只存摘要；
- *  回放时用 seed + repro 重跑 Sim。老行 `repro` 为空，仍读原 result。 */
 function migrateV13() {
   const cols = db.prepare('PRAGMA table_info(combats)').all().map((c) => String(c.name));
   if (!cols.includes('repro')) db.exec('ALTER TABLE combats ADD COLUMN repro BLOB');
 }
 
-/** v14：征战异步化。房间补 mode/resolve_at/四个座位/队伍结果/共享 BOSS 血量；
- *  成员补 missed（结算时门票不足、未参战）。旧 waiting 房没有 resolve_at，
- *  统一按“从建立时间起 5 分钟”补上，避免升级后立刻被判超时。 */
+// v14：征战异步化。房间补 mode/resolve_at/四个座位/队伍结果/共享 BOSS 血量；
+// 统一按“从建立时间起 5 分钟”补上，避免升级后立刻被判超时。
 function migrateV14() {
   const add = (table, name, ddl) => {
     const cols = db.prepare('PRAGMA table_info(' + table + ')').all().map((c) => String(c.name));
@@ -694,16 +690,15 @@ function migrateV14() {
   db.exec("UPDATE campaign_rooms SET resolve_at = created_at + 300000 WHERE status = 'waiting' AND resolve_at = 0");
 }
 
-/** v15：征战分奖页（原版 3437 第 5 帧 / `campaignRollMc`）要复算每一份奖品的
- *  四座位点数与赢家，结算时把公开版 `rollDatas` 一起落库；老房间没有这一列，
- *  客户端回落到文字结果。 */
+// v15：征战分奖页（原版 3437 第 5 帧 / `campaignRollMc`）要复算每一份奖品的
+// 客户端回落到文字结果。
 function migrateV15() {
   const cols = db.prepare('PRAGMA table_info(campaign_rooms)').all().map((c) => String(c.name));
   if (!cols.includes('roll_json')) db.exec("ALTER TABLE campaign_rooms ADD COLUMN roll_json TEXT NOT NULL DEFAULT ''");
 }
 
-/** v16：`account_devices` 从「一设备一账号」改成「一设备最多 3 账号」的复合主键；
- *  旧表按 device_hash 唯一，必须重建才能容纳同一设备的多个账号。 */
+// v16：`account_devices` 从「一设备一账号」改成「一设备最多 3 账号」的复合主键；
+// 旧表按 device_hash 唯一，必须重建才能容纳同一设备的多个账号。
 function migrateV16() {
   const cols = db.prepare('PRAGMA table_info(account_devices)').all();
   const pk = cols.filter((c) => Number(c.pk) > 0).map((c) => String(c.name)).sort();
@@ -739,10 +734,35 @@ function migrateV16() {
   db.exec('CREATE INDEX IF NOT EXISTS ix_session_kicks_time ON session_kicks(created_at)');
 }
 
-/** v17：论坛管理（管理员 / 违禁词 / 管理日志）。
- *  新表已由 SCHEMA 里的 CREATE TABLE IF NOT EXISTS 建好；默认违禁词和
- *  创始管理员由 `server/game/forum.js` 的 bootstrap() 幂等种入，不在迁移里写死。 */
+// v17：论坛管理（管理员 / 违禁词 / 管理日志）。
+// 创始管理员由 `server/game/forum.js` 的 bootstrap() 幂等种入，不在迁移里写死。
 function migrateV17() {}
+
+function migrateV18() {}
+
+function migrateV19() {}
+
+// v20：超级松鼠等级要按账号实时显示（随机/好友名单不读战斗快照），
+// 把 payload.vip 的等级与到期时间摊成列，列表查询不再逐份 decode 整包存档。
+function migrateV20() {
+  const cols = db.prepare('PRAGMA table_info(saves)').all().map((c) => String(c.name));
+  if (!cols.includes('vip_level')) db.exec('ALTER TABLE saves ADD COLUMN vip_level INTEGER NOT NULL DEFAULT 0');
+  if (!cols.includes('vip_until')) db.exec('ALTER TABLE saves ADD COLUMN vip_until INTEGER NOT NULL DEFAULT 0');
+  const rows = db.prepare('SELECT account_id, mode, payload FROM saves');
+  const update = db.prepare('UPDATE saves SET vip_level = ?, vip_until = ? WHERE account_id = ? AND mode = ?');
+  for (const row of rows.iterate()) {
+    let save = null;
+    try { save = JSON.parse(Buffer.from(row.payload).toString('utf8')); } catch (_) { continue; }
+    const v = save && save.vip && typeof save.vip === 'object' ? save.vip : {};
+    const level = Math.max(0, Math.min(10, Math.floor(Number(v.level) || 0)));
+    const until = Math.max(0, Math.floor(Number(v.until) || 0));
+    update.run(level, until, row.account_id, row.mode);
+  }
+}
+
+function migrateV21() {
+  // hidden_accounts 由 SCHEMA 的 CREATE TABLE IF NOT EXISTS 建好；这里只占版本位。
+}
 
 function handle() {
   if (!db) open();
@@ -762,7 +782,7 @@ function all(sql, ...params) { return prepare(sql).all(...params); }
 function run(sql, ...params) { return prepare(sql).run(...params); }
 
 let txDepth = 0;
-/** 同步事务。`fn` 里不能有 await（node:sqlite 是同步 API）。 */
+// 同步事务。`fn` 里不能有 await（node:sqlite 是同步 API）。
 function tx(fn) {
   const h = handle();
   if (txDepth > 0) { txDepth++; try { return fn(); } finally { txDepth--; } }
@@ -787,8 +807,7 @@ function close() {
   db = null;
 }
 
-/** 生成一份一致性备份：SQLite 的 VACUUM INTO 会读取当前已提交快照，
- *  不会把正在写的 WAL 页漏掉，也不会在目标里留下半份数据。 */
+// 生成一份一致性备份：SQLite 的 VACUUM INTO 会读取当前已提交快照，
 function backupTo(file) {
   if (!db) open();
   const target = String(file).replace(/'/g, "''");

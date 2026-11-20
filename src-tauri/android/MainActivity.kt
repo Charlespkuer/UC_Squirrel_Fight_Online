@@ -1,6 +1,7 @@
 package com.ssdz.online
 
 import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
 import android.net.Uri
@@ -11,14 +12,22 @@ import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import android.webkit.JavascriptInterface
+import android.webkit.WebSettings
 import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
+import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import java.io.File
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
 import java.security.MessageDigest
+import java.security.SecureRandom
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.zip.ZipFile
 import org.json.JSONObject
 
 class MainActivity : TauriActivity() {
@@ -27,6 +36,13 @@ class MainActivity : TauriActivity() {
     private val ui = Handler(Looper.getMainLooper())
     private var lifecycleSeq = 0
     private var frozen = false
+    private val apkLock = Any()
+    @Volatile private var apkStatus = "idle"
+    @Volatile private var apkProgress = 0
+    @Volatile private var apkVersion = ""
+    @Volatile private var apkError = ""
+    private val installationIdLock = Any()
+    @Volatile private var installationIdCache: String? = null
 
     /** 合并连续的系统配置变化：新机（Android 16 / 折叠屏 / 分屏）一次转屏或系统栏动画
      *  会在几帧内连发多次 `onConfigurationChanged`。每次立即 evaluate 会让页面反复
@@ -116,20 +132,207 @@ class MainActivity : TauriActivity() {
             return JSONObject().put("ok", true).put("hidden", hide).toString()
         }
 
+        // 少量 ROM 会返回空值、全零或全服共享的 9774d56d682e549c，不能因此让整台设备无法注册：
+        // 退回本安装随机 ID（provider=installation），服务端仍按设备/网络配额限制多开。
+        private fun usableAndroidId(raw: String?): Boolean {
+            if (raw.isNullOrEmpty() || !raw.matches(Regex("[0-9a-f]{16,64}"))) return false
+            if (raw.all { it == '0' }) return false
+            return raw != "9774d56d682e549c"
+        }
+
+        private fun digestAndroid(raw: String): String {
+            val source = "com.ssdz.online\u0000android\u0000" + raw
+            return MessageDigest.getInstance("SHA-256").digest(source.toByteArray(Charsets.UTF_8))
+                .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+        }
+
+        private fun installationId(): String {
+            installationIdCache?.let { return it }
+            synchronized(installationIdLock) {
+                installationIdCache?.let { return it }
+                val prefs = getSharedPreferences("ssdz_device_identity", Context.MODE_PRIVATE)
+                val saved = prefs.getString("installation_id", "") ?: ""
+                if (saved.matches(Regex("[0-9a-f]{64}"))) {
+                    installationIdCache = saved
+                    return saved
+                }
+                val bytes = ByteArray(32)
+                SecureRandom().nextBytes(bytes)
+                val id = bytes.joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+                prefs.edit().putString("installation_id", id).commit()
+                installationIdCache = id
+                return id
+            }
+        }
+
         @JavascriptInterface
         fun deviceIdentity(): String {
             return try {
                 val raw = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
-                    ?.trim()?.lowercase() ?: throw IllegalStateException()
-                if (!raw.matches(Regex("[0-9a-f]{1,16}")) || raw.all { it == '0' } || raw == "9774d56d682e549c")
-                    throw IllegalStateException()
-                val source = "com.ssdz.online\u0000android\u0000" + raw
-                val hash = MessageDigest.getInstance("SHA-256").digest(source.toByteArray(Charsets.UTF_8))
-                    .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
-                JSONObject().put("id", hash).put("platform", "android").put("provider", "android-id").toString()
+                    ?.trim()?.lowercase()
+                if (usableAndroidId(raw)) {
+                    JSONObject().put("id", digestAndroid(raw.orEmpty()))
+                        .put("platform", "android").put("provider", "android-id").toString()
+                } else {
+                    JSONObject().put("id", installationId())
+                        .put("platform", "android").put("provider", "installation").toString()
+                }
             } catch (_: Exception) {
                 JSONObject().put("error", "DEVICE_UNAVAILABLE").toString()
             }
+        }
+
+        @JavascriptInterface
+        fun abi(): String = Build.SUPPORTED_ABIS.joinToString(",")
+
+        @JavascriptInterface
+        fun apkUpdateStatus(): String = synchronized(apkLock) {
+            JSONObject().put("status", apkStatus)
+                .put("progress", apkProgress)
+                .put("version", apkVersion)
+                .put("error", apkError)
+                .toString()
+        }
+
+        @JavascriptInterface
+        fun startApkUpdate(rawUrl: String, rawVersion: String): String {
+            val url = rawUrl.trim()
+            val version = rawVersion.trim()
+            val parsed = try { Uri.parse(url) } catch (_: Exception) { null }
+            val scheme = parsed?.scheme?.lowercase() ?: ""
+            val path = parsed?.path ?: ""
+            if ((scheme != "http" && scheme != "https") || url.length > 2048 ||
+                url.any { it.isWhitespace() } || !path.startsWith("/download/") ||
+                !path.lowercase().endsWith(".apk")) {
+                return failJson("更新地址不合法")
+            }
+            if (!version.matches(Regex("[0-9A-Za-z._-]{1,32}"))) return failJson("版本号格式不正确")
+            synchronized(apkLock) {
+                if (apkStatus == "downloading") return failJson("安装包正在下载，请稍候")
+                apkStatus = "downloading"
+                apkProgress = 0
+                apkVersion = version
+                apkError = ""
+            }
+            // 先要安装权限再下载，避免用户等完 40+ MB 才被系统拦下。
+            if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
+                synchronized(apkLock) { apkStatus = "permission"; apkProgress = 0 }
+                openUnknownSourcesSettings()
+                return JSONObject().put("ok", true).toString()
+            }
+            Thread {
+                try {
+                    downloadAndInstallApk(url, version)
+                } catch (e: Exception) {
+                    Log.e("SSDZOnline", "apk update failed", e)
+                    synchronized(apkLock) {
+                        apkStatus = "error"
+                        apkError = e.message ?: e.javaClass.simpleName
+                    }
+                }
+            }.apply { isDaemon = true; start() }
+            return JSONObject().put("ok", true).toString()
+        }
+    }
+
+    private fun openUnknownSourcesSettings() {
+        try {
+            val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName"))
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+        } catch (_: Exception) {
+            // 个别 ROM 没有这个设置页；JS 会提示用户手动允许安装未知应用。
+        }
+    }
+
+    private fun apkNativeAbis(file: File): Set<String> {
+        val out = HashSet<String>()
+        try {
+            ZipFile(file).use { zip ->
+                val entries = zip.entries()
+                while (entries.hasMoreElements()) {
+                    val name = entries.nextElement().name
+                    if (!name.startsWith("lib/")) continue
+                    val abi = name.removePrefix("lib/").substringBefore('/')
+                    if (abi.isNotEmpty()) out.add(abi)
+                }
+            }
+        } catch (_: Exception) {
+            // 解析失败交给系统安装器给最终错误，不在这里吞掉更新流程。
+        }
+        return out
+    }
+
+    private fun downloadAndInstallApk(url: String, version: String) {
+        val dir = File(cacheDir, "updates").apply { mkdirs() }
+        val target = File(dir, "squirrel_fight_online-$version.apk")
+        val part = File(dir, "squirrel_fight_online-$version.apk.part")
+        part.delete()
+        target.delete()
+        var conn: HttpURLConnection? = null
+        try {
+            conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 20000
+                readTimeout = 60000
+                instanceFollowRedirects = true
+                setRequestProperty("User-Agent", "SSDZOnline-Android")
+            }
+            val code = conn.responseCode
+            if (code != HttpURLConnection.HTTP_OK) throw IOException("下载失败（HTTP $code）")
+            val total = conn.contentLengthLong
+            if (total in 1L..999_999L) throw IOException("安装包体积异常")
+            var read = 0L
+            conn.inputStream.use { input ->
+                part.outputStream().use { output ->
+                    val buf = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        output.write(buf, 0, n)
+                        read += n
+                        if (total > 0) {
+                            val pct = ((read * 100) / total).toInt().coerceIn(0, 100)
+                            synchronized(apkLock) { apkProgress = pct }
+                        }
+                    }
+                }
+            }
+            if (read < 1_000_000) throw IOException("安装包体积异常")
+            val head = ByteArray(2)
+            part.inputStream().use { it.read(head) }
+            if (head.size < 2 || head[0] != 0x50.toByte() || head[1] != 0x4B.toByte()) {
+                throw IOException("下载文件不是 APK")
+            }
+            val archive = packageManager.getPackageArchiveInfo(part.absolutePath, 0)
+            if (archive == null || archive.packageName != packageName) throw IOException("安装包不属于本应用")
+            // 系统安装器对 ABI 不匹配只会弹「CPU 不兼容」，这里先按包内 lib/<abi>/ 判掉，
+            // 避免玩家下载完才被系统拒绝；JS 选包也会按主 ABI 修正，双层兜底。
+            val apkAbis = apkNativeAbis(part)
+            if (apkAbis.isNotEmpty() && !apkAbis.any { Build.SUPPORTED_ABIS.contains(it) }) {
+                part.delete()
+                throw IOException("安装包与当前 CPU 不兼容（包内 " + apkAbis.joinToString("/") + "）")
+            }
+            if (!part.renameTo(target)) {
+                target.delete()
+                if (!part.renameTo(target)) throw IOException("保存安装包失败")
+            }
+            if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
+                synchronized(apkLock) { apkStatus = "permission" }
+                openUnknownSourcesSettings()
+                return
+            }
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", target)
+            val install = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(install)
+            synchronized(apkLock) {
+                apkStatus = "ready"
+                apkProgress = 100
+            }
+        } finally {
+            try { conn?.disconnect() } catch (_: Exception) {}
         }
     }
 
@@ -142,6 +345,14 @@ class MainActivity : TauriActivity() {
         super.onWebViewCreate(webView)
         gameWebView = webView
         webView.resumeTimers()
+        /* 游戏只有浅色界面：系统深色模式下 WebView 的自动深色会把米色/金色压成暗褐/墨绿
+         * （Android 13+ / WebView 133 实测）。这里显式关掉，不能只靠主题的 Light 父类。 */
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            webView.settings.isAlgorithmicDarkeningAllowed = false
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            @Suppress("DEPRECATION")
+            webView.settings.forceDark = WebSettings.FORCE_DARK_OFF
+        }
         // Online has no file bridge or local account backup.
         webView.settings.allowFileAccess = false
         webView.settings.allowContentAccess = false

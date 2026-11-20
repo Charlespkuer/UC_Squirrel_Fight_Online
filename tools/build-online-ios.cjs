@@ -74,6 +74,9 @@ function prepareSnapshot(base, stage = STAGE) {
   // The snapshot's API choice is frozen, independent of the paired Mac's shell.
   replaceOnce('process.env.SSDZ_ONLINE_API ||', '');
   replaceOnce("['js', 'css', 'audio', 'images', 'shared']", "['js', 'css', 'audio', 'images']");
+  // The iOS snapshot deliberately has no server/; the server manifest is only for deployment.
+  replaceOnce("fs.writeFileSync(path.join(ROOT, 'server', 'web-manifest.json'), text);",
+    "if (fs.existsSync(path.join(ROOT, 'server'))) fs.writeFileSync(path.join(ROOT, 'server', 'web-manifest.json'), text);");
   source = source.replaceAll('scripts/index-online.html', 'scripts/index.html');
   fs.writeFileSync(builder, source);
   const conf = JSON.parse(fs.readFileSync(path.join(stage, 'src-tauri', 'tauri.conf.json'), 'utf8'));
@@ -127,7 +130,8 @@ async function main(args = process.argv.slice(2)) {
       // Dependencies stay outside the upload manifest and outside the app.
       const dependencies = path.join(ROOT, 'src-tauri', 'node_modules');
       if (!fs.existsSync(dependencies)) throw new Error('Install src-tauri build dependencies first');
-      fs.symlinkSync(dependencies, path.join(stage, 'src-tauri', 'node_modules'), 'dir');
+      // Windows 上目录符号链接要开发者模式/管理员；复制依赖更稳，构建完随临时目录一起删。
+      fs.cpSync(dependencies, path.join(stage, 'src-tauri', 'node_modules'), { recursive: true });
       const variants = opts.variant === 'both' ? ['modern', 'legacy'] : [opts.variant];
       for (const variant of variants) {
         const result = spawnSync(process.execPath, [path.join(stage, 'tools', 'build-ios.cjs'), ...(variant === 'legacy' ? ['--legacy'] : [])], { cwd: stage, stdio: 'inherit' });
@@ -138,6 +142,8 @@ async function main(args = process.argv.slice(2)) {
       }
     }
   } finally { clearStage(stage); }
+  /* iOS 出包也算一次版本更新：按同一规则清掉旧 APK/EXE，IPA 由 prune-dist 保留。 */
+  try { require('./prune-dist.cjs').prune({ keep: 1 }); } catch (e) { console.warn('[prune-dist] ' + (e && e.message)); }
 }
 
 module.exports = { apiBase, plannedSources, prepareSnapshot, clearStage, main };

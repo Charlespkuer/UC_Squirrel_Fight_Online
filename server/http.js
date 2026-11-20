@@ -1,7 +1,4 @@
 'use strict';
-/* ============================================================
- * server/http.js — JSON 收发 / 错误 / 限流 / gzip
- * ============================================================ */
 
 const zlib = require('node:zlib');
 const net = require('node:net');
@@ -15,6 +12,7 @@ const STATUS_BY_CODE = {
   NOT_FOUND: 404,
   CONFLICT: 409,
   RATE_LIMIT: 429,
+  ACCOUNT_DAILY_LIMIT: 429,
   SAVE_INVALID: 422,
   PAYLOAD_TOO_LARGE: 413,
   SERVER: 500,
@@ -53,7 +51,6 @@ function corsHeaders(req) {
   return headers;
 }
 
-/** 发 JSON；body 大于阈值时 gzip（浏览器 fetch 会自动解开）。 */
 function sendJson(res, status, obj, req) {
   let text = JSON.stringify(obj);
   let buf = Buffer.from(text, 'utf8');
@@ -77,7 +74,7 @@ function sendError(res, err, req) {
   sendJson(res, status, body, req);
 }
 
-/** 读请求体（支持 gzip / deflate），带体积上限。 */
+// 读请求体（支持 gzip / deflate），带体积上限。
 function readBody(req, limit) {
   const cap = limit || config.maxBodyBytes;
   return new Promise((resolve, reject) => {
@@ -120,8 +117,8 @@ async function readJson(req, limit) {
   return parsed;
 }
 
-/* ---------------- 内存滑窗限流 ---------------- */
 const buckets = new Map();
+const paces = new Map();
 
 function rateLimit(key, max, windowMs) {
   const now = Date.now();
@@ -134,12 +131,35 @@ function rateLimit(key, max, windowMs) {
   }
   list.push(now);
   buckets.set(key, list);
-  /* 周期性清理，避免内存长尾巴 */
+
   if (buckets.size > 4096) {
     for (const [k, v] of buckets) {
       if (!v.length || now - v[v.length - 1] > windowMs * 4) buckets.delete(k);
     }
   }
+}
+
+// 同一账号同一入口的最小间隔：给「连点器把按钮当自动连发」加一道服务端闸门。
+// token 是客户端可重放的幂等键（战斗的 idemKey）：同一 token 的断线重试必须放行，
+// 否则响应丢了客户端就永远拿不到那场结果。返回的 commit 由调用方在「真正成功」后执行，
+// 失败请求（体力不足 / 参数不对）不占冷却，否则玩家补完体力还要再等。
+function pace(key, minMs, token) {
+  const wait = Number(minMs) || 0;
+  if (!(wait > 0)) return () => {};
+  const now = Date.now();
+  const last = paces.get(key);
+  const same = !!(token && last && last.token === String(token));
+  if (last && !same && now - last.at < wait) {
+    const retry = Math.max(1, Math.ceil((wait - (now - last.at)) / 1000));
+    throw fail('RATE_LIMIT', '操作太快了，请 ' + retry + ' 秒后再试', { retryAfter: retry });
+  }
+  if (same) return () => {};
+  return () => {
+    paces.set(key, { at: Date.now(), token: token ? String(token) : '' });
+    if (paces.size > 4096) {
+      for (const [k, v] of paces) if (now - v.at > wait * 4) paces.delete(k);
+    }
+  };
 }
 
 function clientIp(req) {
@@ -152,7 +172,7 @@ function clientIp(req) {
   if (config.trustProxy && loopback(peer)) {
     const header = String(req.headers['x-forwarded-for'] || '');
     const chain = header.length <= 2048 ? header.split(',').map(normalize) : [];
-    // 仅 loopback 是可信代理；从右侧剥掉可信跳，不接受客户端塞在左侧的伪地址。
+// 仅 loopback 是可信代理；从右侧剥掉可信跳，不接受客户端塞在左侧的伪地址。
     if (chain.length && chain.every(Boolean)) {
       for (let i = chain.length - 1; i >= 0; i--) if (!loopback(chain[i])) return chain[i];
     }
@@ -160,7 +180,7 @@ function clientIp(req) {
   return peer;
 }
 
-/** 简单路径匹配：'/api/combat/:id' → { id } */
+// 简单路径匹配：'/api/combat/:id' → { id }
 function matchPath(pattern, pathname) {
   const p = pattern.split('/');
   const s = pathname.split('/');
@@ -177,5 +197,5 @@ function matchPath(pattern, pathname) {
 
 module.exports = {
   ApiError, fail, sendJson, sendError, corsHeaders,
-  readBody, readJson, rateLimit, clientIp, matchPath, STATUS_BY_CODE,
+  readBody, readJson, rateLimit, pace, clientIp, matchPath, STATUS_BY_CODE,
 };

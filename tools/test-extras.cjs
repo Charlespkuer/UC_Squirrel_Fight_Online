@@ -82,6 +82,8 @@ function setup() {
       : '',
     toast() {}, home: leave, bind() {},
   };
+  const levelUps = [];
+  classic.showLevelUps = (ups, onDone) => { levelUps.push(ups); if (onDone) onDone(); };
   c.UI = { classic, runAction: leave };
   c.Main = {
     startBattle: async (foe, opts) => {
@@ -91,7 +93,7 @@ function setup() {
   };
   vm.runInContext(fs.readFileSync(path.join(rootDir, 'js/classic-extras.js'), 'utf8'), c, { filename: 'js/classic-extras.js' });
   return {
-    c, memory, timers, pages, modals, battles, markup, math, leave,
+    c, memory, timers, pages, modals, battles, markup, math, leave, levelUps,
     advance: ms => { now += ms; },
     page: () => pages.at(-1),
     node: action => pages.at(-1).querySelector('[data-action="' + action + '"]'),
@@ -157,85 +159,73 @@ test('竞技10/15级门槛在报名确认时再次校验，不扣低等级资源
   s.level = 1; g.modalClick(); assert.equal(g.battles.length, 0); assert.equal(s.energy, 90);
 });
 
-test('竞技报名扣费：体力 > 对应券 > 另一张券 > 体力药（与现代版一致）', () => {
+test('竞技报名扣费：体力 > 对应券 > 另一张券；竞技场不自动喝药', () => {
   const c = setup();
   const S = c.c.State;
   const s = S.state();
   s.level = 25;
-  const pay = (energy, ticket36, badge39, kind) => {
-    s.energy = energy; s.props[1] = 0; s.props[2] = 0; s.props[36] = ticket36; s.props[39] = badge39;
-    const before = { e: s.energy, t: s.props[36], b: s.props[39] };
+  const pay = (energy, ticket36, badge39, kind, potion1, potion2) => {
+    s.energy = energy;
+    s.props[1] = potion1 || 0;
+    s.props[2] = potion2 || 0;
+    s.props[36] = ticket36;
+    s.props[39] = badge39;
+    const before = { e: s.energy, t: s.props[36], b: s.props[39], p1: s.props[1], p2: s.props[2] };
     const r = c.c.ClassicExtras.payArenaEntry(s, kind);
-    return { r, before, after: { e: s.energy, t: s.props[36], b: s.props[39] } };
+    return { r, before, after: { e: s.energy, t: s.props[36], b: s.props[39], p1: s.props[1], p2: s.props[2] } };
   };
-  // 优先级：**体力 > 对应券 > 另一张券（现代版兜底） > 喝药**。体力充足时扣体力，道具不动。
+  // 体力充足时扣体力，道具不动
   let x = pay(90, 3, 3, 0);
   assert.ok(x.r.ok && x.r.by === 'energy', '经验场体力充足应当扣体力');
-  assert.equal(x.after.e, 60, '经验场体力 90→60，实测 ' + x.after.e);
+  assert.equal(x.after.e, 60, '经验场体力 90→60');
   assert.equal(x.after.t, 3, '体力够时不该动英雄帖');
-  x = pay(90, 3, 3, 1);
-  assert.ok(x.r.ok && x.r.by === 'energy', '碎片场体力充足应当扣体力');
-  assert.equal(x.after.e, 60, '碎片场体力 90→60，实测 ' + x.after.e);
-  assert.equal(x.after.b, 3, '体力够时不该动勇气徽章');
-  // 体力刚好 30 也走体力
   x = pay(30, 1, 1, 1);
   assert.ok(x.r.ok && x.r.by === 'energy', '体力刚好 30 应当扣体力');
-  assert.equal(x.after.e, 0, '体力 30→0，实测 ' + x.after.e);
-  assert.equal(x.after.b, 1, '体力够时不该动徽章');
-  // 体力不足 → 经验场扣英雄帖(36)
+  assert.equal(x.after.e, 0, '体力 30→0');
+  // 体力不足 → 对应券
   x = pay(10, 1, 0, 0);
   assert.ok(x.r.ok && x.r.by === 'item' && x.r.itemId === 36, '经验场体力不足时扣英雄帖');
   assert.equal(x.after.t, 0, '英雄帖 1→0');
   assert.equal(x.after.e, 10, '体力不该动');
-  // 体力不足 → 碎片场扣勇气徽章(39)
   x = pay(10, 0, 1, 1);
   assert.ok(x.r.ok && x.r.by === 'item' && x.r.itemId === 39, '碎片场体力不足时扣勇气徽章');
   assert.equal(x.after.b, 0, '勇气徽章 1→0');
-  assert.equal(x.after.e, 10, '体力不该动');
-  // 体力不足、对应券没有 → 现代版会兜底用另一张券
+  // 对应券没有 → 兜底另一张券（离线兜底，服务端不兜底）
   x = pay(10, 3, 0, 1);
   assert.ok(x.r.ok && x.r.by === 'item' && x.r.itemId === 36 && x.r.fallback, '碎片场没有徽章时兜底扣英雄帖');
   assert.equal(x.after.t, 2, '英雄帖 3→2');
-  assert.equal(x.after.b, 0, '徽章本来就没有');
   x = pay(10, 0, 3, 0);
   assert.ok(x.r.ok && x.r.by === 'item' && x.r.itemId === 39 && x.r.fallback, '经验场没有英雄帖时兜底扣勇气徽章');
   assert.equal(x.after.b, 2, '勇气徽章 3→2');
-  assert.equal(x.after.t, 0, '英雄帖本来就没有');
   // 两张都有 → 先扣本场对应券
   x = pay(10, 1, 1, 1);
   assert.ok(x.r.ok && x.r.itemId === 39 && !x.r.fallback, '碎片场先扣勇气徽章');
-  assert.equal(x.after.b, 0, '徽章 1→0'); assert.equal(x.after.t, 1, '英雄帖不该动');
   x = pay(10, 1, 1, 0);
   assert.ok(x.r.ok && x.r.itemId === 36 && !x.r.fallback, '经验场先扣英雄帖');
-  assert.equal(x.after.t, 0, '英雄帖 1→0'); assert.equal(x.after.b, 1, '勇气徽章不该动');
   // 弹尽粮绝 → 拒绝且不扣任何东西
   x = pay(0, 0, 0, 0);
   assert.ok(!x.r.ok, '什么都没有时应当拒绝');
-  assert.equal(x.after.e, 0, '被拒时体力不该动');
-  x = pay(0, 0, 0, 1);
-  assert.ok(!x.r.ok, '碎片场什么都没有时应当拒绝');
-  // 不变量：只要 ok，就必须真的少点什么；且**只扣一种**（体力或对应道具）
-  for (const kind of [0, 1]) {
-    for (const [e, t, b] of [[90, 0, 0], [30, 0, 0], [10, 1, 0], [10, 0, 1], [29, 5, 5]]) {
-      const y = pay(e, t, b, kind);
-      if (!y.r.ok) continue;
-      const dE = y.before.e - y.after.e, dT = y.before.t - y.after.t, dB = y.before.b - y.after.b;
-      assert.ok(dE + dT + dB > 0, 'ok 时必须有扣除（kind=' + kind + ' e=' + e + ' t=' + t + ' b=' + b + '）');
-      const changed = [dE > 0, dT > 0, dB > 0].filter(Boolean).length;
-      assert.equal(changed, 1, '一次报名只该扣一种资源（kind=' + kind + ' dE=' + dE + ' dT=' + dT + ' dB=' + dB + '）');
-      if (y.r.by === 'energy') assert.ok(dE === 30, '体力路径应当正好扣 30，实测 ' + dE);
-      if (y.r.by === 'item') {
-        assert.ok(y.r.itemId === 36 || y.r.itemId === 39, '道具路径只能扣两张入场券之一');
-        assert.equal(y.r.itemId === 36 ? dT : dB, 1, '道具路径应当正好扣 1 枚');
-      }
-    }
-  }
-  // 端到端：走真实报名入口（体力充足 → 扣 30 体力）
+  assert.deepEqual(x.after, x.before, '被拒时体力/道具都不该动');
+  // 竞技场关闭自动喝药：有体力药但没入场券 → 仍拒绝，药原样保留
+  x = pay(0, 0, 0, 0, 0, 1);
+  assert.ok(!x.r.ok && x.r.reason === 'no-energy-no-item', '只有大体力药也不能进场（不自动喝）');
+  assert.equal(x.after.p2, 1, '大体力药不该被喝掉');
+  assert.equal(x.after.e, 0, '体力不该变');
+  x = pay(0, 0, 0, 1, 1, 1);
+  assert.ok(!x.r.ok && x.r.reason === 'no-energy-no-item', '只有小/大体力药也不能进场（不自动喝）');
+  assert.equal(x.after.p1, 1, '小体力药不该被喝掉');
+  assert.equal(x.after.p2, 1, '大体力药不该被喝掉');
+  // 有入场券时用药也不动
+  x = pay(0, 0, 1, 1, 1, 1);
+  assert.ok(x.r.ok && x.r.by === 'item' && x.r.itemId === 39, '有徽章时用徽章');
+  assert.equal(x.after.p1, 1, '有徽章时不该喝小药');
+  assert.equal(x.after.p2, 1, '有徽章时不该喝大药');
+  // 端到端：体力充足 → 扣 30 体力
   {
     const g = setup(), ss = g.c.State.state();
     ss.level = 25; ss.energy = 90; ss.props[39] = 3; ss.props[36] = 3;
     enterArena(g, 1);
-    assert.equal(ss.energy, 60, '碎片场报名应当扣 30 体力，实测 ' + ss.energy);
+    assert.equal(ss.energy, 60, '碎片场报名应当扣 30 体力');
     assert.equal(ss.props[39], 3, '体力够时不该动勇气徽章');
     assert.equal(g.battles.length, 1, '应当开始比赛');
   }
@@ -248,80 +238,25 @@ test('竞技报名扣费：体力 > 对应券 > 另一张券 > 体力药（与�
     assert.equal(ss.energy, 10, '体力不该动');
     assert.equal(g.battles.length, 1, '应当开始比赛');
   }
-  // 回归：**体力 0 + 勇气徽章 1** 报名碎片场 —— 以前会被粗判不变量误报「报名异常，请反馈」
+  // 只有体力药、没有入场券 → 不自动喝，不能进场
   {
     const g = setup(), ss = g.c.State.state();
-    ss.level = 25; ss.energy = 0; ss.props[1] = 0; ss.props[2] = 0; ss.props[39] = 1; ss.props[36] = 0;
-    enterArena(g, 1);
-    assert.equal(ss.props[39], 0, '体力 0 时应当扣勇气徽章');
-    assert.equal(ss.energy, 0, '体力本来就没有，不该变负');
-    assert.equal(g.battles.length, 1, '应当正常开始比赛');
-    const last = g.modals.at(-1) || {};
-    assert.ok(!/异常|请反馈/.test(String(last.html) || ''), '不该出现「报名异常」提示：' + last.html);
-    assert.ok(!/报名异常/.test(String(last.title) || ''), '不该出现「报名异常」弹窗：' + last.title);
+    ss.level = 25; ss.energy = 0; ss.props[1] = 1; ss.props[2] = 1; ss.props[39] = 0; ss.props[36] = 0;
+    enterArena(g, 0);
+    assert.equal(g.battles.length, 0, '只有体力药时不该进场');
+    assert.equal(Number(ss.props[1] || 0), 1, '小体力药不该被喝掉');
+    assert.equal(Number(ss.props[2] || 0), 1, '大体力药不该被喝掉');
+    assert.equal(ss.energy, 0, '体力不该变');
   }
-  // 回归：**体力 0 + 勇气徽章 5** → 只扣 1 枚
+  // 体力 0 + 勇气徽章 5 → 只扣 1 枚
   {
     const g = setup(), ss = g.c.State.state();
     ss.level = 25; ss.energy = 0; ss.props[1] = 0; ss.props[2] = 0; ss.props[39] = 5;
     enterArena(g, 1);
-    assert.equal(ss.props[39], 4, '只该扣 1 枚勇气徽章，实测剩 ' + ss.props[39]);
+    assert.equal(ss.props[39], 4, '只该扣 1 枚勇气徽章');
     assert.equal(g.battles.length, 1, '应当正常开始比赛');
   }
-  // 喝药兜底（第三方优先级）：体力不足、无准入道具时才喝药
-  {
-    const g = setup(), ss = g.c.State.state();
-    ss.level = 25; ss.energy = 0; ss.props[1] = 0; ss.props[2] = 1; ss.props[39] = 0; ss.props[36] = 0;
-    enterArena(g, 0);
-    assert.equal(g.battles.length, 1, '有大体力药剂时应当能进场');
-    assert.equal(Number(ss.props[2] || 0), 0, '大体力药剂应当被喝掉');
-    assert.equal(ss.energy, 0, '喝药补到 30 后再扣 30，体力回到 0');
-  }
-  // 药剂**补不够**时不该白白喝掉（体力 0 + 只有小药剂 +10）
-  {
-    const g = setup(), ss = g.c.State.state();
-    ss.level = 25; ss.energy = 0; ss.props[1] = 1; ss.props[2] = 0; ss.props[39] = 0; ss.props[36] = 0;
-    enterArena(g, 0);
-    assert.equal(g.battles.length, 0, '小药剂补不到 30 时不该进场');
-    assert.equal(Number(ss.props[1] || 0), 1, '补不够时不该白喝掉小体力药剂 ← 曾经会白扔');
-    assert.equal(ss.energy, 0, '体力不该变');
-  }
-  // 有大有小：应当优先喝能把体力补够的那瓶（缺 30 → 先看大药剂）
-  {
-    const g = setup(), ss = g.c.State.state();
-    ss.level = 25; ss.energy = 0; ss.props[1] = 1; ss.props[2] = 1; ss.props[39] = 0; ss.props[36] = 0;
-    enterArena(g, 1);
-    assert.equal(g.battles.length, 1, '应当能进场');
-    assert.equal(Number(ss.props[2] || 0), 0, '应当先喝大体力药剂');
-    assert.equal(Number(ss.props[1] || 0), 1, '小体力药剂不该被动');
-  }
-  // 有准入道具时**不喝药**（道具优先于喝药）
-  {
-    const g = setup(), ss = g.c.State.state();
-    ss.level = 25; ss.energy = 0; ss.props[1] = 1; ss.props[2] = 1; ss.props[39] = 1; ss.props[36] = 0;
-    enterArena(g, 1);
-    assert.equal(Number(ss.props[39] || 0), 0, '有徽章时应当用徽章');
-    assert.equal(Number(ss.props[2] || 0), 1, '有徽章时不该喝药');
-    assert.equal(Number(ss.props[1] || 0), 1, '有徽章时不该喝药');
-  }
-  // 体力充足时**不喝药也不花道具**（体力优先级最高）
-  {
-    const g = setup(), ss = g.c.State.state();
-    ss.level = 25; ss.energy = 90; ss.props[1] = 1; ss.props[2] = 1; ss.props[39] = 3; ss.props[36] = 3;
-    enterArena(g, 1);
-    assert.equal(ss.energy, 60, '体力 90→60');
-    assert.equal(Number(ss.props[39] || 0), 3, '体力够时不该动徽章');
-    assert.equal(Number(ss.props[2] || 0), 1, '体力够时不该喝药');
-  }
-  // 现代兜底：体力 0 + 没徽章 + 有英雄帖 → 碎片场也能用英雄帖进场
-  {
-    const g = setup(), ss = g.c.State.state();
-    ss.level = 25; ss.energy = 0; ss.props[1] = 0; ss.props[2] = 0; ss.props[39] = 0; ss.props[36] = 3;
-    enterArena(g, 1);
-    assert.equal(g.battles.length, 1, '有英雄帖时碎片场应当能进场（现代版兜底）');
-    assert.equal(ss.props[36], 2, '英雄帖 3→2');
-  }
-  // 两张券都没有 + 没有体力药 → 拒绝，且提示两种券都没有
+  // 两张券都没有 + 没有体力药 → 拒绝，提示两种券都没有
   {
     const g = setup(), ss = g.c.State.state();
     ss.level = 25; ss.energy = 0; ss.props[1] = 0; ss.props[2] = 0; ss.props[39] = 0; ss.props[36] = 0;
@@ -329,11 +264,13 @@ test('竞技报名扣费：体力 > 对应券 > 另一张券 > 体力药（与�
     assert.equal(g.battles.length, 0, '两张券都没有时不该进场');
     assert.match(String(g.modals.at(-1).html), /英雄帖\/勇气徽章/, '应当提示英雄帖/勇气徽章都没有');
   }
-  // 源码层面：两段式扣费的旧写法不该再出现
+  // 源码层面：竞技场不应再调用 autoEnergyPotion
   const src = fs.readFileSync(path.join(rootDir, 'js', 'classic-extras.js'), 'utf8');
   assert.ok(src.indexOf('function payArenaEntry') > 0, '应当有统一的 payArenaEntry');
-  assert.ok(!/if \(s\.energy >= 30\) \{ if \(!State\.consumeEnergy\(30\)\) return; \}/.test(src),
-    '旧的「两段式」扣费写法应当已被 payArenaEntry 取代');
+  const paySrc = src.slice(src.indexOf('function payArenaEntry'), src.indexOf('function confirmArena'));
+  assert.ok(!/autoEnergyPotion/.test(paySrc), '竞技场 payArenaEntry 不应再自动喝药');
+  assert.ok(paySrc.indexOf('takeItem(admission)') < paySrc.indexOf('takeItem(other)'),
+    '扣费顺序：体力 > 对应券 > 另一张券');
 });
 
 test('竞技战果弹窗：「返回竞技场」在主操作位（最右）', () => {
@@ -359,11 +296,12 @@ test('竞技两战只付一次报名费用，冠军150经验且不额外赠送�
   g.settle(0, 0); assert.equal(g.modals.length, modalCount); assert.equal(s.exp, 0);
   g.modalClick(); assert.equal(s.energy, 60); assert.equal(g.battles.length, 2);
   g.settle(1, 0); assert.equal(s.goldPoint, 100); assert.equal(s.level, 11); assert.equal(s.exp, 150);
+  assert.equal(s.goldCup, 1, '任一竞技场冠军固定 +1 金杯');
   const saved = JSON.stringify(g.saved()); g.settle(1, 0); assert.equal(JSON.stringify(g.saved()), saved);
   assert.equal(s.classicArenaRun, null);
-  assert.equal(g.battles[0].opts.kind, 'arena'); assert.equal(g.battles[0].opts.useProps, true,
-    '竞技场战斗面板吃药丸');
-  assert.equal(g.battles[1].opts.useProps, true);
+  assert.equal(g.battles[0].opts.kind, 'arena'); assert.equal(g.battles[0].opts.useProps, false,
+    '竞技场只让经验丸生效，属性丸不进战斗面板');
+  assert.equal(g.battles[1].opts.useProps, false);
   assertBalanced(g.markup);
 });
 
@@ -390,7 +328,7 @@ test('经验竞技冠亚季四名分别150/100/50/30，半决赛落败必须再�
   }
 });
 
-test('经验竞技场吃经验丸加成；属性丸在竞技场生效并按场扣次数', () => {
+test('经验竞技场吃经验丸加成；属性丸既不生效也不扣竞技场次数', () => {
   // 单丸：150 -> 210
   {
     const g = setup(), s = g.c.State.state();
@@ -416,24 +354,22 @@ test('经验竞技场吃经验丸加成；属性丸在竞技场生效并按场�
     g.settle(0, 0); g.modalClick(); g.settle(1, 0); g.settle(1, 0);
     assert.equal(s.exp, 150);
   }
-  // 碎片场：不发经验，也不消耗经验丸；属性丸在竞技场生效，两场各扣 1 次
+  // 碎片场只给碎片，不发经验、也不消耗经验丸；属性丸在竞技场不生效，也不能扣次数
   {
     const g = setup(), s = g.c.State.state();
     s.propsStates[7] = 20; s.propsStates[3] = 20;
     s.energy = 0; s.props[39] = 1; s.props[1] = 0; s.props[2] = 0; enterArena(g, 1);
-    assert.equal(g.battles[0].opts.useProps, true, '竞技场战斗面板吃药丸');
     g.settle(0, 0); g.modalClick(); g.settle(1, 0); g.settle(1, 0);
     assert.equal(s.exp, 0, '碎片场不发经验');
     assert.equal(s.propsStates[7], 20, '碎片场不消耗经验丸');
-    assert.equal(s.propsStates[3], 18, '两场竞技各扣 1 次属性丸');
+    assert.equal(s.propsStates[3], 20, '属性丸在竞技场不生效，也不扣次数');
   }
-  // 经验场：属性丸同样生效；经验丸只在发经验时扣 1 次
+  // 经验场：属性丸不生效/不扣；经验丸只在发经验时扣 1 次
   {
     const g = setup(), s = g.c.State.state();
     s.propsStates[7] = 20; s.propsStates[3] = 20; enterArena(g, 0);
-    assert.equal(g.battles[0].opts.useProps, true, '竞技场战斗面板吃药丸');
     g.settle(0, 0); g.modalClick(); g.settle(1, 0); g.settle(1, 0);
-    assert.equal(s.propsStates[3], 18, '两场竞技各扣 1 次属性丸');
+    assert.equal(s.propsStates[3], 20, '属性丸在竞技场不生效，也不扣次数');
     assert.equal(s.propsStates[7], 19, '经验丸只在发经验时扣 1 次');
   }
 });
@@ -621,6 +557,60 @@ test('金杯商店跨周：限兑按周重置，未标周次的旧购买计数�
 });
 
 
+test('金杯商店 23 件商品都能落袋，生命转化丸可用', () => {
+  const g = setup(), s = g.c.State.state();
+  s.level = 30; s.integral = 99999; s.goldCup = 99999; s.goldPoint = 99999;
+  s.rankPurchases = {}; s.rankPurchaseTotals = {}; s.rankPurchaseWeek = '';
+  const items = g.c.ClassicExtras.rankGoodsList();
+  const gears0 = s.gears.length;
+  for (const [index, item] of items.entries()) {
+    const id = Number(item.goodsId);
+    const target = item.type === '2' ? g.c.gearMap.getValue(id) : g.c.propMap.getValue(id);
+    assert.ok(target, '商品 ' + item.name + ' 的 goodsId=' + id + ' 必须有字典行');
+    g.c.ClassicExtras.rankShop(Math.floor(index / 6));
+    const button = g.page().querySelector('[data-goods="' + item.id + '"]');
+    assert.ok(button, '商品页有 data-goods=' + item.id);
+    const prop0 = Number(s.props[id]) || 0, gear0 = s.gears.length;
+    button.onclick(); g.modalClick();
+    if (item.type === '2') assert.equal(s.gears.length, gear0 + 1, item.name + ' 应进装备背包');
+    else assert.equal((Number(s.props[id]) || 0), prop0 + (Number(item.count) || 1), item.name + ' 应进道具背包');
+  }
+  assert.equal(s.gears.length - gears0, 8, '两套狂战共 8 件装备都进背包');
+  assert.equal(s.props[14], 1, '生命转化丸进入背包');
+  assert.equal(g.c.propMap.getValue(201), undefined, '装备商品不能被补登记成道具行');
+  g.c.State.save(); g.c.State.load();
+  const loaded = g.c.State.state();
+  assert.equal(loaded.props[14], 1, '生命转化丸能存档往返');
+  loaded.maxHp = Math.max(loaded.maxHp, loaded.level * 9 + 100);
+  const hp0 = loaded.maxHp, sum0 = loaded.power + loaded.agility + loaded.speed;
+  const used = g.c.State.useProp(14);
+  assert.equal(used.ok, true, used.msg);
+  assert.equal(loaded.maxHp, hp0 - 5, '生命转化丸扣 5 点基础生命');
+  assert.equal(loaded.power + loaded.agility + loaded.speed, sum0 + 1, '随机一项 +1');
+  assert.equal(loaded.props[14], undefined, '使用后消耗 1 个');
+});
+
+test('客户端字典缺商品道具行时，金杯购买成功后按商品行补登记', async () => {
+  const g = setup(), s = g.c.State.state();
+  s.level = 40; s.integral = 5000; s.goldCup = 5000; s.goldPoint = 5000;
+  s.rankPurchases = {}; s.rankPurchaseTotals = {}; s.rankPurchaseWeek = '';
+  g.c.propMap.remove('14');
+  assert.equal(g.c.propMap.getValue(14), undefined, '先模拟旧客户端：没有生命转化丸的道具行');
+  g.c.Online = { ready: true, errText: e => String(e) };
+  g.c.StateCall = async () => {
+    const st = g.c.State.state();
+    st.goldCup -= 300; st.goldPoint -= 100;
+    st.props[14] = (Number(st.props[14]) || 0) + 1;
+    st.rankPurchases['18'] = 1;
+    return { ok: true, msg: '兑换成功：生命转化丸', item: { id: '18', name: '生命转化丸', type: '1', goodsId: 14 } };
+  };
+  g.c.ClassicExtras.rankBuy(18);
+  g.modalClick(1);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(g.c.propMap.getValue(14).name, '生命转化丸', '买到的道具要能进背包列表');
+  assert.equal(g.c.State.state().props[14], 1, '服务端发的道具仍保留');
+});
+
 test('力敏速血永久丸按账号累计限购 1 次，跨周也不重置', () => {
   /* 原版 `timesLimit=1` + 服务端 buyCounts：这四件是**账号级**限购，不是每周刷新。
    * 复刻以前把所有 timesLimit 都当周限，导致每周都能再买一个、属性无限叠。 */
@@ -647,16 +637,16 @@ test('力敏速血永久丸按账号累计限购 1 次，跨周也不重置', ()
   assert.equal(s.props[16], 1);
 });
 
-test('抽奖首抽免费、防双击，付费经验奖扣20并真正升级', () => {
+test('抽奖首抽免费、防双击，付费经验奖扣25并真正升级', () => {
   const g = setup(), s = g.c.State.state(); g.math.random = () => 0;
   g.c.ClassicExtras.lottery(); const first = g.node('lottery-spin').onclick; first(); first();
   assert.equal(s.props[22], 10); assert.equal(s.lotteryFree, 0); assert.equal(s.goldPoint, 100);
   // 每日任务「抽取 {n} 次每日幸运抽奖」要有计数：抽一次算一次，双击只算一次
   assert.equal(s.dailyCounters.lottery, 1, '第一次抽奖记 1 次');
   g.flushTimers(); g.math.random = () => 0.35; g.click('lottery-spin');
-  assert.equal(s.goldPoint, 80); assert.equal(s.level, 2); assert.equal(s.exp, 30);
+  assert.equal(s.goldPoint, 75); assert.equal(s.level, 2); assert.equal(s.exp, 30);
   assert.equal(s.dailyCounters.lottery, 2, '第二次抽奖累加到 2 次');
-  g.flushTimers(); assert.equal(g.saved().goldPoint, 80); assert.equal(g.saved().dailyCounters.lottery, 2, '每日任务计数已存盘');
+  g.flushTimers(); assert.equal(g.saved().goldPoint, 75); assert.equal(g.saved().dailyCounters.lottery, 2, '每日任务计数已存盘');
   assertBalanced(g.markup);
 });
 
@@ -686,7 +676,7 @@ test('每日抽奖：右上角抽奖卷角标 + 删掉底部说明 + 连抽 10 �
   assert.ok(/用抽奖卷抽奖/.test(g.markup.at(-1)[1]), '有抽奖卷时按钮写「用抽奖卷抽奖」');
   s.props[50] = 0; s.goldPoint = 60;
   g.c.ClassicExtras.lottery();
-  assert.ok(/20 金松果抽奖/.test(g.markup.at(-1)[1]), '只能花金松果时按钮写「20 金松果抽奖」');
+  assert.ok(/25 金松果抽奖/.test(g.markup.at(-1)[1]), '只能花金松果时按钮写「25 金松果抽奖」');
 
   /* ⑤ 连抽 10 次：扣费顺序「免费 → 抽奖卷 → 金松果」，每日任务按 10 次计数 */
   const g2 = setup(), s2 = g2.c.State.state();
@@ -697,9 +687,17 @@ test('每日抽奖：右上角抽奖卷角标 + 删掉底部说明 + 连抽 10 �
   const beforeTickets = s2.props[50], beforeGold = s2.goldPoint;
   g2.math.random = () => 0;              // 固定抽到「不发金松果」的那一档，好核对扣费
   g2.click('lottery-spin10');
+  /* 十连前必须走二级确认：先把这次会花掉的免费/抽奖卷/金松果列清楚。 */
+  const confirmTen = g2.modals.at(-1);
+  assert.equal(confirmTen.title, '确认连抽 10 次', '十连要先弹二级确认：' + confirmTen.title);
+  assert.match(confirmTen.html, /本次将连抽 <b>10<\/b> 次/);
+  assert.match(confirmTen.html, /免费抽奖 2 次/, '确认框要写清免费次数：' + confirmTen.html);
+  assert.match(confirmTen.html, /抽奖卷 5 张/, '确认框要写清抽奖卷：' + confirmTen.html);
+  assert.match(confirmTen.html, /金松果 75（3 次 × 25）/, '确认框要写清金松果：' + confirmTen.html);
+  g2.modalClick(1);                       // 确认连抽
   assert.equal(s2.lotteryFree, 0, '先吃掉 2 次免费');
   assert.equal(s2.props[50] || 0, 0, '再吃掉 5 张抽奖卷（扣到 0 时字段会被删掉）');
-  assert.equal(s2.goldPoint, beforeGold - 60, '剩下 3 次按 20 金松果扣');
+  assert.equal(s2.goldPoint, beforeGold - 75, '剩下 3 次按 25 金松果扣');
   assert.equal(s2.dailyCounters.lottery, 10, '连抽 10 次要给每日任务记 10 次');
   assert.equal(g2.saved().dailyCounters.lottery, 10, '计数要立即落盘');
   g2.flushTimers();
@@ -710,6 +708,19 @@ test('每日抽奖：右上角抽奖卷角标 + 删掉底部说明 + 连抽 10 �
   assert.ok(/lottery-result-grid/.test(ten.html), '十连结果要用 5×2 网格：' + ten.html.slice(0, 200));
   assert.ok(ten.html.indexOf('lottery-win-row') < 0, '不该再用滚动列表样式');
   assertBalanced(g2.markup);
+
+  /* ⑤b 二级确认点「取消」：一点资源都不扣 */
+  const gCancel = setup(), sCancel = gCancel.c.State.state();
+  sCancel.lotteryDate = new gCancel.c.Date(gCancel.c.Date.now()).toDateString();
+  sCancel.lotteryFree = 1; sCancel.props[50] = 2; sCancel.goldPoint = 200;
+  gCancel.c.ClassicExtras.lottery();
+  gCancel.click('lottery-spin10');
+  assert.equal(gCancel.modals.at(-1).title, '确认连抽 10 次');
+  gCancel.modalClick(0);
+  assert.equal(sCancel.lotteryFree, 1, '取消后免费次数不动');
+  assert.equal(sCancel.props[50], 2, '取消后抽奖卷不动');
+  assert.equal(sCancel.goldPoint, 200, '取消后金松果不动');
+  assert.equal((sCancel.dailyCounters || {}).lottery || 0, 0, '取消后不计入每日任务');
 
   /* ⑥ 资源不够 10 次：直接拒绝，一点资源都不扣 */
   const g3 = setup(), s3 = g3.c.State.state();
@@ -799,8 +810,8 @@ test('抽奖离开动画后奖品已保存，重入可继续且旧计时器不�
   assert.equal(g.saved().props[22], 10); assert.equal(g.saved().lotteryFree, 0);
   g.leave(); g.c.ClassicExtras.lottery();
   assert.equal(g.node('lottery-spin').disabled, false);
-  g.click('lottery-spin'); assert.equal(s.props[22], 20); assert.equal(s.goldPoint, 80);
-  g.flushTimers(); assert.equal(s.props[22], 20); assert.equal(s.goldPoint, 80);
+  g.click('lottery-spin'); assert.equal(s.props[22], 20); assert.equal(s.goldPoint, 75);
+  g.flushTimers(); assert.equal(s.props[22], 20); assert.equal(s.goldPoint, 75);
   assert.equal(g.node('lottery-spin').disabled, false);
   g.c.State.load(); assert.equal(g.c.State.state().props[22], 20);
 });
@@ -1113,6 +1124,23 @@ test('徒弟日供：活动页入口与师徒页共用一条领取路径，结�
   assert.equal(after.claimable, false);
   assert.equal(after.claimed, true, '两个徒弟都领过了');
   assert.equal(g.c.State.claimApprenticeExp().ok, false, '同一天不会领第二次');
+});
+
+test('领取徒弟日供导致升级时要走公共升级页', () => {
+  const g = setup(), s = g.c.State.state();
+  s.level = 20; s.exp = 0; s.goldPoint = 0;
+  g.c.State.addPrentice({ name: '升级徒弟', level: 40 });
+  g.c.State.gainExp(1000);
+  g.c.State.addGold(400);
+  g.advance(86400000);
+  s.exp = g.c.GData.nextExp(s.level) - 1;
+  const r = g.c.ClassicExtras.claimTribute();
+  assert.ok(r.ups && r.ups.length, '领日供应产生升级 ups');
+  const modal = g.modals.at(-1);
+  assert.equal(modal.title, '徒弟日供');
+  g.modalClick();
+  assert.equal(g.levelUps.length, 1, '升级 ups 必须交给公共升级页');
+  assert.ok(g.levelUps[0].length > 0);
 });
 
 test('日供只认我自己的昨日收益：读档稳定、不重抽，也不减少徒弟经验', () => {

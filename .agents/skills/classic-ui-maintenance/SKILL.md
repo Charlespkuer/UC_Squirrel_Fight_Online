@@ -9,7 +9,7 @@ description: 定位和维护松鼠大战经典界面的原版元件、文本、�
 
 ## 选入口
 
-先运行 `node tools/ssfight-index.cjs`；它从 `scripts/index.html` 读取当前加载链和导出 API，不存固定行号。
+先运行 `node tools/ssfight-index.cjs`；它从 `scripts/index-online.html` 读取当前加载链和导出 API，不存固定行号。
 以全局 API 定位职责：
 
 - `SfRender`：素材加载、MovieClip、SVG 文本、静态策略、播放表与视图销毁。
@@ -44,6 +44,7 @@ description: 定位和维护松鼠大战经典界面的原版元件、文本、�
 先跑 `node tools/test-ssfight-render.cjs`；数据/奖励改动再跑对应现有 `test-state.cjs`、`test-stages.cjs` 等主题套件。
 资源引用或文本编码变化用现有 `check-asset-paths.cjs`、`check-encodings.cjs`。
 显示层套件会用最小 DOM 执行真实 renderer/status，仍不能代替浏览器字体、布局与观感验证。需要浏览器时用条件等待，并验证返回、快速切页和异步完成后的当前页面。
+HTML 文字描边统一由 `css/text-outline.css` 出：元素只设 `--sw/--ol/--ol-c/--ol-drop`，安卓由它换成 16 向 text-shadow（WebView 不认 HTML 的 paint-order）。
 
 新增工具或用例遵守 `tools/AGENTS.md`；临时探针与截图放 `out/`，不建过程报告。
 本 skill 只保存可复用方法，改动记录由 `docs/更新记录.md` 统一维护。

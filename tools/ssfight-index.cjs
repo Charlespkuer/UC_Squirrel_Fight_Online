@@ -47,7 +47,7 @@ function sourceFiles(dir) {
 }
 
 function loadedScripts() {
-  const html = read('scripts/index.html');
+  const html = read('scripts/index-online.html');
   return [...html.matchAll(/<script\b[^>]*\bsrc\s*=\s*(["'])(.*?)\1/gi)]
     .filter((match) => match[2].startsWith('js/ssfight/'))
     .map((match) => {
@@ -94,7 +94,7 @@ function run(options) {
   const filteredFields = texts.fields.filter((field) => bundles.some(([key]) => key === field.bundle));
   const output = {};
   if (!options.names.length && !options.ids.length && !options.code.length) {
-    output.entry = 'scripts/index.html';
+    output.entry = 'scripts/index-online.html';
     output.classicScripts = loadedScripts();
     output.indexBundles = bundles.map(([key, value]) => ({ key, file: value.bundle, names: Object.keys(value.names).length }));
     output.usage = help;

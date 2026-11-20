@@ -47,6 +47,26 @@ const SKIP_DIRS = new Set(['node_modules', '.git', 'references', 'reference', 's
  *   · 历史上还有两份 `images/classic` 下的 manifest.json（原版 APK 出处记录）；
  *     那份归档 2026-11 已移到 `reference/`（整目录跳过），不再需要逐文件例外。 */
 const SKIP_FILES = new Set(['server/web-manifest.json']);
+/* 联机版已退役的现代素材（2026-11-10 移到 `reference/retired/2026-11-10-online-b0/`）：
+ *   · `images/ui/screens/` —— 现代首页 / 加载 / 战果整屏图；
+ *   · `images/battle/bg/` —— 现代 canvas 战斗的场地背景。
+ * `js/gamedict.js` 仍保留这些 sheet id（单机版与历史安装包要用），所以静态引用还在；
+ * 运行时联机版不加载它们。这里放行断链检查，避免每次体检报 30 条假错。
+ * ⚠ 只对**这两棵已退役目录**放行；别把其它 `images/` 路径加进来。 */
+const RETIRED_PREFIXES = ['images/ui/screens/', 'images/battle/bg/'];
+/* 2026-11-11 起联机版不再加载的 atlas 单图（gamedict 仍保留原始素材目录条目，
+ * 但 Engine 的联机调用方只用到 tl/xh/xm/woodman/SQ/resource_1/resource_10）。
+ * 按**完整路径**放行，避免把整个 images/atlas/ 误设成退役目录。 */
+const RETIRED_FILES = new Set([
+  'images/atlas/daoju.png', 'images/atlas/jinbeidaoju.png', 'images/atlas/jineng.png',
+  'images/atlas/resource_2.png', 'images/atlas/resource_3.png', 'images/atlas/resource_4.png',
+  'images/atlas/resource_5.png', 'images/atlas/resource_6.png', 'images/atlas/resource_7.png',
+  'images/atlas/resource_9.png', 'images/atlas/resource_11.png', 'images/atlas/resource_12.png',
+  'images/atlas/resource_13.png', 'images/atlas/resource_14.png', 'images/atlas/resource_15.png',
+  'images/atlas/resource_16.png', 'images/atlas/resource8.png', 'images/atlas/wuqi.png',
+  'images/atlas/wuqi2.png', 'images/atlas/resource_1.png', 'images/atlas/resource_10.png',
+]);
+let retiredRefs = 0;
 const ROOTS = 'images|css|js|audio|music|fonts|assets';
 // 引号/括号里的资源路径：以四个已知资源目录开头，允许中文与常见符号
 const REF_RE = new RegExp('["\'(`]((?:' + ROOTS + ')/[A-Za-z0-9_@%\\-./\\u4e00-\\u9fa5]*)', 'g');
@@ -104,6 +124,7 @@ for (const rel of files) {
     // 没有扩展名又不是目录结尾的（例如 'images/ui/icons/' + kind + '.png' 被切成 images/ui/icons）
     const looksFile = /\.[a-z0-9]{2,5}$/i.test(base);
     if (!isDir && !looksFile) continue;                              // 交给目录前缀那条规则
+    if (RETIRED_FILES.has(base) || RETIRED_PREFIXES.some((prefix) => (base + '/').startsWith(prefix))) { retiredRefs++; continue; }
     checked++;
     const issue = resolveExact(base, isDir || !looksFile);
     if (issue) problems.push(rel + '  →  ' + ref + '   [' + issue + ']');
@@ -134,7 +155,8 @@ for (const rel of all) {
 }
 const collisions = [...byLower.values()].filter((group) => group.length > 1);
 
-console.log('扫描 ' + files.length + ' 个源文件、' + all.length + ' 个仓库文件，核对 ' + checked + ' 条静态资源引用');
+console.log('扫描 ' + files.length + ' 个源文件、' + all.length + ' 个仓库文件，核对 ' + checked + ' 条静态资源引用' +
+  (retiredRefs ? '（另有 ' + retiredRefs + ' 条已退役现代素材引用跳过）' : ''));
 if (!problems.length) console.log('✓ 引用路径与大小写全部命中');
 else {
   console.log('✗ 发现 ' + problems.length + ' 条引用问题：');

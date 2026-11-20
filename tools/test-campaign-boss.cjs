@@ -208,7 +208,7 @@ test('局内表现：清掉 7688 的静态动物、待机用原版呼吸片断�
     'SfFight 要停 7688 第 2 帧、播原版待机片断、并对没有 comeBacks 的模型跳过归位帧');
 });
 
-test('妖狐魅惑被先机预判闪避后不再挂眩晕 / 卸甲', () => {
+test('妖狐魅惑被先机预判闪避后不再卸甲', () => {
   const Sim = ctx.Sim;
   /* 「先机预判」的必闪是在 applyDamage 里才落的 r.dodge（预判 dodgeChance 已经算过命中），
    * 所以这里给妖狐 mustHitAll 让预判必中，只让 firstDodge 那一下生效。随机固定为 0：
@@ -228,7 +228,7 @@ test('妖狐魅惑被先机预判闪避后不再挂眩晕 / 卸甲', () => {
   }
   assert.ok(hit, '妖狐第一拍应放出色诱之术（魅惑）');
   assert.equal(hit.dodge, true, '先机预判要把这一下判成闪避');
-  assert.ok(!hit.stunApplied, '闪避后不能挂「略过一回合」的眩晕');
+  assert.ok(!hit.stunApplied, '色诱已不再挂眩晕标记');
   assert.ok(!hit.stripApplied && hit.specialEffect !== 1, '闪避后不能挂真·色诱的卸甲');
   assert.equal(hit.stripLeft[0], 0, '我方不应处于脱装备状态');
 });

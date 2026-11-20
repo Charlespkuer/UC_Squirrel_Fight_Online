@@ -81,6 +81,14 @@ function setup(ids = [21, 21, 21, 22, 201, 202], opts = {}) {
   };
   vm.createContext(context);
   for (const file of files) vm.runInContext(fs.readFileSync(path.join(rootDir, file), 'utf8'), context, { filename: file });
+  /* 联机版把融合改成 `await StateCall('mergeGears', …)`；测试沙箱没有 online.js。
+   * 给一个同步执行的薄桩：`mergeGears` 本身同步，扣款/入包在 await 前就已落库，
+   * 只有弹窗/重绘排到微任务里 —— 用例点完 fuse 要 await 一次。 */
+  context.StateCall = (name, ...args) => {
+    const fn = context.State && context.State[name];
+    if (typeof fn !== 'function') return Promise.reject(new Error('没有这个动作：' + name));
+    try { return Promise.resolve(fn(...args)); } catch (e) { return Promise.reject(e); }
+  };
   context.State.newGame('融合测试');
   context.State.setSettings({ uiMode: opts.mode || 'classic' });
   Object.assign(context.State.state(), { level: 50, goldPoint: opts.gold || 100, gears: [] });
@@ -97,7 +105,7 @@ function setup(ids = [21, 21, 21, 22, 201, 202], opts = {}) {
     const node = get(type, value);
     assert.ok(node, 'Button exists: ' + type + '/' + value);
     assert.equal(node.disabled, false, 'Button is enabled: ' + type + '/' + value);
-    node.onclick();
+    return node.onclick();
   }
   return { context, storage, modals, toasts, get, click, gears, get board() { return board; }, leave() { page.isConnected = false; } };
 }
@@ -105,13 +113,13 @@ function setup(ids = [21, 21, 21, 22, 201, 202], opts = {}) {
 const tests = [];
 const test = (name, run) => tests.push([name, run]);
 
-test('三件蓝装融合成紫装，只扣50金松果，正式存档保持不变', () => {
+test('三件蓝装融合成紫装，只扣50金松果，正式存档保持不变', async () => {
   const game = setup(), keys = game.gears.slice(0, 3).map((gear) => gear.key);
   assert.equal(game.get('action', 'fuse').disabled, true);
   keys.forEach((key) => game.click('gear', key));
   assert.equal(game.get('action', 'fuse').disabled, false);
   assert.ok(game.board.innerHTML.includes('卓越头巾'), '预览写成「卓越 + 部位」：' + game.board.innerHTML.match(/fusion-preview-label">[^<]*/));
-  game.click('action', 'fuse');
+  await game.click('action', 'fuse');
   assert.equal(game.context.State.state().goldPoint, 50);
   const inventory = game.context.State.myGears();
   assert.equal(inventory.length, 4);
@@ -124,20 +132,20 @@ test('三件蓝装融合成紫装，只扣50金松果，正式存档保持不变
 });
 
 /* 第 2 项：不再要求同名，同部位 + 同品质即可融合，产物是该部位的随机装备 */
-test('三件不同名的同部位同品质装备可以融合，产物仍是该部位', () => {
+test('三件不同名的同部位同品质装备可以融合，产物仍是该部位', async () => {
   // 21 格斗头巾 / 25 拳斗头巾 / 29 忍者护额：都是「头巾 + 品质2（杰出）」
   const game = setup([21, 25, 29]);
   assert.equal(game.get('action', 'fuse').disabled, true);
   game.gears.forEach((gear) => game.click('gear', gear.key));
   assert.equal(game.get('action', 'fuse').disabled, false, '不同名但同部位同品质应当可以融合');
-  game.click('action', 'fuse');
+  await game.click('action', 'fuse');
   const made = game.context.State.myGears().find((gear) => !game.gears.some((old) => old.key === gear.key));
   assert.equal(made.quality, 3, '品质提升一级');
   assert.equal(game.context.State.gearPart(made.id), 0, '产物仍是头巾');
   assert.ok(game.modals[0].html.includes('（头巾）'), '成功弹窗写明部位：' + game.modals[0].html.slice(-160));
 });
 
-test('经典和现代都可选择并融合三个不同部位的同品质装备', () => {
+test('经典和现代都可选择并融合三个不同部位的同品质装备', async () => {
   for (const mode of ['classic', 'modern']) {
     const game = setup([21, 201, 22, 23], { mode });
     game.click('gear', game.gears[0].key);
@@ -147,20 +155,20 @@ test('经典和现代都可选择并融合三个不同部位的同品质装备',
       game.click('gear', game.gears[index].key);
     }
     assert.equal(game.get('action', 'fuse').disabled, false);
-    game.click('action', 'fuse');
+    await game.click('action', 'fuse');
     assert.equal(game.modals[0].title, '融合成功');
     assert.equal(game.context.State.state().goldPoint, 50);
   }
 });
 
-test('橙装跨部位也能凑齐三件并合成黑装', () => {
+test('橙装跨部位也能凑齐三件并合成黑装', async () => {
   /* 49 头巾 / 50 手套 / 51 衣服：底层都是紫装 id，实例标 orange 后品质是 4。
    * 旧版卡片虽然亮着，但点击时还要求「与第一件同部位」，于是第 2/3 件怎么点都进不去，
    * 玩家看到的就是「橙装无法选中、合不出黑装」。 */
   const game = setup([49, 50, 51], { orange: true, gold: 1000, starred: true });
   game.gears.forEach((gear) => game.click('gear', gear.key));
   assert.equal(game.get('action', 'fuse').disabled, false, '三件不同部位的橙装要能同时放入');
-  game.click('action', 'fuse');
+  await game.click('action', 'fuse');
   const made = game.context.State.myGears().find((gear) => !game.gears.some((old) => old.key === gear.key));
   assert.ok(made, '融合产物应当入包');
   assert.equal(made.quality, 5, '三件橙装 → 黑色装备');
@@ -222,11 +230,11 @@ test('余额不足时按钮禁用，直接调用也不会消耗材料', () => {
   assert.equal(game.context.State.state().goldPoint, 49);
 });
 
-test('重复触发融合不会再次扣款或领取装备', () => {
+test('重复触发融合不会再次扣款或领取装备', async () => {
   const game = setup([21, 21, 21]);
   game.gears.forEach((gear) => game.click('gear', gear.key));
   const originalClick = game.get('action', 'fuse').onclick;
-  originalClick(); originalClick();
+  await Promise.allSettled([originalClick(), originalClick()]);
   assert.equal(game.context.State.state().goldPoint, 50);
   assert.equal(game.modals.length, 1);
 });
@@ -334,8 +342,10 @@ test('三件同套装融合必定得到该套下一品质同部位', () => {
   }
 });
 
-for (const [name, run] of tests) {
-  run();
-  console.log('PASS ' + name);
-}
-console.log('Fusion interaction checks passed: ' + tests.length + ' scenarios.');
+(async () => {
+  for (const [name, run] of tests) {
+    await run();
+    console.log('PASS ' + name);
+  }
+  console.log('Fusion interaction checks passed: ' + tests.length + ' scenarios.');
+})().catch((e) => { console.error(e); process.exitCode = 1; });

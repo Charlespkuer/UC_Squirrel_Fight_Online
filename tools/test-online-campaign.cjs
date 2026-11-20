@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 /* 征战异步化回归：真人 4/4、5 分钟超时不扣票、随机匹配补位、共享 BOSS 血量、
-   3~5 份骰子分奖、单份期望≈210 金松果、1 真人保底。 */
+   3~5 份骰子分奖、单份期望≈210 金松果、严格按点数最高者得（没有保底改判）。 */
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -88,6 +88,7 @@ try {
   const totalPrizes = rewarded.reduce((n, x) => n + (x.reward.gold ? 1 : 0) + (Array.isArray(x.reward.lootList) ? x.reward.lootList.length : 0), 0);
   assert.ok(totalPrizes >= 3 && totalPrizes <= 5, '一局 3~5 份 rollDatas，实际 ' + totalPrizes);
   assert.ok(rewarded.every((x) => x.reward.win && x.reward.exp > 0), '队伍胜利时每个真人都有经验');
+  assert.ok(rewarded.every((x) => Array.isArray(x.reward.ups)), '征战奖励要带 ups 数组（升级奖励弹窗读它）');
   assert.ok(rewarded.some((x) => x.reward.gold > 0 || (x.reward.lootList || []).length), '至少一份奖品归真人');
   assert.ok(rewarded.every((x) => !x.reward.loot || (x.reward.lootList || []).some((i) =>
     Number(i.id) === Number(x.reward.loot.id) && Number(i.count) === Number(x.reward.loot.count) && i.name === x.reward.loot.name
@@ -112,7 +113,13 @@ try {
   assert.equal(ticket(E), 1, '随机匹配开打扣 1 张');
   assert.equal(done(E), 1);
   const randomReward = random.room.me.reward || {};
-  assert.ok(randomReward.gold > 0 || (Array.isArray(randomReward.lootList) && randomReward.lootList.length > 0), '随机匹配也保底至少一份');
+  /* 保底已去掉：1 真人 + 3 助战时助战赢走的份不发货，真人可能一份都没有；
+   * 但只要真人拿到了奖，就必须是自己骰子点数最高的那一份（见 3b 的严格断言）。 */
+  const randomRoll = (random.room.roll && random.room.roll.prizes) || [];
+  if (randomReward.gold > 0 || (Array.isArray(randomReward.lootList) && randomReward.lootList.length)) {
+    assert.ok(randomRoll.some((p) => p.winnerKind === 'player' && Number(p.winnerAccountId) === E),
+      '真人拿到奖时必须有一份 rollDatas 判定他赢');
+  }
   assert.ok(random.room.bossMaxHp > 0 && random.room.bossHp >= 0);
 
   /* 3a) 接力回放：第一个人极弱、被 BOSS 打死，下一席助战仍要补出战报，
@@ -146,13 +153,38 @@ try {
   const avgPlayer = planValue / (300 * 4);
   assert.ok(avgPrize >= 195 && avgPrize <= 225, '单份期望约 210，实际 ' + avgPrize.toFixed(2));
   assert.ok(avgPlayer >= 195 && avgPlayer <= 225, '每张票期望约 200，实际 ' + avgPlayer.toFixed(2));
-  const solo = CampaignData.rewardPlan(42, [
+  /* 分奖页和结算必须是同一套口径：每份都是本份点数最高的一方，**没有保底改判**
+   *（用户 2026-11-10 口径：去掉“第一份硬塞给真人”，严格按骰子点数发奖）。 */
+  const topPoint = (p) => (p.rolls || []).reduce((m, r) => Math.max(m, Number(r.point) || 0), 0);
+  const winnerPoint = (p) => {
+    const win = (p.rolls || []).find((r) => Number(r.seat) === Number(p.winnerSeat));
+    return win ? Number(win.point) : NaN;
+  };
+  for (let seed = 1; seed <= 300; seed++) {
+    const plan = CampaignData.rewardPlan(seed, seats);
+    for (const p of plan.prizes) {
+      assert.equal(winnerPoint(p), topPoint(p), '第 ' + seed + ' 局每份赢家必须是点数最大的一方');
+      assert.equal(!!p.forced, false, '第 ' + seed + ' 局不能再出现保底改判');
+    }
+  }
+  /* 1 真人 + 3 助战：真人点数不够时的那一份就归助战并作废，**不再保底给真人**。
+   * 300 局里必须真的出现“真人一份都没赢到”的局，才证明保底确实被删掉了。 */
+  const soloSeats = [
     { seat: 0, accountId: 1, kind: 'player' },
     { seat: 1, accountId: 0, kind: 'bot' },
     { seat: 2, accountId: 0, kind: 'bot' },
     { seat: 3, accountId: 0, kind: 'bot' },
-  ]);
-  assert.ok(solo.prizes.some((p) => p.winnerKind === 'player' && p.winnerAccountId === 1), '1 真人 + 3 助战至少保底一份');
+  ];
+  let noPlayerWin = 0;
+  for (let seed = 1; seed <= 300; seed++) {
+    const plan = CampaignData.rewardPlan(seed, soloSeats);
+    if (!plan.prizes.some((p) => p.winnerKind === 'player')) noPlayerWin++;
+    for (const p of plan.prizes) {
+      assert.equal(winnerPoint(p), topPoint(p), '1 真人局第 ' + seed + ' 份赢家也必须是最高点数');
+      if (p.winnerKind !== 'player') assert.equal(p.discarded, true, '助战赢走的份必须标记作废');
+    }
+  }
+  assert.ok(noPlayerWin > 0, '1 真人 + 3 助战必须存在“真人一份都没赢到”的局（保底已去掉）');
 
   /* 4) 5 分钟超时：failed、不扣票、不计次数 */
   const wait = campaign.enqueue({ accountId: F, bossId: 1 });
@@ -202,6 +234,13 @@ try {
     assert.equal(forcedRoom.roll.prizes.length, 2, '重复 index 只画一格');
     assert.ok((forcedReward.lootList || []).some((item) => item.kind === 'gear'), '紫装出现在 reward.lootList');
     assert.ok((store.peek(F).gears || []).length > gearBefore, '紫装真的进背包');
+    {
+      const gearItem = (forcedReward.lootList || []).find((item) => item.kind === 'gear') || {};
+      const saved = (store.peek(F).gears || []).find((g) => g.key === gearItem.key) || {};
+      assert.ok(Array.isArray(gearItem.ext) && gearItem.ext.length === 2
+        && Array.isArray(saved.ext) && saved.ext.length === 2,
+        '征战紫装要按品质带 2 条随机词条，并随装备一起入包');
+    }
     assert.ok((forcedReward.lootList || []).some((item) => item.kind === 'hatch'), '孵化点出现在 reward.lootList');
     assert.equal(Number(store.peek(F).hatchPoint) || 0, hatchBefore + 400, '重复 index 不能发两次孵化点');
     campaign.ack({ accountId: F, code: forced.room.code });

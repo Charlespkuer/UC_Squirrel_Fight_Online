@@ -67,6 +67,38 @@ test('素材 JSON 失败绕开缓存重取一次（换包后坏缓存不能让�
   assert.match(renderJs, /async function fetchJsonRetry\(file\)/, '必须有重取包装');
 });
 
+test('HTML 文字描边只在 text-outline.css 出口，安卓统一走 text-shadow 回退', () => {
+  for (const f of fs.readdirSync(cssDir).filter((x) => x.endsWith('.css') && x !== 'text-outline.css')) {
+    const text = fs.readFileSync(path.join(cssDir, f), 'utf8');
+    const re = /-webkit-text-stroke(?:-width|-color)?\s*:\s*([^;}]+)/g;
+    let m;
+    while ((m = re.exec(text))) {
+      const value = m[1].trim();
+      assert.match(value, /^(?:0|0px|var\()/, `${f} 不要直接写描边宽度/颜色（改设 --sw/--ol-c，见 text-outline.css）：${value}`);
+    }
+  }
+  const central = read('css/text-outline.css');
+  assert.match(central, /html\.is-android[\s\S]{0,600}text-shadow/, '安卓回退必须是 text-shadow，不能继续用 -webkit-text-stroke');
+  assert.match(central, /-webkit-text-stroke-width:\s*0/, '安卓回退要把真描边关掉');
+  assert.match(central, /var\(--ol\)[^\n]*var\(--ol-c\)/, '回退阴影要用 --ol/--ol-c 生成外扩描边');
+  const html = read('scripts/index-online.html');
+  assert.match(html, /css\/text-outline\.css/, '入口页必须加载 text-outline.css');
+  assert.match(html, /classList\.add\('is-android'\)/, '入口页要在首帧前给安卓加 is-android');
+});
+
+test('深色系统不压暗游戏：WebView 关掉自动深色，入口页只声明浅色', () => {
+  const activity = read('src-tauri/android/MainActivity.kt');
+  const apkBuild = read('tools/build-online-apk.cjs');
+  const html = read('scripts/index-online.html');
+  const style = read('css/style.css');
+  assert.match(activity, /isAlgorithmicDarkeningAllowed\s*=\s*false/, 'WebView 133 要显式关闭算法深色');
+  assert.match(activity, /WebSettings\.FORCE_DARK_OFF/, '旧 WebView 要关掉 forceDark');
+  assert.match(apkBuild, /Theme\.MaterialComponents\.Light\.NoActionBar/, 'APK 主题不能再用 DayNight');
+  assert.match(apkBuild, /android:forceDarkAllowed/, '主题要显式禁用 forceDarkAllowed');
+  assert.match(html, /<meta name="color-scheme" content="light">/, '入口页要声明只支持浅色');
+  assert.match(style, /color-scheme:\s*light/, '全局 CSS 要声明 color-scheme: light');
+});
+
 console.log('');
 if (failed) { console.log(`${passed} passed, ${failed} failed`); process.exit(1); }
 console.log(`全部通过：${passed}/${passed}`);

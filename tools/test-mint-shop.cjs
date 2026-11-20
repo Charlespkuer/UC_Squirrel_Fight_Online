@@ -1092,10 +1092,10 @@ hr('8. 界面接线（UI 分流 / 战后自动进店 / 两套 API 不串味）')
   });
 
   check('铸币商店页面的三个出口都走铸币商店 API', () => {
-    /* 直接把 U14b 整段切出来（到下一节标题为止），避免以后页面变长把断言切掉。 */
-    const from = pageSrc.indexOf('【U14b】');
-    const to = pageSrc.indexOf('【U15】', from);
-    assert.ok(from > 0 && to > from, '找不到 U14b 那一段');
+    /* 直接把铸币商店页整段切出来（到下一个页面函数为止），避免以后页面变长把断言切掉。 */
+    const from = pageSrc.indexOf('function afterMintAction(');
+    const to = pageSrc.indexOf('function openPermSacrifice(', from);
+    assert.ok(from > 0 && to > from, '找不到铸币商店页那一段');
     const body = pageSrc.slice(from, to);
     for (const call of ['Tower.buyMintSlot(i', 'Tower.rerollMintShop()', 'Tower.swapMintBuff(rowRef(b))', 'Tower.leaveMintShop()']) {
       assert.ok(body.includes(call), '铸币商店页应当调用 ' + call);
@@ -2857,7 +2857,7 @@ hr('16. 2026-10 镜中世界：整百层打赢魔王 → 拾取照影之境 → 
     T.markStorySeen('layer100'); T.markStorySeen('x00a'); T.markStorySeen('x00b'); T.markStorySeen('x00c');
     /* 数据口径：传奇 + 剧情固定获得（不进任何随机池 / 商店 / 铸币商店）。 */
     const def = TD.BUFF_BY_ID[TD.MIRROR.id];
-    assert.equal(TD.ENDLESS_X00_BONUS_TICKETS, 10, '整百层收手奖励的默认值');
+    assert.equal(TD.ENDLESS_X00_BONUS_TICKETS, 10, '百层奖励的默认值');
     assert.equal(def.rarity, 3, '照影之境应当是传奇档');
     assert.equal(def.flavor, '映出一具完美的躯壳', '拾取卡上的那句话');
     assert.equal(def.desc, '？？？', '进背包之后的介绍');
@@ -2912,7 +2912,7 @@ hr('16. 2026-10 镜中世界：整百层打赢魔王 → 拾取照影之境 → 
     const panel = ui.last('page').content;
     assert.match(panel, /endless-summary.*data-outcome="win"/, '本次百层真正胜利应当展示胜利战报');
     assert.ok(panel.indexOf('照影之境') > 0, '胜利战报里要保留刚获得的照影之境');
-    assert.match(panel, /百层胜利额外 10 张/, '战报要写明整百层收手的 10 张额外抽奖卷');
+    assert.match(panel, /百层奖励额外 10 张/, '战报要写明通过 100 层的 10 张额外抽奖卷');
     /* 「继续挑战」→ 确认弹窗 → 是 → 第 101 层（机制回到第 1 层的样子，数值接着长）。 */
     const scoreBefore = T._debugRun('endless').score;
     ui.click('summary-continue');
@@ -2926,7 +2926,7 @@ hr('16. 2026-10 镜中世界：整百层打赢魔王 → 拾取照影之境 → 
     assert.equal((r101.env || []).length, 0, '101 层与第 1 层同规矩：层内环境从头抽');
     assert.ok(r101.score >= scoreBefore, '分数继续累计（敌人数值也继续按公式长）');
     assert.equal(T.mirrorStacks(), 1, '照影之境跟着进下一层');
-    assert.equal(T.previewSettleTickets().bonusTickets, 0, '进入 101 层后不再有百层收手奖励');
+    assert.equal(T.previewSettleTickets().bonusTickets, 10, '进入 101 层后仍按已通过的 100 层发百层奖励');
     /* 每过 100 层叠一层；关闭剧情的挑战模式同样能从胜利战报领取离场。 */
     T.setStoryEnabled(false);
     T._debugSetEndlessLayer(200);

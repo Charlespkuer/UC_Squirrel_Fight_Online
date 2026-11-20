@@ -36,7 +36,6 @@ const result = battle.withSeed(0x4d6f7761, () => runtime.withState(null, ({ api:
       save.props[22] = (save.props[22] || 0) + Math.min(30, Math.ceil(wins / 30));
       for (const id of [24, 25, 26]) save.props[id] = (save.props[id] || 0) + Math.min(20, Math.ceil(wins / 25));
       S.gainExp(xp);
-      while (S.pendingPoints()) S.allocatePoint(['power','agility','speed','hp'][level % 4]);
       while (S.pendingWS()) {
         const choices = S.currentWSChoices().slice().sort((a,b) => choiceScore(b) - choiceScore(a));
         if (!choices.length || !S.chooseWS(choices[0].kind, choices[0].id).ok) throw new Error('Cannot resolve skill selection');
@@ -82,13 +81,7 @@ const result = battle.withSeed(0x4d6f7761, () => runtime.withState(null, ({ api:
       // Open the level 71–90 reward chests through the game's own implementation.
       while ((save.props[90] || 0) > 0) {
         if (!S.beginChest(90).ok) break;
-        for (let i = 0; i < 10; i++) {
-          const chest = S.chestState();
-          if (chest && chest.reward.kind === 'points' && chest.reward.count >= 10) break;
-          if (!S.reopenChest().ok) break;
-        }
         if (!S.confirmChest().ok) throw new Error('Cannot confirm chest');
-        while (S.pendingPoints()) if (!S.allocatePoint(['power','agility','speed','hp'][level % 4]).ok) break;
       }
     }
     const fighter = fighterFromState({ useProps: false });

@@ -1,22 +1,13 @@
 'use strict';
-/* ============================================================
- * server/game/snapshot.js — 每级战斗快照
- * ------------------------------------------------------------
- * 用户要求：**玩家每升一级都保存一份存档快照**。同时它承担三件事：
- *  1. 异步对手/防守阵容只读快照（不读实时存档，避免被挑战后立刻换装针对）；
- *  2. 历史对手可以从邻近等级的旧 revision 里抽；
- *  3. 战斗录像长期可复算：combats 记 snapshot_id。
- *
- * 生命周期（与 docs/联机实现方案.md §11.6.2 一致）：
- *  · 升级 → 新等级写 revision=1，is_current=1；
- *  · 同级换装/换武技/换幻兽/加点 → 同一级写新 revision，is_current 指到最新；
- *  · 每级最多 `snapshotsPerLevel` 条，超了删最旧的（is_current 永不删）。
- * ============================================================ */
+// server/game/snapshot.js — 每级战斗快照
+// 1. 异步对手/防守阵容只读快照（不读实时存档，避免被挑战后立刻换装针对）；
 
 const crypto = require('node:crypto');
 const db = require('../db');
 const { config } = require('../config');
+const visibility = require('./visibility');
 const { fighterFromState, fighterFingerprint } = require('./fighter');
+const vip = require('./vip');
 
 function newId() {
   return 's_' + crypto.randomBytes(9).toString('base64url');
@@ -38,9 +29,7 @@ function currentSnapshot(accountId, mode) {
   return row ? hydrate(row) : null;
 }
 
-/** 只要「当前快照是哪一条」的元数据，不解析 fighter JSON。
- *  好友列表/摘要只要 id+level；以前每条好友都 `currentSnapshot()` 一次，
- *  50 位好友就多解析 50 份约 1.5 KB 的 JSON。 */
+// 只要「当前快照是哪一条」的元数据，不解析 fighter JSON。
 function currentSnapshotMeta(accountId, mode) {
   const row = db.get(
     'SELECT id, level, revision, created_at FROM battle_snapshots WHERE account_id = ? AND mode = ? AND is_current = 1 ORDER BY level DESC, revision DESC LIMIT 1',
@@ -54,6 +43,18 @@ function currentSnapshotMeta(accountId, mode) {
 function snapshotById(id) {
   const row = db.get('SELECT * FROM battle_snapshots WHERE id = ?', String(id));
   return row ? hydrate(row) : null;
+}
+
+// 批量取快照（好友列表一次查完，避免每个好友一次 SELECT + fighter JSON 解析）。
+function snapshotByIds(ids) {
+  const list = [...new Set((ids || []).map(String).filter(Boolean))];
+  const out = new Map();
+  if (!list.length) return out;
+  const marks = list.map(() => '?').join(',');
+  for (const row of db.all(`SELECT * FROM battle_snapshots WHERE id IN (${marks})`, ...list)) {
+    out.set(String(row.id), hydrate(row));
+  }
+  return out;
 }
 
 function hydrate(row) {
@@ -70,14 +71,17 @@ function hydrate(row) {
   };
 }
 
-/**
- * 保证「当前等级 + 当前面板」有一条 is_current 的快照。
- * 必须在 `runtime.withState()` 的回调里（同步）调用。
- * @returns {{snapshot:object|null, created:boolean, revision:number}}
- */
+// 保证「当前等级 + 当前面板」有一条 is_current 的快照。
+// 必须在 `runtime.withState()` 的回调里（同步）调用。
 function ensureCurrent(accountId, mode, source) {
   const m = mode || 'classic';
   let fighter;
+  // 徒弟的师父升级后，防守快照也要带新的 masterLevel；只改内存存档，
+  // 调用方（runOnSave）会在回调结束后统一落库。
+  try {
+    const st = globalThis.State && globalThis.State.state ? globalThis.State.state() : null;
+    if (st) require('./apprentice').refreshMasterLevelInto(accountId, st);
+  } catch (_) {}
   try { fighter = fighterFromState({ useProps: false }); } catch (_) { return { snapshot: null, created: false, revision: 0 }; }
   const level = Math.max(1, Math.round(Number(fighter.level) || 1));
   const fp = fighterFingerprint(fighter);
@@ -85,8 +89,7 @@ function ensureCurrent(accountId, mode, source) {
   if (current && current.level === level && fighterFingerprint(current.fighter) === fp) {
     return { snapshot: current, created: false, revision: current.revision };
   }
-  /* 同一个面板已经在某一级的历史里出现过（例如读档后回到同级）→ 直接把 is_current 挪过去，
-   * 不再新写一条，避免每读一次档就膨胀一条 revision。 */
+
   const sameLevelRows = db.all(
     'SELECT * FROM battle_snapshots WHERE account_id = ? AND mode = ? AND level = ? ORDER BY revision DESC',
     Number(accountId), m, level
@@ -131,8 +134,7 @@ function prune(accountId, mode, level) {
   for (const id of drop) db.run('DELETE FROM battle_snapshots WHERE id = ?', id);
 }
 
-/** 候选对手：同赛区（或同等级段）的当前快照，排除自己/最近打过/长期不登录。
- *  `minLevel` / `maxLevel` 给天梯赛区用（整个 10 级赛区）；不传就按 `levelSpread` 取邻级。 */
+// 候选对手：同赛区（或同等级段）的当前快照，排除自己/最近打过/长期不登录。
 function candidates(mode, opts) {
   const o = opts || {};
   const m = mode || 'classic';
@@ -143,11 +145,13 @@ function candidates(mode, opts) {
   const hi = o.maxLevel != null ? Math.min(90, Number(o.maxLevel)) : level + levelSpread;
   const recent = (o.recentIds || []).map(Number).filter(Boolean);
   const idleCut = Date.now() - config.opponentIdleDays * 86400000;
+  const viewerHidden = o.viewerHidden != null ? !!o.viewerHidden : visibility.isHidden(selfId);
   const params = [m, selfId, lo, hi, idleCut, o.includeInactiveSimulated ? 1 : 0];
-  /* 只取列表需要的列：以前 `b.*` 会把每条快照的 `json` BLOB（约 1.5 KB/条）一起读出来，
-   * 但这里只用到 id / account_id / level / revision。等级段人一多就是纯浪费。 */
+  if (!viewerHidden) params.push(Date.now());
+
   let sql = `SELECT b.id, b.account_id, b.level, b.revision,
                     a.name AS acc_name, a.tag AS acc_tag, a.last_seen AS acc_last,
+                    sv.vip_level AS vip_level, sv.vip_until AS vip_until,
                     r.score AS score, r.season AS season
              FROM battle_snapshots b
              JOIN accounts a ON a.id = b.account_id
@@ -156,48 +160,46 @@ function candidates(mode, opts) {
              WHERE b.mode = ? AND b.is_current = 1 AND b.account_id <> ?
                AND b.level BETWEEN ? AND ? AND b.level = sv.level
                AND a.banned = 0
-               /* 天梯匹配池不放任何模拟/AI 账号（魔王等）；真人榜与真人匹配同一口径。 */
+
                AND NOT EXISTS (SELECT 1 FROM simulated_accounts sa WHERE sa.account_id = b.account_id)
                AND (a.last_seen >= ? OR (? = 1 AND EXISTS
-                   (SELECT 1 FROM simulated_accounts sa WHERE sa.account_id = a.id)))`;
-  /* 参数顺序按 SQL 里出现的先后：week 在最前面（LEFT JOIN 条件），然后 mode/self/level/levelCut。 */
+                   (SELECT 1 FROM simulated_accounts sa WHERE sa.account_id = a.id)))
+               AND ${visibility.hiddenSqlFor('b.account_id', viewerHidden)}`;
+  // 参数顺序按 SQL 里出现的先后：week 在最前面（LEFT JOIN 条件），然后 mode/self/level/levelCut。
   params.unshift(o.week || o.season || '');
   const rows = db.all(sql, ...params);
-  let list = rows.map((row) => ({
+  const list = rows.map((row) => ({
     snapshotId: String(row.id),
     accountId: Number(row.account_id),
     name: String(row.acc_name),
     tag: String(row.acc_tag),
     level: Number(row.level),
     revision: Number(row.revision),
+    vipLevel: vip.levelAt(row.vip_level, row.vip_until),
     score: Number(row.score || 0),
     lastSeen: Number(row.acc_last || 0),
   })).filter((x) => x.accountId !== selfId && !recent.includes(x.accountId));
-  if (o.ratingSpread != null) {
-    const mine = Number(o.myScore) || 0;
-    const spread = Number(o.ratingSpread);
-    const near = list.filter((x) => Math.abs(x.score - mine) <= spread);
-    if (near.length >= 1) list = near;
-  }
-  /* 排序：等级差小 + 分数差小 + 一点随机（服务端 seed 由调用方在事务里定）。 */
-  const myScore = Number(o.myScore) || 0;
-  const rand = typeof o.random === 'function' ? o.random : Math.random;
-  return list.map((item) => ({ item, order: Math.abs(item.level - level) * 2 + Math.abs(item.score - myScore) / 100 + rand() }))
-    .sort((a, b) => a.order - b.order).map(({ item }) => item);
+  // 天梯的积分差权重由调用方 `opponents.rankCandidates` 在抽取时计算；
+  // 这里返回赛区内全部候选，不再按分数或等级预先排序/截断。
+  return list;
 }
 
-/** 历史对手：同等级区间的旧 revision（非 current），用于「往期对手」。 */
 function historical(mode, opts) {
   const o = opts || {};
+  const viewerHidden = o.viewerHidden != null ? !!o.viewerHidden : visibility.isHidden(o.excludeAccountId);
+  const params = [mode || 'classic', Number(o.excludeAccountId || 0), Number(o.minLevel || 1), Number(o.maxLevel || 90),
+    Date.now() - config.opponentIdleDays * 86400000, o.includeInactiveSimulated ? 1 : 0];
+  if (!viewerHidden) params.push(Date.now());
+  params.push(Number(o.limit || 10));
   const rows = db.all(
     `SELECT b.id, b.account_id, b.level, a.name AS acc_name, a.tag AS acc_tag FROM battle_snapshots b
      JOIN accounts a ON a.id = b.account_id
       WHERE b.mode = ? AND b.is_current = 0 AND b.account_id <> ? AND b.level BETWEEN ? AND ? AND a.banned = 0
         AND (a.last_seen >= ? OR (? = 1 AND EXISTS
             (SELECT 1 FROM simulated_accounts sa WHERE sa.account_id = a.id)))
+        AND ${visibility.hiddenSqlFor('b.account_id', viewerHidden)}
      ORDER BY b.created_at DESC LIMIT ?`,
-    mode || 'classic', Number(o.excludeAccountId || 0), Number(o.minLevel || 1), Number(o.maxLevel || 90),
-    Date.now() - config.opponentIdleDays * 86400000, o.includeInactiveSimulated ? 1 : 0, Number(o.limit || 10)
+    ...params
   );
   return rows.map((row) => ({
     snapshotId: String(row.id), accountId: Number(row.account_id),
@@ -205,8 +207,7 @@ function historical(mode, opts) {
   })).filter((row) => !(o.recentIds || []).includes(row.accountId));
 }
 
-/** 改名后同步**当前防守快照**里的显示名：面板/指纹不变，不新增 revision。
- *  历史 revision 保留当时的名字（老战报本来就该显示当时的名字）。 */
+// 改名后同步当前防守快照里的显示名：面板/指纹不变，不新增 revision。
 function renameCurrent(accountId, mode, name) {
   const m = mode || 'classic';
   const row = db.get(
@@ -226,4 +227,4 @@ function renameCurrent(accountId, mode, name) {
   return true;
 }
 
-module.exports = { ensureCurrent, currentSnapshot, currentSnapshotMeta, snapshotById, candidates, historical, renameCurrent };
+module.exports = { ensureCurrent, currentSnapshot, currentSnapshotMeta, snapshotById, snapshotByIds, candidates, historical, renameCurrent };

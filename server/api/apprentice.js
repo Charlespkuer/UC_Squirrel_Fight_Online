@@ -1,16 +1,8 @@
 'use strict';
-/* ============================================================
- * server/api/apprentice.js — 联机师徒路由
- * ------------------------------------------------------------
- *   GET  /api/apprentices            师徒页数据（兼容旧路径）
- *   GET  /api/apprentice             同上
- *   GET  /api/apprentice/candidates  人机师父候选 + 可收真人徒弟
- *   POST /api/apprentice/master      拜人机师父
- *   POST /api/apprentice/recruit     收真人徒弟（异步战斗）
- *   POST /api/apprentice/kick        逐出师门（每天 1 次）
- *   POST /api/apprentice/leave       出师（20 金松果）
- *   POST /api/apprentice/tribute     领取真人徒弟昨日日供
- * ============================================================ */
+// server/api/apprentice.js — 联机师徒路由
+// GET  /api/apprentices            师徒 / 日供数据（兼容旧路径，活动页日供卡也读它）
+// POST /api/apprentice/recruit     收真人徒弟（异步战斗）
+// POST /api/apprentice/refresh     战斗前刷新徒弟存档里的师父等级
 
 const apprentice = require('../game/apprentice');
 const fight = require('../game/fight');
@@ -37,6 +29,12 @@ module.exports = {
     return apprentice.setBotMaster(ctx.account.id, Number(ctx.body && ctx.body.index) || 0, needRev(ctx));
   },
 
+  // 战斗前由徒弟客户端调用：把存档里的师父等级对齐到师父当前等级。
+  refresh(ctx) {
+    rateLimit('apprentice-refresh:' + ctx.account.id, 60, 60 * 1000);
+    return apprentice.refreshMasterLevel(ctx.account.id);
+  },
+
   recruit(ctx) {
     rateLimit('apprentice-recruit:' + ctx.account.id, 20, 60 * 1000);
     const rev = needRev(ctx);
@@ -61,5 +59,10 @@ module.exports = {
   tribute(ctx) {
     rateLimit('apprentice-tribute:' + ctx.account.id, 30, 60 * 1000);
     return apprentice.claimTribute(ctx.account.id, needRev(ctx));
+  },
+
+  cheer(ctx) {
+    rateLimit('apprentice-cheer:' + ctx.account.id, 10, 60 * 1000);
+    return apprentice.cheerMaster(ctx.account.id);
   },
 };

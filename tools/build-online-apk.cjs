@@ -66,10 +66,27 @@ if (fs.existsSync(jniSo) && fs.lstatSync(jniSo).isSymbolicLink()) fs.unlinkSync(
 fs.copyFileSync(so, jniSo);
 const kotlin = path.join(ANDROID, 'app', 'src', 'main', 'java', 'com', 'ssdz', 'online');
 fs.copyFileSync(path.join(TAURI, 'android', 'MainActivity.kt'), path.join(kotlin, 'MainActivity.kt'));
+/* `gen/android` 由 Tauri 生成、不进仓库：系统深色模式下 DayNight 主题会触发 WebView
+ * 自动压暗，经典 UI 的米色/金色会变成暗褐/墨绿。构建时统一改成固定浅色主题。 */
+for (const rel of ['values/themes.xml', 'values-night/themes.xml']) {
+  const file = path.join(ANDROID, 'app', 'src', 'main', 'res', rel);
+  if (!fs.existsSync(file)) continue;
+  let theme = fs.readFileSync(file, 'utf8')
+    .replace(/parent="Theme\.MaterialComponents\.DayNight\.NoActionBar"/g, 'parent="Theme.MaterialComponents.Light.NoActionBar"');
+  if (!theme.includes('android:forceDarkAllowed')) {
+    theme = theme.replace('</style>', '        <item name="android:forceDarkAllowed">false</item>\n    </style>');
+  }
+  fs.writeFileSync(file, theme);
+}
 const manifest = path.join(ANDROID, 'app', 'src', 'main', 'AndroidManifest.xml');
 let xml = fs.readFileSync(manifest, 'utf8');
 if (!xml.includes('android:screenOrientation=')) xml = xml.replace('android:name=".MainActivity"', 'android:name=".MainActivity"\n            android:screenOrientation="sensorLandscape"');
 if (!xml.includes('android:networkSecurityConfig=')) xml = xml.replace('android:usesCleartextTraffic=', 'android:networkSecurityConfig="@xml/online_network_security"\n        android:usesCleartextTraffic=');
+// Android 8+ 允许应用拉起 APK 安装器；用户仍需在系统里允许「安装未知应用」。
+if (!xml.includes('android.permission.REQUEST_INSTALL_PACKAGES')) {
+  xml = xml.replace('<uses-permission android:name="android.permission.INTERNET" />',
+    '<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />');
+}
 fs.writeFileSync(manifest, xml);
 const apiBase = JSON.parse(fs.readFileSync(path.join(TAURI, 'web-stamp.json'), 'utf8')).api;
 // The web client probes its public fallbacks too; permit only their HTTP hosts.
@@ -147,6 +164,6 @@ fs.unlinkSync(aligned);
  * 本函数开头已经 `--web` 暂存过，构建期间的源码变化不是发布门禁要重复查的事。
  * 需要单独核对已有快照时手动跑 `node tools/build-online-app.cjs --check`（一次）。 */
 fs.copyFileSync(pending, apk); fs.unlinkSync(pending);
-/* 发布物保留策略：dist 只留最近两版 APK（旧包不会越堆越多，见 tools/prune-dist.cjs）。 */
-try { require('./prune-dist.cjs').prune({ keep: 2 }); } catch (e) { console.warn('[prune-dist] ' + (e && e.message)); }
+/* 发布物保留策略：dist 只留当前版本（同版本两个 ABI 一起留），见 tools/prune-dist.cjs。 */
+try { require('./prune-dist.cjs').prune({ keep: 1 }); } catch (e) { console.warn('[prune-dist] ' + (e && e.message)); }
 console.log('Online ' + PROFILE.label + ' APK ready (not installed): ' + apk);

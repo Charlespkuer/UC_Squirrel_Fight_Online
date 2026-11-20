@@ -1,0 +1,63 @@
+/* 文字描边的唯一出口：--sw 描边全宽、--ol 半宽（阴影外扩）、--ol-c 颜色、--ol-drop 投影。
+   安卓 WebView 83 实测不认 HTML 文本的 paint-order（CSS.supports 仍报 true），描边盖住字芯；
+   所以安卓走 16 向 text-shadow。新增描边文字只设这四个变量 + 进下面两组选择器。 */
+.cartoon,
+.uc-button,
+.uc-tab,
+.home-exp-label,
+.status-lines dt,
+.star-challenge > div,
+.title-logo,
+.btn,
+.bag-coins b,
+.classic-page[data-screen="status"] > .classic-board > .stat-strip .stat-pill,
+.music-toggle,
+.music-hint,
+.classic-section-title,
+.profile-gear-label,
+.home-name .vip-badge,
+.fusion-question,
+.pickup-prompt {
+  -webkit-text-stroke-width: var(--sw, 0px);
+  -webkit-text-stroke-color: var(--ol-c, currentColor);
+  paint-order: stroke fill;
+  text-shadow: var(--ol-drop, 0 0 rgba(0, 0, 0, 0));
+}
+
+html.is-android .cartoon,
+html.is-android .uc-button:not(.entry-pill),
+html.is-android .uc-tab:not(.has-vector-tab),
+html.is-android .home-exp-label,
+html.is-android .status-lines dt,
+html.is-android .star-challenge > div,
+html.is-android .title-logo,
+html.is-android .btn,
+html.is-android .bag-coins b,
+html.is-android .classic-page[data-screen="status"] > .classic-board > .stat-strip .stat-pill,
+html.is-android .music-toggle,
+html.is-android .music-hint,
+html.is-android .classic-section-title,
+html.is-android .profile-gear-label,
+html.is-android .home-name .vip-badge,
+html.is-android .fusion-question,
+html.is-android .pickup-prompt {
+  -webkit-text-stroke-width: 0;
+  text-shadow:
+    var(--ol) 0 0 var(--ol-c),
+    calc(var(--ol) * -1) 0 0 var(--ol-c),
+    0 var(--ol) 0 var(--ol-c),
+    0 calc(var(--ol) * -1) 0 var(--ol-c),
+    calc(var(--ol) * 0.9239) calc(var(--ol) * 0.3827) 0 var(--ol-c),
+    calc(var(--ol) * -0.9239) calc(var(--ol) * 0.3827) 0 var(--ol-c),
+    calc(var(--ol) * 0.9239) calc(var(--ol) * -0.3827) 0 var(--ol-c),
+    calc(var(--ol) * -0.9239) calc(var(--ol) * -0.3827) 0 var(--ol-c),
+    calc(var(--ol) * 0.7071) calc(var(--ol) * 0.7071) 0 var(--ol-c),
+    calc(var(--ol) * -0.7071) calc(var(--ol) * 0.7071) 0 var(--ol-c),
+    calc(var(--ol) * 0.7071) calc(var(--ol) * -0.7071) 0 var(--ol-c),
+    calc(var(--ol) * -0.7071) calc(var(--ol) * -0.7071) 0 var(--ol-c),
+    calc(var(--ol) * 0.3827) calc(var(--ol) * 0.9239) 0 var(--ol-c),
+    calc(var(--ol) * -0.3827) calc(var(--ol) * 0.9239) 0 var(--ol-c),
+    calc(var(--ol) * 0.3827) calc(var(--ol) * -0.9239) 0 var(--ol-c),
+    calc(var(--ol) * -0.3827) calc(var(--ol) * -0.9239) 0 var(--ol-c),
+    var(--ol-drop, 0 0 rgba(0, 0, 0, 0));
+}

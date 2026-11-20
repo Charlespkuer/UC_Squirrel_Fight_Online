@@ -12,7 +12,7 @@
     "useProp":            { "mode": "async", "args": ["int", "any"] },
     "usePropMany":        { "mode": "async", "args": ["int", "int"] },
     "sellProp":           { "mode": "sync",  "args": ["int", "int"] },
-    "sellGear":           { "mode": "sync",  "args": ["str"] },
+    "sellGear":           { "mode": "sync",  "args": ["str", "bool"], "note": "旧客户端只传 key 走区间中点以保持 sync 预测；新客户端传 true 由服务端掷随机价，页面走 StateCall" },
     "openChestProp":      { "mode": "async", "args": ["int"] },
     "buyVip":             { "mode": "sync",  "args": ["int"] },
 
@@ -32,12 +32,10 @@
     "chooseWSRandom":     { "mode": "async", "args": [] },
     "fruitOptions":       { "mode": "async", "args": ["int"] },
     "applyFruitChoice":   { "mode": "async", "args": ["int", "str", "int"] },
+    "cancelFruitChoice":  { "mode": "async", "args": ["int"] },
     "composeSeed":        { "mode": "sync",  "args": ["int"] },
     "composeConvertPill": { "mode": "async", "args": [] },
 
-    "allocatePoint":      { "mode": "sync",  "args": ["str"] },
-    "allocateEvenly":     { "mode": "sync",  "args": [] },
-    "undoPoint":          { "mode": "sync",  "args": [] },
 
     "hatchPet":           { "mode": "async", "args": [] },
     "setPetTeam":         { "mode": "sync",  "args": ["keys"] },
@@ -49,11 +47,11 @@
 
     "claimDaily":         { "mode": "async", "args": [] },
     "lotteryDraw":        { "mode": "async", "args": ["int"] },
+    "claimEndlessTower":  { "mode": "async", "args": ["int", "int", "str", "bool"], "note": "无尽塔结算：通过层数 + 铸币数 + 对局编号 + 兼容旧客户端的结局标记；百层奖励由层数判定，同一对局幂等" },
     "claimQuest":         { "mode": "sync",  "args": ["int"] },
 
     "beginChest":         { "mode": "async", "args": ["int"] },
     "confirmChest":       { "mode": "async", "args": [] },
-    "reopenChest":        { "mode": "async", "args": [] },
 
     "abandonStageRun":    { "mode": "sync",  "args": ["int"] },
     "markMessagesSeen":   { "mode": "sync",  "args": [] },

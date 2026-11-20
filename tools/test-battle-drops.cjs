@@ -29,7 +29,7 @@ function setup() {
   const root={appendChild(node){nodes.push(node);}};
   function create(values=[0,0,0,0],withRoot=true,kind){let i=0;return c.BattleDrops.create({root:withRoot?root:undefined,random:()=>values[i++]??0,kind});}
   function advance(drop,ms){while(ms>0){const step=Math.min(100,ms);drop.tick(step);ms-=step;}}
-  return {c,nodes,create,advance,s:()=>c.State.state(),live:tag=>nodes.filter(n=>!n.removed&&(!tag||n.tag===tag)),saved:()=>JSON.parse(storage.get(c.State.saveKey))};
+  return {c,nodes,root,create,advance,s:()=>c.State.state(),live:tag=>nodes.filter(n=>!n.removed&&(!tag||n.tag===tag)),saved:()=>JSON.parse(storage.get(c.State.saveKey))};
 }
 const tests=[],test=(name,run)=>tests.push([name,run]);
 const same=(a,b)=>assert.deepEqual(JSON.parse(JSON.stringify(a)),JSON.parse(JSON.stringify(b)));
@@ -80,12 +80,31 @@ test('重复点击、错误序号与过时按钮不重复发奖，提示会清�
   const snapshot=drop.summary();snapshot.items[0].count=999;assert.equal(drop.summary().items[0].count,2);
 });
 
+test('联机拾取等服务端确认后才亮「获得…」提示，确认前不提示',async()=>{
+  const g=setup();let finish=null;
+  const drop=g.c.BattleDrops.create({root:g.root,random:()=>0,onCollect:()=>new Promise(resolve=>{finish=resolve;})});
+  g.advance(drop,2000);g.live('button')[0].onclick();
+  await Promise.resolve();
+  assert.equal(g.live('div').length,0,'服务端确认前不提示');
+  finish({prize:{id:15,name:'经验',count:5}});
+  await new Promise(resolve=>setImmediate(resolve));
+  const tips=g.live('div');
+  assert.equal(tips.length,1,'确认后亮一条「获得…」');
+  assert.equal(tips[0].textContent,'获得经验 ×5');
+});
+
 test('跳过补齐包括过期和未出现的3奖，已点奖不重复且重复跳过无效',()=>{
   const g=setup(),drop=g.create([0,.4,.6,.72]);
   g.advance(drop,4200);assert.equal(drop.summary().items.length,0); // First gold pickup missed.
   g.advance(drop,7801);assert.equal(drop.collect(1),true);assert.equal(g.s().props[21],1);
-  drop.skip();same(drop.summary().items.map(x=>x.id),[21,8,22]);
-  assert.equal(g.s().goldPoint,102);assert.equal(g.s().props[21],1);assert.equal(g.s().props[22],1);assert.equal(g.live().length,0);
+  drop.skip();
+  const skipped=drop.summary().items;
+  assert.equal(skipped.length,3,'跳过要补齐三份');
+  assert.ok(skipped.every((x)=>[1,2,8,15,21,22,24,25,26,45,46].includes(x.id)),'补齐项来自掉落池');
+  assert.equal(g.s().goldPoint,102);
+  const counted={}; for(const x of skipped) counted[x.id]=(counted[x.id]||0)+x.count;
+  for(const id of Object.keys(counted)) if(id!=='8' && id!=='15') assert.equal(g.s().props[id],counted[id],'补齐项都要入账：'+id);
+  assert.equal(g.live().length,0);
   const saved=JSON.stringify(g.saved());drop.skip();g.advance(drop,100000);assert.equal(JSON.stringify(g.saved()),saved);assert.equal(drop.summary().items.length,3);
 });
 
@@ -121,10 +140,9 @@ test('经验掉落走真实升级，跳过3次累计15经验且汇总属性成�
   assert.ok(choices.every((c) => ['weapon','skill'].includes(c.kind) && c.name));
   assert.equal(g.c.State.chooseWS(choices[0].kind, choices[0].id).ok, true);
   assert.equal(g.c.State.pendingWS(), 0);
-  // 每级 4 个点位：3 点属性 + 生命 5。第 3 点全部由系统分配（autoPoint 已进属性），
-  // 升级不再挂 freePoints；预算按 autoPoint=1 计。
+  // 每级 4 个点位：3 点属性 + 生命 5。第 3 点由系统分配（autoPoint 已进属性）。
   const u = summary.ups[0];
-  assert.equal(u.power + u.agility + u.speed + u.hp / 5 + (u.freePoint || 0) + (u.autoPoint ? 1 : 0), 4);
+  assert.equal(u.power + u.agility + u.speed + u.hp / 5 + (u.autoPoint ? 1 : 0), 4);
   assert.equal(g.saved().level,2);assert.equal(g.saved().exp,13);drop.skip();assert.equal(g.s().exp,13);
 });
 
@@ -154,6 +172,14 @@ test('天梯战用专属掉落表：飘出来的是属性碎片与恶魔果实�
   assert.equal(g.c.BattleDrops.poolFor('rank').some(p=>p.id===51),true);
   assert.equal(g.c.BattleDrops.poolFor().some(p=>p.id===51),false);
   assert.equal(g.c.BattleDrops.poolFor('rank').some(p=>p.id===46),true,'天梯也掉恶魔果实种子');
+});
+
+test('天使/恶魔果实种子权重 ×3：普通池 1→3 / 0.5→1.5，天梯池 5→15',()=>{
+  const g=setup();
+  assert.equal(g.c.BattleDrops.pool.find(p=>p.id===45).weight,3,'普通战斗天使果实种子 1 → 3');
+  assert.equal(g.c.BattleDrops.pool.find(p=>p.id===46).weight,1.5,'普通战斗恶魔果实种子 0.5 → 1.5');
+  assert.equal(g.c.BattleDrops.ladderPool.find(p=>p.id===46).weight,15,'天梯赛恶魔果实种子 5 → 15');
+  assert.equal(g.c.BattleDrops.ladderPool.some(p=>p.id===45),false,'天梯池原本没有天使果实种子，本次不新增');
 });
 
 test('10 个属性碎片 + 50 金松果随机合成一个转化丸',()=>{
@@ -260,5 +286,20 @@ test('战中大小体力药剂掉率再砍一半：权重 5→2.5 / 1→0.5，�
   assert.equal(g.c.BattleDrops.plan(()=>0.999999)[0].id,26,'≈1 → 池尾（小数权重不会漏掉最后一项）');
 });
 
-let failed=0;for(const[name,run]of tests){try{run();console.log('PASS',name);}catch(error){failed++;console.error('FAIL',name,error.stack);}}
-console.log(`${tests.length-failed}/${tests.length} battle-drop tests passed`);process.exitCode=failed?1:0;
+test('每个掉落项的拾取卡图标都在仓库里（prop SVG / PNG 至少一份）',()=>{
+  /* 2026-11 用户报「联机竞技场悬浮奖励显示不出来」：拾取卡图标是动态拼出来的，
+   * `check-asset-paths` 只认字面量路径，扫不到这里；联机包曾只留了 draw-15，
+   * 结果金松果 / 卷轴 / 药剂的卡片都是空图。现在统一走 `propIconSrc`，逐项验文件。 */
+  const g=setup();
+  const ids=[...new Set([...g.c.BattleDrops.pool,...g.c.BattleDrops.ladderPool].map(x=>x.id))];
+  const missing=[];
+  for(const id of ids){
+    const base=path.join(project,'images/ui/icons/prop/prop-'+id);
+    if(!fs.existsSync(base+'.svg') && !fs.existsSync(base+'.png')) missing.push('prop-'+id);
+  }
+  assert.deepEqual(missing,[],'拾取卡图标缺失：'+missing.join(', '));
+});
+
+
+(async()=>{let failed=0;for(const[name,run]of tests){try{await run();console.log('PASS',name);}catch(error){failed++;console.error('FAIL',name,error.stack);}}
+console.log(`${tests.length-failed}/${tests.length} battle-drop tests passed`);process.exitCode=failed?1:0;})();

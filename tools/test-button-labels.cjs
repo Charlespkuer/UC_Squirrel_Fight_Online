@@ -35,7 +35,6 @@ const FILES = [
   'js/classic-ui.js',
   'js/classic-extras.js',
   'js/classic-fusion.js',
-  'js/ui.js',
   'js/debug.js',
   'js/tower-ui.js',
 ];
