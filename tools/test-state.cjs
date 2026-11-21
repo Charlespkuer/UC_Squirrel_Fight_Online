@@ -1999,6 +1999,32 @@ test('绝对防御挡下多段攻击时整段都不掉血（西瓜刀连击 / �
   assert.ok(multiHit > 0, '样本里应当出现「多段攻击撞上绝对防御」，实测 ' + multiHit);
 });
 
+test('绝对防御的反伤最多打到只剩 1 血，且这一下不触发装死', () => {
+  /* 用户 2026-11-21 口径：绝对防御（16）的反弹不再把出手方直接反死 ——
+   * 无论有没有装死都最多留 1 血，且这一下不进装死判定（不触发、也不消耗技能 6）。 */
+  const g = game(), Sim = g.Sim;
+  let capped = 0;
+  for (const hasFakeDie of [false, true]) {
+    for (let t = 0; t < 200; t++) {
+      const me = fighter({ hp: 40, maxHp: 40, power: 90, agility: 40, speed: 60,
+        skills: hasFakeDie ? ['6:1'] : [], weapons: ['3:10'] });
+      const foe = fighter({ hp: 4000, maxHp: 4000, power: 20, agility: 30, speed: 1,
+        skills: ['16:15'] });
+      let prev = me.hp;
+      for (const r of Sim.simulate(me, foe).rounds) {
+        if (r.jueDui) {
+          assert.ok(!r.fakeDie, '绝对防御的反伤不能触发装死');
+          assert.ok(prev - (Number(r.reboundHurt) || 0) >= 1,
+            '绝对防御的反伤最多打到只剩 1 血，实测 ' + prev + ' - ' + (Number(r.reboundHurt) || 0));
+          if (prev - (Number(r.reboundHurt) || 0) === 1) capped++;
+        }
+        if (r.hpAfter) prev = r.hpAfter[0];
+      }
+    }
+  }
+  assert.ok(capped > 20, '样本里应当出现「反弹截到 1 血」，实测 ' + capped);
+});
+
 test('反击口径：只有近战武器与普攻能触发反击（远程 / 技能 / 已反伤都不行）', () => {
   /* 2026-10 第八十批用户口径。这里**不锁随机流**：断言的是**结构性**规则 ——
    * 「某类回合里一次反击都不该出现」（由代码分支决定，与随机无关），

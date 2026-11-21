@@ -150,7 +150,14 @@
     invalidateSvgTextLayout(ui);
     if (mode === 'title') { try { drawHomeBg(ctx, homeBgBlur()); } catch (e) {} }
   }
-  window.addEventListener('resize', () => fitCanvas());
+  // 窗口拖动/分屏会连发多拍 resize；每拍都量布局+重画数字会把主线程占满。
+  let fitFrame = 0;
+  function scheduleFit() {
+    if (fitFrame) return;
+    const raf = window.requestAnimationFrame || ((fn) => setTimeout(fn, 16));
+    fitFrame = raf(() => { fitFrame = 0; try { fitCanvas(); } catch (e) {} });
+  }
+  window.addEventListener('resize', scheduleFit);
 
   // 存档里的本机偏好（音量/静音/分辨率/全面屏）；存档还没载入时用 localStorage 兜底。
   function settingsSnapshot() {

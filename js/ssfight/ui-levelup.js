@@ -146,10 +146,13 @@
   }
 
   function wireConfirm(view) {
-    if (!view || !view.g) return;
+    if (!view || !view.g) return false;
+    let bound = false;
     for (const depth of ['20', '22']) {
       const n = view.g.querySelector(':scope > [depth="' + depth + '"]');
-      if (!n || n.__sfLevelUpBound) continue;
+      if (!n) continue;
+      bound = true;
+      if (n.__sfLevelUpBound) continue;
       n.__sfLevelUpBound = true;
       n.style.pointerEvents = 'auto';
       n.style.cursor = 'pointer';
@@ -169,7 +172,50 @@
         n.addEventListener('mouseleave', () => { n.style.filter = ''; });
       }
     }
+    return bound;
   }
+  // 原版「确定」是 SVG 里的 g：桌面 Chrome 能点到，但部分 WebView/Safari 的
+  // pointer-events 继承和触摸兜底会把它算到背景上。再加一颗透明 DOM 按钮盖在
+  // 同一个位置，作为唯一可靠的确认热区；视觉仍由原版按钮负责。
+  function clearConfirmHotspot() {
+    if (!state || !state.confirmHotspot) return;
+    try { state.confirmHotspot.remove(); } catch (e) {  }
+    state.confirmHotspot = null;
+  }
+  function placeConfirmHotspot(view) {
+    if (!state || !state.stage || !view || !view.g) return;
+    const node = view.g.querySelector(':scope > [depth="20"]') ||
+      view.g.querySelector(':scope > [depth="22"]');
+    if (!node) return;
+    let stageRect, nodeRect;
+    try {
+      stageRect = state.stage.getBoundingClientRect();
+      nodeRect = node.getBoundingClientRect();
+    } catch (e) { return; }
+    if (!(stageRect.width > 0 && stageRect.height > 0 && nodeRect.width > 0 && nodeRect.height > 0)) return;
+    const sx = stageRect.width / (state.stage.offsetWidth || 1);
+    const sy = stageRect.height / (state.stage.offsetHeight || 1);
+    let btn = state.confirmHotspot;
+    if (!btn || !btn.isConnected) {
+      btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'sf-levelup-confirm-hotspot';
+      btn.setAttribute('aria-label', '确定');
+      btn.setAttribute('data-levelup-confirm', '1');
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        confirmReward();
+      });
+      state.stage.appendChild(btn);
+      state.confirmHotspot = btn;
+    }
+    btn.style.left = ((nodeRect.left - stageRect.left) / sx).toFixed(2) + 'px';
+    btn.style.top = ((nodeRect.top - stageRect.top) / sy).toFixed(2) + 'px';
+    btn.style.width = (nodeRect.width / sx).toFixed(2) + 'px';
+    btn.style.height = (nodeRect.height / sy).toFixed(2) + 'px';
+  }
+
   function pageIndicator(view, page, total) {
     if (!view || !view.g) return;
     let t = view.g.querySelector(':scope > .sf-levelup-page');
@@ -207,14 +253,20 @@
     return chunks(entriesFor(state.ups[state.upIndex] || {}), 4);
   }
   function showSplash() {
+    try { showSplashImpl(); }
+    catch (e) { err(e); showFallback(); }
+  }
+  function showSplashImpl() {
     if (!state || !state.view) return;
     const up = state.ups[state.upIndex];
     if (!up) { afterRewards(); return; }
+    clearConfirmHotspot();
     state.phase = 'reward';
     state.page = 0;
     state.pages = currentPages();
     state.ready = false;
     state.lock = false;
+    state.rewardAt = Date.now();
     state.host.classList.remove('sf-levelup-bg-only');
     if (state.ws) state.ws.hidden = true;
     state.view.gotoAndStop(1);
@@ -231,12 +283,19 @@
     }, wait);
   }
   function showReward() {
+    try { showRewardImpl(); }
+    catch (e) { err(e); showFallback(); }
+  }
+  function showRewardImpl() {
     if (!state || !state.view) return;
+    clearConfirmHotspot();
     const pages = currentPages();
     state.pages = pages;
     if (state.page >= pages.length) state.page = pages.length - 1;
     const cards = pages[state.page] || [];
     const view = state.view;
+    state.phase = 'reward';
+    state.rewardAt = Date.now();
     state.host.classList.remove('sf-levelup-bg-only');
     if (state.ws) state.ws.hidden = true;
     view.gotoAndStop(30);
@@ -251,9 +310,22 @@
       for (let i = 0; i < cards.length && i < 4; i++) setCard(fp, i + 1, cards[i]);
     }
     pageIndicator(view, state.page, pages.length);
-    wireConfirm(view);
+    const bound = wireConfirm(view);
     markBackground(view);
     state.ready = true;
+    if (!bound) {
+      // 7795 结构在这一版素材/浏览器上找不到确认节点：直接退回有 DOM 确定键的奖励卡。
+      showFallback();
+      return;
+    }
+    placeConfirmHotspot(view);
+    // WebView 刚切帧时 bbox 可能还要一拍；量不到就下一帧再补一次确认热区。
+    if (!state.confirmHotspot) {
+      const mine = state.seq;
+      setTimeout(() => {
+        if (state && state.seq === mine && state.phase === 'reward' && state.ready) placeConfirmHotspot(state.view);
+      }, 50);
+    }
   }
 
   function markBackground(view) {
@@ -326,17 +398,20 @@
 
   function hideChoicePanel() {
     if (!state) return;
+    clearConfirmHotspot();
     if (state.ws) { state.ws.hidden = true; state.ws.innerHTML = ''; }
     if (state.host) state.host.classList.remove('sf-levelup-bg-only');
   }
 
   function showChoice() {
     if (!state) return;
+    clearConfirmHotspot();
     state.phase = 'choice';
     state.ready = true;
     state.lock = false;
     state.wsError = '';
     state.wsAutoTries = 0;
+    state.phaseAt = Date.now();
     clearTimeout(state.timer);
     holdBackground();
     if (state.ws) {
@@ -370,6 +445,20 @@
   }
 
   function renderChoice() {
+    try { renderChoiceImpl(); }
+    catch (e) {
+      err(e);
+      if (!state || !state.ws) return;
+      state.wsBusy = false;
+      state.wsError = '升级选择面板加载失败，请重试。';
+      state.ws.hidden = false;
+      state.ws.innerHTML = '<div class="classic-modal small-modal sf-levelup-ws-modal" role="dialog" aria-modal="true" aria-label="升级奖励">' +
+        '<h2 class="modal-title cartoon">升级奖励</h2>' +
+        '<div class="modal-body"><p class="sf-levelup-error" role="alert">升级选择面板加载失败，请重试。</p>' +
+        '<div class="modal-buttons"><button type="button" class="uc-button gold" data-ws-random>重试</button></div></div></div>';
+    }
+  }
+  function renderChoiceImpl() {
     if (!state || !state.ws) return;
     if (state.wsBusy) {
       state.ws.innerHTML = '<div class="classic-modal small-modal sf-levelup-ws-modal" role="dialog" aria-modal="true" aria-label="升级奖励">' +
@@ -473,8 +562,14 @@
   }
 
   function showDone() {
+    try { showDoneImpl(); }
+    catch (e) { err(e); close(); }
+  }
+  function showDoneImpl() {
     if (!state || !state.ws) return;
+    clearConfirmHotspot();
     state.phase = 'done';
+    state.phaseAt = Date.now();
     state.ready = true;
     holdBackground();
     const learned = state.wsLearned.length
@@ -522,9 +617,11 @@
 
   function showFallback() {
     if (!state) return;
+    clearConfirmHotspot();
     state.loading = false;
     state.fallback = true;
     state.phase = 'reward';
+    state.phaseAt = Date.now();
     state.ready = true;
     state.lock = false;
     state.pages = [];
@@ -561,10 +658,22 @@
       state.stage.style.height = h + 'px';
       state.stage.style.transform = 'scale(' + (rect.width / w).toFixed(6) + ',' + (rect.height / h).toFixed(6) + ')';
     }
+    if (state.phase === 'reward' && state.ready && state.view) placeConfirmHotspot(state.view);
   }
 
   function rootParent() {
     return document.getElementById('app') || document.body;
+  }
+
+  // 任何路径留下的空 root 都会整屏拦截点击，表现成「卡在升级页，只能刷新」。
+  // 每次建窗、关窗和看门狗空转时都清一遍；只保留当前 state 的 root。
+  function removeOrphanRoots(keep) {
+    let list = [];
+    try { list = document.querySelectorAll ? document.querySelectorAll('.sf-levelup-root') : []; } catch (e) { list = []; }
+    for (const el of list) {
+      if (keep && el === keep) continue;
+      try { el.remove(); } catch (e) {  }
+    }
   }
 
   function ensureRoot(st) {
@@ -608,6 +717,7 @@
       st.ws = ws;
       const parent = rootParent();
       if (!parent) return false;
+      removeOrphanRoots(root);
       parent.appendChild(root);
       try { root.focus({ preventScroll: true }); } catch (e) {}
       syncGeometry();
@@ -616,6 +726,7 @@
     if (!st.root.isConnected) {
       const parent = rootParent();
       if (!parent) return false;
+      removeOrphanRoots(st.root);
       parent.appendChild(st.root);
       syncGeometry();
     }
@@ -647,6 +758,9 @@
     st.loadTimer = failTimer;
     SfRender.load().then(() => {
       if (state !== st || st.seq !== mine) return null;
+      // 已经切到 DOM 兜底就不要再 mount：mountSymbol 会先清空 host，
+      // 慢网下 7795 读完后清掉兜底奖励卡，弹窗就只剩背景、没有确定键。
+      if (st.fallback || !st.loading) return null;
       const host = st.host;
       if (!host || !host.isConnected) return null;
       return SfRender.mountSymbol(host, '7795', {
@@ -656,10 +770,13 @@
       clearTimeout(failTimer);
       if (!view) return;
       if (state !== st || st.seq !== mine) { try { view.destroy(); } catch (e) {  } return; }
-      // 加载超时已经切到 DOM 兜底：迟到的 7795 不能再把兜底页顶掉。
+      // 加载超时已经切到 DOM 兜底：迟到的 7795 不能把兜底页顶掉；
+      // 如果它已经清了 host，就重画一次兜底卡，保证按钮仍在。
       if (st.fallback) {
         try { view.destroy(); } catch (e) {  }
-        if (st.host) st.host.innerHTML = '';
+        // 只在仍在奖励页时重画兜底；玩家已经点进三选一/完成页时，
+        // 迟到的 7795 不能把阶段倒回去。
+        if (state.phase === 'reward' && state.ready) showFallback();
         return;
       }
       st.view = view;
@@ -692,16 +809,30 @@
       showFallback();
       return;
     }
+    // 奖励页切帧后迟迟没有 ready（WebView 偶发 gotoAndStop 后布局不落地）：
+    // 直接换 DOM 奖励卡，保证一定有可点的「确定」。
+    if (st.phase === 'reward' && !st.ready && st.rewardAt && Date.now() - st.rewardAt > 5000) {
+      showFallback();
+      return;
+    }
     if (st.phase === 'choice') {
       if (!pendingWs() && !st.wsBusy) { showDone(); return; }
       if (pendingWs() && !st.wsBusy) {
         let list = [];
         try { list = State.currentWSChoices() || []; } catch (e) { list = []; }
+        // 面板被页面重建 / 异常清空时，别让玩家对着透明层干等。
+        if (st.ws && !st.ws.innerHTML.trim() && st.phaseAt && Date.now() - st.phaseAt > 1500) {
+          renderChoice();
+          return;
+        }
         if (!list.length && !st.wsAutoPending && !st.wsError && st.wsAutoTries < 3) {
           st.wsAutoPending = true;
           setTimeout(() => { if (state === st && st.phase === 'choice' && !st.wsBusy) chooseRandom(); }, 300);
         }
       }
+    }
+    if (st.phase === 'done' && st.ws && !st.ws.querySelector('[data-lv-done]') && st.phaseAt && Date.now() - st.phaseAt > 1200) {
+      showDone();
     }
   }
 
@@ -709,12 +840,14 @@
     if (!state) return;
     const st = state;
     state = null;
+    clearView(st);
     clearTimeout(st.timer);
     clearTimeout(st.loadTimer);
-    clearView(st);
+    if (st.confirmHotspot) { try { st.confirmHotspot.remove(); } catch (e) {  } }
     if (st.root && st.root.parentNode) {
       try { st.root.parentNode.removeChild(st.root); } catch (e) {  }
     }
+    removeOrphanRoots(null);
     const callbacks = st.callbacks.slice();
     for (const cb of callbacks) {
       if (!cb || typeof cb.onDone !== 'function') continue;
@@ -735,9 +868,11 @@
     clearTimeout(st.timer);
     clearTimeout(st.loadTimer);
     clearView(st);
+    if (st.confirmHotspot) { try { st.confirmHotspot.remove(); } catch (x) {  } }
     if (st.root && st.root.parentNode) {
       try { st.root.parentNode.removeChild(st.root); } catch (x) {  }
     }
+    removeOrphanRoots(null);
     const callbacks = st.callbacks.slice();
     for (const cb of callbacks) {
       if (!cb) continue;
@@ -772,6 +907,9 @@
       stage: null,
       host: null,
       ws: null,
+      confirmHotspot: null,
+      rewardAt: 0,
+      phaseAt: 0,
       timer: 0,
       loadTimer: 0,
       loadStart: 0,
@@ -891,6 +1029,7 @@
         } else {
           wsPendingSince = 0;
         }
+        if (!state && document.querySelector('.sf-levelup-root')) removeOrphanRoots(null);
       } catch (e) { err(e); }
     }, 500);
     if (watch && typeof watch.unref === 'function') watch.unref();
@@ -898,6 +1037,19 @@
       window.addEventListener('resize', () => { try { syncGeometry(); } catch (e) {  } });
       if (window.visualViewport && window.visualViewport.addEventListener) {
         window.visualViewport.addEventListener('resize', () => { try { syncGeometry(); } catch (e) {  } });
+      }
+      // 网页端从 bfcache / 切后台回来时补一拍：断网重连或页面被冻结后，
+      // 不能让升级弹窗停在旧的布局/旧的阶段里。
+      const recheck = () => {
+        try {
+          if (state) tick();
+          else if (pendingWs()) sync();
+          else removeOrphanRoots(null);
+        } catch (e) { err(e); }
+      };
+      window.addEventListener('pageshow', recheck);
+      if (typeof document !== 'undefined' && document.addEventListener) {
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) recheck(); });
       }
     }
   }

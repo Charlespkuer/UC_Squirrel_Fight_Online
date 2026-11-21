@@ -1890,12 +1890,25 @@
   function fitDetailDescription(root) {
     const box = root && root.querySelector ? root.querySelector('.bag-detail .bag-description') : null;
     if (!box) return;
-    let size = 39;
-    box.style.fontSize = size + 'px';
-    while (size > 24 && box.scrollHeight > box.clientHeight + 1) {
-      size -= 1;
-      box.style.fontSize = size + 'px';
+    // 同一段文案 + 同一块高度只量一次；逐级 39→24 的写-读循环最多 16 次强制布局。
+    const key = (box.textContent || '') + '|' + box.clientWidth + 'x' + box.clientHeight;
+    if (box.__fitKey === key) {
+      if (box.style.fontSize !== box.__fitSize + 'px') box.style.fontSize = box.__fitSize + 'px';
+      return;
     }
+    const fits = (size) => { box.style.fontSize = size + 'px'; return box.scrollHeight <= box.clientHeight + 1; };
+    let best = 24;
+    if (fits(39)) best = 39;
+    else if (fits(24)) {
+      let lo = 24, hi = 39;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (fits(mid)) { best = mid; lo = mid + 1; } else hi = mid - 1;
+      }
+    }
+    box.style.fontSize = best + 'px';
+    box.__fitKey = key;
+    box.__fitSize = best;
   }
   /* 页脚两颗入口（每日抽奖 / 金杯商店）是定宽胶囊：安卓回退字体比 Windows 宽 1.4~1.5 倍时，
    * 四个字会顶到圆角甚至被裁掉半个字（上下也会顶到白圈）。按实际宽/高把字号从 26 收到 14，
@@ -2000,8 +2013,11 @@
     function selectProp(id) {
       if (!p.isConnected || !shown.some(it=>it.id===id) || id===selectedProp) return;
       selectedProp=id;
+      // 只重画"选中态真的变了"的两格（旧选中/新选中）：其余格子的图标每移动一次都重建
+      // 一次 SVG 字符串，是背包悬停的主要开销。
       for (const cell of $$('[data-prop]',p)) {
         const on=+cell.dataset.prop===id;
+        if (cell.classList.contains('selected') === on) continue;
         cell.classList.toggle('selected',on);
         cell.setAttribute('aria-pressed',String(on));
         $('.item-icon',cell).innerHTML=icon('prop',+cell.dataset.prop,false,on);
@@ -2889,6 +2905,7 @@
     if (pendingChoiceWatch || typeof setInterval !== 'function') return;
     pendingChoiceWatch = setInterval(() => {
       try {
+        if (typeof document !== 'undefined' && document.hidden) return;
         if (typeof State === 'undefined' || typeof State.pendingWS !== 'function' || State.pendingWS() <= 0) return;
         if (document.querySelector('.ws-choice-dialog')) return;
         if (battleUiBusy()) return;

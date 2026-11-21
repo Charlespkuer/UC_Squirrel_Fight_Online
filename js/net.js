@@ -27,6 +27,9 @@
   };
   const DISCOVER_CACHE_MS = 30 * 1000;
   const META_CACHE_MS = 30 * 1000;
+  // 同一屏会并发拉同一条只读接口（例如状态页同时请求好友 / 师徒 / 红点）。
+  // 共享 in-flight Promise，弱网下少发一半请求，也避免多个响应互相覆盖。
+  const inflightGets = new Map();
 
   function readStored(key) {
     try {
@@ -378,6 +381,28 @@
     return next;
   }
 
+  // 只读 GET：同 URL 共享在途请求；网络错误 / 5xx 立即重试一次。
+  // 写请求仍走串行队列，不能被重试掩盖服务端是否已执行。
+  function getShared(path, opts) {
+    const o = Object.assign({}, opts || {});
+    if (o.timeoutMs == null) o.timeoutMs = 10000;
+    const key = [state.base, path, o.auth !== false, o.device !== false].join('|');
+    const current = inflightGets.get(key);
+    if (current) return current;
+    const task = (async () => {
+      try {
+        return await request('GET', path, undefined, o);
+      } catch (e) {
+        if (!e || !(e.status === 0 || e.status >= 500)) throw e;
+        return request('GET', path, undefined, o);
+      }
+    })();
+    inflightGets.set(key, task);
+    task.then(() => { if (inflightGets.get(key) === task) inflightGets.delete(key); },
+      () => { if (inflightGets.get(key) === task) inflightGets.delete(key); });
+    return task;
+  }
+
   const net = {
     NetError,
     deviceIdentity,
@@ -391,18 +416,20 @@
         state.discoveredResult = null;
         state.metaCache = null;
         state.metaAt = 0;
+        inflightGets.clear();
         writeStored(BASE_KEY, state.base);
       }
       if (token !== undefined) net.setToken(token);
       return state.base;
     },
     base: () => state.base,
-    get: (path, opts) => request('GET', path, undefined, opts),
+    get: (path, opts) => getShared(path, opts),
     post: (path, body, opts) => request('POST', path, body || {}, opts),
     del: (path, opts) => request('DELETE', path, undefined, opts),
     token: () => state.token,
     setToken(token) {
       state.token = String(token || '');
+      inflightGets.clear();
       writeStored(TOKEN_KEY, state.token);
     },
     account() { return state.account; },
@@ -423,6 +450,7 @@
     clearSession() {
       state.token = '';
       state.account = null;
+      inflightGets.clear();
       writeStored(TOKEN_KEY, '');
       writeStored(ACCOUNT_KEY, '');
     },

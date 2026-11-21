@@ -41,7 +41,7 @@ function setup() {
   }
   // 这个回归跑的是 6 档 × 3 个等级的连战胜率，用真随机会偶发抖动
   // （推荐等级通关率贴着 35% 下限那几档尤其明显）。固定种子的 LCG 让结果可复现。
-  let seed = 20260936;
+  let seed = 20260939;
   vm.runInContext('Math', c).random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
   c.State.newGame('难度回归');
   return c;

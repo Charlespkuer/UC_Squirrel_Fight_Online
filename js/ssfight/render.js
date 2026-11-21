@@ -91,11 +91,21 @@
 
   async function loadExtra(file) {
     cancelExtraRelease(file);
-    const b = await load();
-    if (b.extra && b.extra.has(file)) return b;
+    if (loaded() && bundle.extra && bundle.extra.has(file)) return bundle;
     if (extraPromises.has(file)) return extraPromises.get(file);
     const pending = (async () => {
-      const list = await fetchJsonRetry(file);
+      // 基础 tags 与该页的额外包互不依赖：慢网下先各发一条请求，别让 450KB 的
+      // `tags.json` 把 `tags-gear.json` 这类整页素材排到后面。
+      const baseP = load();
+      // 下一拍再发：基础 tags 先占住同一批连接，extra 紧随其后，不和基础包抢首个请求；
+      // 两者仍然并行，而不是等 `tags.json` 下载完再排队。
+      const extraP = Promise.resolve().then(() => fetchJsonRetry(file));
+      extraP.catch(() => {});
+      let b;
+      try { b = await baseP; }
+      catch (e) { extraP.catch(() => {}); throw e; }
+      if (b.extra && b.extra.has(file)) { extraP.catch(() => {}); return b; }
+      const list = await extraP;
       const exactGear = file === 'tags-gear.json' || file === 'tags-gear-color.json';
       b.extraLists.set(file, list);
       rebuildHash(exactGear);
@@ -105,7 +115,7 @@
     })();
     extraPromises.set(file, pending);
     try { return await pending; }
-    finally { extraPromises.delete(file); }
+    finally { if (extraPromises.get(file) === pending) extraPromises.delete(file); }
   }
 
   function cancelExtraRelease(file) {

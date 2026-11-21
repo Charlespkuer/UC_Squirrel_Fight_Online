@@ -58,7 +58,24 @@ const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),asse
   assert.equal(calls.at(-1).url.endsWith('/api/messages/badge'),true,'parallel read reached fetch out of the queue');
   for(const done of pendingReplies)done({ok:true,status:200,text:async()=>JSON.stringify({ok:true})});
   await Promise.all([busy,parallel]);
-  console.log('PASS installed client API/session lifecycle, expired login, response-body deadline and parallel polling');
+  /* 只读 GET：同一 URL 共享在途请求；5xx/网络失败只重试一次，写请求不重试。 */
+  let retryCount=0;
+  const retryReplies=[
+    {ok:false,status:503,text:async()=>JSON.stringify({ok:false,error:{code:'SERVER',msg:'busy'}})},
+    {ok:true,status:200,text:async()=>JSON.stringify({ok:true})},
+  ];
+  reply=()=>retryReplies[retryCount++];
+  assert.equal((await N.get('/api/health')).ok,true);
+  assert.equal(retryCount,2,'GET 503 应当重试一次');
+  let dedupe=[];
+  reply=()=>new Promise(resolve=>dedupe.push(resolve));
+  const beforeDedupe=calls.length;
+  const getA=N.get('/api/profile'), getB=N.get('/api/profile');
+  for(let i=0;i<6;i++)await Promise.resolve();
+  assert.equal(calls.length,beforeDedupe+1,'相同在途 GET 只发一次');
+  for(const done of dedupe)done({ok:true,status:200,text:async()=>JSON.stringify({ok:true})});
+  await Promise.all([getA,getB]);
+  console.log('PASS installed client API/session lifecycle, expired login, response-body deadline, parallel polling, GET retry/dedupe');
 
   // Device preferences and a battle-retry save must survive authority resync,
   // while logout/expiration actually detach the previous account.

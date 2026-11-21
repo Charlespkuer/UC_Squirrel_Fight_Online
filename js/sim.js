@@ -738,9 +738,15 @@
 
     // 反伤 / 反噬打到「出手方」身上时的结算：和普通伤害走同一条致死保护链
     // 触发时装死的老规矩照旧：hp = 1、清掉眩晕、并立刻获得一次行动（同 applyDamage 那条路径）。
-    function reflectHurt(target, amount, r) {
-      const dmg = Math.max(0, Math.round(Number(amount) || 0));
+    // `opts.noKill`（绝对防御）：最多留 1 血，且这一下不进装死判定 —— 不触发、不消耗技能 6。
+    function reflectHurt(target, amount, r, opts) {
+      let dmg = Math.max(0, Math.round(Number(amount) || 0));
       if (!target || dmg <= 0 || target.hp <= 0) return 0;
+      if (opts && opts.noKill) {
+        dmg = Math.min(dmg, Math.max(0, Math.floor(Number(target.hp) || 0) - 1));
+        target.hp -= dmg;
+        return dmg;
+      }
       if (target.hp - dmg <= 0 && target.skills && target.skills[6] && target.silence <= 0 && !target.usedFakeDie) {
         target.usedFakeDie = true;
         target.hp = 1;
@@ -876,9 +882,9 @@
           r.reflectBlocked = (r.reflectBlocked || 0) + red.rebound;
           r.noteText = (r.noteText ? r.noteText + '·' : '') + '反噬豁免'; r.noteSide = att.side;
         } else {
-          r.reboundHurt = red.rebound;
-
-          reflectHurt(att, red.rebound, r);
+          // 绝对防御的反弹只打到 1 血为止（`noKill`）：实际扣多少就记多少，
+          // 回放层用 `reboundHurt` 反推出手方血量，不能记成没打出去的理论值。
+          r.reboundHurt = reflectHurt(att, red.rebound, r, { noKill: true });
         }
       }
       if (dmg > 0) {

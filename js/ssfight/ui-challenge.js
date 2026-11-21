@@ -263,24 +263,26 @@
     return gearTables;
   }
 
+  // 立绘帧号的唯一映射：showFace 挂装备、悬停签名做短路都读这里。
+  // 强化档/橙装规则只改这一处，避免两套帧号算出不同画面。
+  function faceFrameOf(type, g) {
+    if (!g || !gearTables) return 0;
+    const orange = !!(g.orange === true || Number(g.quality) > 3);
+    const base = (orange && gearTables.orangeFrameById && gearTables.orangeFrameById.get(Number(g.id))) ||
+      gearTables.frameById.get(Number(g.id));
+    const raw = g.ext;
+    const extMax = Math.max(0, Math.min(3, Array.isArray(raw)
+      ? raw.reduce((m, e) => Math.max(m, Number(e && e.level) || 0), 0)
+      : Number(raw) || 0));
+    const addr = (type === 0 || type === 1) && extMax > 0 ? extMax - 1 : 0;
+    return base ? base + addr : 0;
+  }
   function showFace(bg, byType) {
     if (!bg || !gearTables) return 0;
     let n = 0;
     for (const row of FACE_PARTS) {
       const g = byType[row.type];
-      const orange = !!(g && (g.orange === true || Number(g.quality) > 3));
-      const base = g
-        ? ((orange && gearTables.orangeFrameById && gearTables.orangeFrameById.get(Number(g.id))) ||
-           gearTables.frameById.get(Number(g.id)))
-        : 0;
-      // 与状态页同源：附加属性是数组，只对头/拳套应用最大强化档；
-      // 衣服/鞋子跨档会变成另一套画稿，不能一起加偏移。
-      const raw = g && g.ext;
-      const extMax = Math.max(0, Math.min(3, Array.isArray(raw)
-        ? raw.reduce((m, e) => Math.max(m, Number(e && e.level) || 0), 0)
-        : Number(raw) || 0));
-      const addr = (row.type === 0 || row.type === 1) && extMax > 0 ? extMax - 1 : 0;
-      const frame = base ? base + addr : 0;
+      const frame = faceFrameOf(row.type, g);
       for (const pair of row.cells) {
         const clip = bg.byName ? bg.byName(pair[0]) : null;
         if (!clip || !clip.detachAll) continue;
@@ -327,6 +329,24 @@
     paintStats(view, foe || null);
   }
 
+  // 悬停换行时立绘要挂 8 个装备子元件（每次 attachChild 都要重跑一遍 188 帧的容器），
+  // 跟着 pointermove 同步做会把 4 行切换拖成每步几十毫秒。高亮/数值先落地，立绘等指针停一拍。
+  let faceSeq = 0, faceTimer = 0;
+  function cancelFace() {
+    faceSeq++;
+    if (faceTimer) { clearTimeout(faceTimer); faceTimer = 0; }
+  }
+  function scheduleFace(bg, byType, sig) {
+    if (faceTimer) { clearTimeout(faceTimer); faceTimer = 0; }
+    if (bg.__faceSig === sig) return;
+    const seq = ++faceSeq;
+    faceTimer = setTimeout(() => {
+      faceTimer = 0;
+      if (seq !== faceSeq || !bg.g || !bg.g.isConnected) return;
+      bg.__faceSig = sig;
+      showFace(bg, byType);
+    }, 45);
+  }
   function showUserPic(view, foe) {
     const bg = clipOf(view, 'rightBg');
     if (!bg) return;
@@ -338,6 +358,8 @@
     if (!foe || dummy) {
       // 木桩那一档没有四维字段、也没有战斗力那一排位图数字（f3 里 `hp`/`power`/`num1..5`
       // 都已经被 `rm` 掉了），所以这里不能照常写值 —— `byName` 拿不到就什么也不写。
+      cancelFace();
+      bg.__faceSig = '';
       paintStatsIfPresent(view, bg, foe);
       return;
     }
@@ -348,7 +370,9 @@
       if (!Number.isFinite(ty)) continue;
       if (byType[ty] === undefined) byType[ty] = g;
     }
-    showFace(bg, byType);
+    // `rightBg` 的帧 + 四个部位的画稿帧 = 立绘是否真的变了；同一行重复进出不重挂。
+    const sig = bg.frame + '|' + FACE_PARTS.map((row) => faceFrameOf(row.type, byType[row.type])).join(',');
+    scheduleFace(bg, byType, sig);
     paintStats(view, foe);
   }
 
@@ -688,6 +712,13 @@
   function setRowTexts(row, item, idx) {
     if (!row || !row.byName) return;
     const index = Number.isFinite(idx) ? idx : -1;
+    // 换帧会重建文本节点，所以签名必须含当前帧；同一帧同一行数据重复调用直接跳过。
+    let whoLabel = '';
+    try { if (item && window.__SSDZ_ONLINE__ && window.OnlineUI && OnlineUI.identity) whoLabel = OnlineUI.identity(item).label || ''; } catch (e) {}
+    const rowSig = (row.__shownFrame == null ? '' : row.__shownFrame) + '|' + (item
+      ? [item.name, item.level, item.vipLevel, item.accountId, item.realId, whoLabel].join('|') : '');
+    if (row.__rowSig === rowSig) return;
+    row.__rowSig = rowSig;
     const vipLevel = item ? Math.max(0, Math.min(VIP_MAX_LEVEL, Math.floor(Number(item.vipLevel) || 0))) : 0;
     const nameClip = row.byName('friendname');
     setText(nameClip, item ? item.name : '');
@@ -798,11 +829,23 @@
     if (!current) return;
     current.sel = i;
     if (current.tab === 'random' && randomCacheMatches(randomCache, S())) randomCache.sel = i;
+    const touched = [];
     for (let k = 0; k < 4; k++) {
       const row = clipOf(current.view, 'f' + (k + 1));
-      if (row && row.gotoAndStop) { stopAt(row, k === i ? 2 : 1); refreshShell(row); }
+      if (!row || !row.gotoAndStop) continue;
+      const want = k === i ? 2 : 1;
+      // 只有真的换帧的行才重建了子树：其余行的文字/反馈壳都还在，不必跟着重画。
+      const changed = row.frame !== want - 1;
+      stopAt(row, want);
+      if (changed) { refreshShell(row); touched.push(k); }
     }
-    repaintRows();
+    // 换帧会重建该行的文本节点（导出数据里昵称/等级带 rp），只补这几行。
+    for (const k of touched) {
+      const row = clipOf(current.view, 'f' + (k + 1));
+      const item = (current.rows || [])[k] || null;
+      setRowTexts(row, item, k);
+      setRowVip(current.view, k, item);
+    }
     showUserPic(current.view, foeAt(i));
   }
   function fightRow(i) {
@@ -2831,6 +2874,7 @@
   }
   function destroyView() {
     clearRefreshTimer();
+    cancelFace();
     if (current) {
       closeSub();
       if (current.view) { try { current.view.destroy(); } catch (e) {} }

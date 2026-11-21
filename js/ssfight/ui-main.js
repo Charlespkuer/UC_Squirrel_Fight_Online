@@ -613,14 +613,18 @@
       : (S.nextExp || 1));
 
     const nameClip = main.byName('name');
-    setText(nameClip, S.name);
-    // 昵称最多 7 个汉字（英文/数字按 1/3 计，最多 21 个字母）。原版字段框只有
-    styleName(main);
-    if (window.SfRender && SfRender.fitTextWidth) {
-      SfRender.fitTextWidth(nameClip, { ascii: 0.72, spacing: 0.4, min: 6 });
+    // 昵称一秒重写一次会反复重建文本/量宽度/写描边；只有名字或字段节点换了才做。
+    if (view.__nameSig !== S.name || view.__nameClip !== nameClip) {
+      view.__nameSig = S.name;
+      view.__nameClip = nameClip;
+      setText(nameClip, S.name);
+      // 昵称最多 7 个汉字（英文/数字按 1/3 计，最多 21 个字母）。原版字段框只有
+      styleName(main);
+      if (window.SfRender && SfRender.fitTextWidth) {
+        SfRender.fitTextWidth(nameClip, { ascii: 0.72, spacing: 0.4, min: 6 });
+      }
+      paintNicknameStroke(nameClip);
     }
-
-    paintNicknameStroke(nameClip);
     // 等级冻结 / 满级时经验会超过本级需求：主界面固定显示 99.9%（999‰），
     // 经验条本身仍拉到满格；真实 exp/need 只在状态页显示。
     const expOver = S.exp >= nextExp;
@@ -711,10 +715,23 @@
       hit.appendChild(tip);
       host.appendChild(hit);
     }
+    const s = State.state();
+    let text;
+    if (s.energy > s.maxEnergy) text = '体力已超过自然上限（' + s.energy + '/' + s.maxEnergy + '），不会自然恢复';
+    else if (s.energy >= s.maxEnergy) text = '体力已满';
+    else {
+      const cd = State.energyCountdown ? State.energyCountdown() : '';
+      text = cd ? ('距离恢复 1 点体力还有 ' + cd) : '正在恢复体力…';
+    }
+    if (tip.textContent !== text) tip.textContent = text;
+    // 位置只跟布局/体力上限有关；倒计时文字每秒在变，但不必每秒量 5 个包围盒。
+    const posKey = [s.energy, s.maxEnergy, host.clientWidth, host.clientHeight].join('|');
+    if (hit.__tipKey === posKey) return;
     const nodes = ['energyMc', 'energy', 'maxEnergy']
       .map((n) => { const c = main.byName(n); return c && (c.g || c); })
       .filter(Boolean);
     if (!nodes.length) { hit.style.display = 'none'; return; }
+    hit.__tipKey = posKey;
     const hr = host.getBoundingClientRect();
     const hs = (stateLayoutProbe(host).scale) || 1;
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -728,15 +745,6 @@
     hit.style.top = (((y0 - hr.top) / hs) - 2) + 'px';
     hit.style.width = (((x1 - x0) / hs) + 4) + 'px';
     hit.style.height = (((y1 - y0) / hs) + 4) + 'px';
-    const s = State.state();
-    let text;
-    if (s.energy > s.maxEnergy) text = '体力已超过自然上限（' + s.energy + '/' + s.maxEnergy + '），不会自然恢复';
-    else if (s.energy >= s.maxEnergy) text = '体力已满';
-    else {
-      const cd = State.energyCountdown ? State.energyCountdown() : '';
-      text = cd ? ('距离恢复 1 点体力还有 ' + cd) : '正在恢复体力…';
-    }
-    if (tip.textContent !== text) tip.textContent = text;
   }
 
   // 把按钮接上复刻版的动作 + 原版 showButton 的悬停选中态（MainMovie.as:5804-5835：
@@ -760,7 +768,8 @@
       settleButton(clip);
       node.style.cursor = 'pointer';
       node.style.pointerEvents = 'auto';
-      measureHitBox(clip);
+      // setupHomeBar 已经给了固定命中框；再量一次当前帧只是多一次 getBBox。
+      if (!clip.__fixedHit) measureHitBox(clip);
       // 热区按所有帧的并集铺：这五键的四个帧是"常态/选中/禁用/空"，
       // `addHitArea` 内部有缓存（`__frameBoxes`），下面两次重铺不会重新量。
       addHitArea(clip, true);
@@ -841,7 +850,11 @@
   const HOME_BAR = ['button1', 'button2', 'button3', 'button4', 'button5'];
   const HOME_BAR_PAD = 3;
 
+  // 同一元件号/帧数的按钮并集是静态几何；主页每次重挂都重测 15 次 getBBox 是白烧。
+  const frameUnionCache = new Map();
   function measureFrameUnion(clip) {
+    const key = (clip && clip.tag && clip.tag.id ? String(clip.tag.id) : '') + '|' + (clip && clip.frames ? clip.frames.length : 1);
+    if (clip && clip.tag && clip.tag.id && frameUnionCache.has(key)) return frameUnionCache.get(key);
     let box = null;
     const absorb = (b) => { if (b && b.width && b.height) box = unionBox(box, { x: b.x, y: b.y, w: b.width, h: b.height }); };
     const keep = clip.frame;
@@ -852,6 +865,7 @@
       try { absorb(measureArtwork(clip)); } catch (e) {}
     }
     if (clip.frame !== keep) { clip.frame = keep; try { clip.showFrame(); } catch (e) {} }
+    if (clip && clip.tag && clip.tag.id && box) frameUnionCache.set(key, box);
     return box;
   }
 
@@ -1015,9 +1029,15 @@
       }
       return null;
     };
-    // 按当前布局刷新每个元件的"内容框 / 热区"（屏幕坐标）。每次指针事件都刷 —— 元件数很少，
-    // 而窗口缩放、翻页、换帧都会让旧的盒子失效，缓存反而容易出错。
+    // 按当前布局刷新每个元件的"内容框 / 热区"（屏幕坐标）。
+    // 命中框按「视图矩形 + 元件当前帧」缓存：pointermove 每帧重算会让每个登记件都
+    // 先改 display 再 getBoundingClientRect（同步 flush 布局），鼠标一滑就是十几次强制布局。
     const refresh = () => {
+      let viewKey = '';
+      try {
+        const sr = svg.getBoundingClientRect();
+        viewKey = sr.left + '|' + sr.top + '|' + sr.width + '|' + sr.height;
+      } catch (e) { viewKey = ''; }
       for (let i = list.length - 1; i >= 0; i--) {
         const e = list[i];
         if (!e.clip.g || e.clip.g.isConnected === false) {
@@ -1032,8 +1052,14 @@
           if ((n.style && (n.style.display === 'none' || n.style.visibility === 'hidden')) ||
               (n.getAttribute && n.getAttribute('visibility') === 'hidden')) { hidden = true; break; }
         }
-        if (hidden) { e.content = e.pad = null; continue; }
+        if (hidden) { e.content = e.pad = null; e.__boxKey = ''; continue; }
 
+        // `__shownFrame` 换了才可能改包围盒；缩放/窗口变化由 viewKey 兜住。
+        const boxKey = viewKey + '|' + (e.clip.__shownFrame == null ? '' : e.clip.__shownFrame) +
+          '|' + (e.clip.__hitBoxFrame == null ? '' : e.clip.__hitBoxFrame) +
+          '|' + (e.clip.__fixedHit ? 'f' : '');
+        if (e.content && e.__boxKey === boxKey) continue;
+        e.__boxKey = boxKey;
         if (e.clip.__fixedHit) {
           e.content = screenBox(e.clip, true);
           e.pad = null;
@@ -1050,6 +1076,9 @@
     const pick = (cx, cy) => {
 
       if (r.enabled === false) return null;
+      // 指针直接落在可见画稿上时走浏览器命中测试，不必先把所有元件的屏幕框重算一遍。
+      const dom = domPick(cx, cy);
+      if (dom) return dom;
       refresh();
 
       for (const e of list) {
@@ -1058,8 +1087,6 @@
         if (inBox(e.content, cx, cy)) return e;
       }
 
-      const dom = domPick(cx, cy);
-      if (dom) return dom;
       let best = null, bestArea = Infinity;
       for (const e of list) {
         if (!e.clip.g || e.clip.g.isConnected === false) continue;
@@ -1532,9 +1559,10 @@
     try { if (window.Main && Main.resizeLayout) Main.resizeLayout(); } catch (e) {}
 
     timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
       if (view.root.isConnected === false) { if (current === view) destroy(); return; }
+      // refreshValues 内部已经调过 renderStateIcons；不要再每秒重排一次药丸。
       try { refreshValues(view); } catch (e) { if (window.__errs) window.__errs.push('ui-main tick: ' + (e && e.message)); }
-      try { if (view.el) renderStateIcons(view.el, view); } catch (e) { if (window.__errs) window.__errs.push('state icons: ' + (e && e.message)); }
     }, 1000);
     current = view;
     return {

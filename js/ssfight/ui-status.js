@@ -166,6 +166,15 @@
 
   function dressParts(view, byType) {
     if (!view || !portraitContainerIds) return 0;
+    // 每秒的 fillValues 只有数值会变；立绘帧号没变就不 detach/attach ——
+    // 每次 attachChild 都会重跑 188 帧的容器，8 个部位就是每秒一次可见停顿。
+    const sig = FACE_PARTS.map((row) => {
+      const gear = byType[row.type];
+      const info = gear ? wearInfo(gear) : null;
+      return info ? info.frame : 0;
+    }).join(',');
+    if (view.__dressSig === sig) return 0;
+    view.__dressSig = sig;
     let n = 0;
     for (const row of FACE_PARTS) {
       const gear = byType[row.type];
@@ -2256,6 +2265,7 @@
     } catch (e) { if (window.__errs) window.__errs.push('status initial tab: ' + (e && e.message)); }
 
     current.timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
       if (!current || current.view !== view || current.tab !== 'status') return;
       try { fillValues(view); } catch (e) {}
     }, 1000);

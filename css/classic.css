@@ -268,10 +268,11 @@ html[data-ui-mode="classic"] .classic-page,
 .small-label .ws-full{color:#c0392b}
 .small-label .ws-ok{color:#4a8a24}
 
-.sf-gear-new{animation:sf-gear-new-pulse 1.15s ease-in-out infinite}
+/* 同活动键：静态滤镜 + 有限的 opacity 呼吸，避免每帧重算 drop-shadow。 */
+.sf-gear-new{filter:drop-shadow(0 0 5px #ffb300);animation:sf-gear-new-pulse 1.15s ease-in-out 3}
 @keyframes sf-gear-new-pulse{
-  0%,100%{filter:drop-shadow(0 0 2px #ffe066)}
-  50%{filter:drop-shadow(0 0 6px #ffc107) drop-shadow(0 0 11px #ff9800)}
+  0%,100%{opacity:.72}
+  50%{opacity:1}
 }
 @media (prefers-reduced-motion:reduce){.sf-gear-new{animation:none;filter:drop-shadow(0 0 5px #ffb300)}}
 

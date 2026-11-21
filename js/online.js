@@ -570,8 +570,9 @@
     call, predict, markResync, installGuards, installErrorToast,
 
     refreshBadge, markMessagesSeen,
-    // 读接口的薄封装（不带动作语义）。
-    get: (path, opts) => Net.get(path, opts),
+    // 读接口的薄封装（不带动作语义）。页面读默认绕过写队列：
+    // 弱网下一次慢 POST 不能把好友 / 师徒 / 邮箱的 GET 全堵在身后。
+    get: (path, opts) => Net.get(path, Object.assign({ parallel: true }, opts)),
     post: (path, body, opts) => enqueue(async () => {
       const options = Object.assign({}, opts, { owner: typeof Net.account === 'function' ? String((Net.account() || {}).accountId || '') : '' });
       const payload = body && Object.prototype.hasOwnProperty.call(body, 'rev')

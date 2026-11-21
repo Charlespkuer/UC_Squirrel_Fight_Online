@@ -2701,9 +2701,12 @@ function checkLevelUpStyle() {
     /document\.getElementById\('app'\) \|\| document\.body/.test(lv) &&
     /function showChoice\(\)/.test(lv) && /function showDone\(\)/.test(lv) &&
     /holdBackground\(\)/.test(lv) && /pendingWs\(\)/.test(lv) &&
+    /sf-levelup-confirm-hotspot/.test(lv) && /st\.fallback \|\| !st\.loading/.test(lv) &&
+    /removeOrphanRoots/.test(lv) &&
     /SfLevelUp\.sync\(\)/.test(cu) &&
     /\.sf-levelup-root\{[^}]*z-index:10000/.test(css) &&
-    /\.sf-levelup-ws\{[^}]*z-index:80/.test(css),
+    /\.sf-levelup-ws\{[^}]*z-index:80/.test(css) &&
+    /\.sf-levelup-confirm-hotspot\{/.test(css),
     '升级奖励与三选一要绑在同一个 #app 级弹窗里：页面重建摘不掉，选完再确认才关闭'
   );
   /* 用户 2026-11 口径：升级「三选一」三张候选要并排一行，卡片本身尺寸不动。
