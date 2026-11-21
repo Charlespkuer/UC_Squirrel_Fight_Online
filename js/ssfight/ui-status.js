@@ -3060,7 +3060,7 @@
     wireGearPage(gearPage.view);
   }
 
-  const GEAR_GEM_COST_NOTE = '宝石：镶嵌 / 卸下各 5 金松果';
+  const GEAR_GEM_COST_NOTE = '宝石：镶嵌免费 / 卸下 5 金松果';
 
   const canSocketGear = (gear) => (State.canSocketGem ? State.canSocketGem(gear) : Number(gear && gear.quality) > 3);
   function currentGearByKey(key) {
@@ -3249,10 +3249,17 @@
     const host = m && m.element;
     if (!host) return;
     for (const b of host.querySelectorAll('[data-gem]')) {
-      b.onclick = () => {
-        const r = State.socketGem(key, Number(b.dataset.gem));
-        if (window.UI && UI.toast) UI.toast(r.msg);
-        if (r.ok && m.close) m.close();
+      b.onclick = async () => {
+        let r;
+        try {
+          const callGem = window.StateCall || ((name, ...args) => Promise.resolve(State[name](...args)));
+          r = await callGem('socketGem', key, Number(b.dataset.gem));
+        } catch (e) {
+          if (window.UI && UI.toast) UI.toast('镶嵌失败：' + ((e && e.message) || e));
+          return;
+        }
+        if (window.UI && UI.toast) UI.toast((r && r.msg) || '镶嵌失败');
+        if (r && r.ok && m.close) m.close();
         refresh();
       };
     }

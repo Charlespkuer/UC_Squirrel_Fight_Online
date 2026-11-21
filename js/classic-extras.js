@@ -1035,7 +1035,9 @@
       if (version !== lotteryVersion || !p.isConnected) { spinning = false; return; }
       animateThen(20 + Number(got.selected || 0), () => {
         afterDraw();
-        const win = C().modal('\u83b7\u5f97\u5956\u52b1', '<div class="extra-lottery-win">' + lotteryIcon(got.icon) + '<strong>' + esc(got.label) + '</strong></div>' + C().upsHtml(got.ups || []), [{ label: '\u786e\u5b9a' }], { small: true });
+        const ups = Array.isArray(got.ups) ? got.ups.filter(Boolean) : [];
+        const showUps = ups.length > 0 && !!(C() && C().showLevelUps);
+        const win = C().modal('\u83b7\u5f97\u5956\u52b1', '<div class="extra-lottery-win">' + lotteryIcon(got.icon) + '<strong>' + esc(got.label) + '</strong></div>' + (showUps ? '' : C().upsHtml(ups)), [{ label: '\u786e\u5b9a', run: showUps ? () => C().showLevelUps(ups) : undefined }], { small: true, locked: showUps });
         normalizePrizeArt(win && win.element);
       });
     });
@@ -1092,8 +1094,9 @@
           '<span>' + esc(g.label) + '</span></div>').join('');
         const ups = [];
         for (const g of got) if (g.ups && g.ups.length) ups.push.apply(ups, g.ups);
+        const showUps = ups.length > 0 && !!(C() && C().showLevelUps);
         const winTen = C().modal('\u8fde\u62bd ' + got.length + ' \u6b21', '<div class="extra-lottery-win grid"><div class="lottery-result-grid">' +
-          cells + '</div></div>' + C().upsHtml(ups), [{ label: '\u786e\u5b9a' }], { small: true });
+          cells + '</div></div>' + (showUps ? '' : C().upsHtml(ups)), [{ label: '\u786e\u5b9a', run: showUps ? () => C().showLevelUps(ups) : undefined }], { small: true, locked: showUps });
         normalizePrizeArt(winTen && winTen.element);
       });
     };
@@ -1259,7 +1262,7 @@
             c.modal('徒弟日供', '<div class="tribute-claim">' +
               '<div class="reward-panel"><div class="reward-row">' + (cards || '<span class="tribute-none">昨日没有可结算的收益</span>') + '</div></div>' +
               detail + '</div>' + upsPreview(r.ups),
-              [{ label: '确定', run: () => showUps(r.ups) }], { small: true });
+              [{ label: '确定', run: () => showUps(r.ups) }], { small: true, locked: !!(r.ups && r.ups.length) });
           }
         })
         .catch((e) => { if (c && c.toast) c.toast(window.Online.errText(e)); done(); });
@@ -1293,7 +1296,7 @@
         '<div class="reward-panel"><div class="reward-row">' + (cards || '<span class="tribute-none">昨日没有可结算的收益</span>') + '</div></div>' +
         detail +
       '</div>' + upsPreview(r.ups),
-      [{ label: '确定', run: () => showUps(r.ups) }], { small: true });
+      [{ label: '确定', run: () => showUps(r.ups) }], { small: true, locked: !!(r.ups && r.ups.length) });
     return r;
   }
   // 日供只由真人徒弟产生（昨日经验 10% + 金松果 10%），由服务端结算。

@@ -229,6 +229,27 @@ const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),asse
   assert.equal(abandoned,7,'结束本轮要真的清掉这一轮');
   console.log('PASS stage conflict offers abandon-run exit');
 
+  /* 开打前被服务端拒（挑战书不足）不是「打完一场」：不能按战后语义重挂页签，
+   * 也不能拿全屏战果页把关卡页整块盖住（部分安卓上会看成页面卡没）。 */
+  let failedResume=0,battleResume=0,bookNotice=null;
+  replay.UI.classic.notice=(msg,actions)=>{bookNotice={msg,actions};};
+  replay.SfChallenge={
+    holdPageForBattle:()=>({host:{}}),
+    resumePageAfterFailedRequest:()=>{failedResume++;return true;},
+    resumePageAfterBattle:()=>{battleResume++;return true;},
+    refreshGateAt:()=>{},openGateAt:()=>{},
+  };
+  replay.SfFightResult={open:async()=>{throw new Error('pre-battle rejection must not open the full-screen result');}};
+  replay.State={stageRun:()=>null,abandonStageRun:()=>{}};
+  const noBook=Object.assign(new Error('挑战书不足，快去商店中购买吧！'),{
+    code:'CONFLICT',body:{error:{code:'CONFLICT',msg:'挑战书不足，快去商店中购买吧！',extra:{needsBook:true}}}});
+  replay.Online.post=async()=>{throw noBook;};
+  await replay.Online.battle.stage(7);
+  assert.equal(failedResume,1,'开打前被拒只放回按住页');
+  assert.equal(battleResume,0,'不能按战后语义重挂页签');
+  assert.ok(bookNotice&&bookNotice.actions.some((a)=>a.label==='购买挑战书'),'要用小提示给购买挑战书出口');
+  console.log('PASS pre-battle stage rejection restores the held page and keeps it behind a small notice');
+
   /* 战败且复活次数用完：结果页也不能再给「复活再战」。 */
   let lossSpec=null;
   replay.SfFightResult={open:async(spec)=>{lossSpec=spec;return {};}};
@@ -382,8 +403,35 @@ const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),asse
     && /resultInBattle: true/.test(battleSrc)
     && /label: '继续挑战'/.test(battleSrc)
     && /label: '查看录像'/.test(battleSrc)
-    && /label: '返回天梯赛'/.test(battleSrc));
+    && /label: '返回天梯赛'/.test(battleSrc)
+    /* 免费 10 场用完（daily.freeLeft=0/cost>0）时不再给快速继续，回天梯页走二次确认。 */
+    && /paidOrDone/.test(battleSrc)
+    && /freeLeft/.test(battleSrc));
   console.log('PASS 天梯战果使用 rank 容器、CG/三选一、不开宝箱、回天梯挑战页');
+  /* 免费 10 场用完后：战果页不再出现「继续挑战」（它会带 confirmed:true 绕过金松果确认），
+   * 只留「返回天梯赛」，让玩家回天梯菜单点开始比赛、走原版二次确认。 */
+  let paidRankSpec = null;
+  replay.SfFightResult = { open: async (spec) => { paidRankSpec = spec; return {}; } };
+  replay.SfChallenge = {
+    holdPageForBattle: () => ({ host: {} }),
+    resumePageAfterBattle: () => true,
+    goArenaPage: () => {},
+  };
+  replay.UI = { currentUiMode: () => 'classic', classic: {} };
+  replay.Main.startBattle = async (_foe, opts) => { opts.onEnd(0); };
+  replay.Online.ready = true;
+  replay.Online.daily = { played: 10, limit: 0, unlimited: true, left: null, freeLeft: 0, cost: 5 };
+  replay.Online.post = async () => ({
+    me: { name: '甲' }, foe: { name: '乙' },
+    result: { winner: 0, names: ['甲', '乙'], maxHp: [1, 1], rounds: [{ attacker: 0 }] },
+    settlement: { win: true },
+    daily: { played: 10, limit: 0, unlimited: true, left: null, freeLeft: 0, cost: 5 },
+  });
+  await replay.Online.battle.rank('snap', { target: { tab: 'arena', arenaPage: 'menu' } });
+  assert.ok(paidRankSpec && !paidRankSpec.actions.some((a) => a.label === '继续挑战'),
+    '免费 10 场用完后不能给快速继续');
+  assert.ok(paidRankSpec.actions.some((a) => a.label === '返回天梯赛'), '要能回天梯页');
+  console.log('PASS 免费 10 场用完后取消快速续战，回天梯页走二次确认');
   /* 设置页账号额度 x/y + 第二端登录顶号提示 + 联机账号栏的修改昵称入口；
    * 连点保护不再提供开关，动作/开战闸门由服务端自动执行。 */
   const guardSrc = fs.readFileSync(path.join(__dirname, '../js/online.js'), 'utf8').replace(/\r\n/g, '\n');

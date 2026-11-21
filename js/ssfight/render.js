@@ -451,10 +451,10 @@
     const s = String(tx == null ? '' : tx).trim();
     if (s.length < 5) return false;
 
-    if (s === '900000' || s === '999999/999999') return true;
-    if (/^(\d)\1{4,}$/.test(s)) return true;
+    if (s === '900000' || s === '999999/999999' || s === '9999/9999') return true;
+    if (/^(\d)\1{3,}$/.test(s)) return true;
     const parts = s.split(/[\/\s%×x-]+/).filter(Boolean);
-    return parts.length > 0 && parts.every((p) => /^(\d)\1{4,}$/.test(p));
+    return parts.length > 0 && parts.every((p) => /^(\d)\1{3,}$/.test(p));
   }
   function drawLines(g) {
     const b = g.__textBox;
@@ -1002,6 +1002,8 @@
     this.playing = true;
     this.names = new Map();
     this.nodes = new Map();
+    // 换帧会重建文本节点；先登记真值，节点出生时就写进去，避免先画一帧作者占位串。
+    this.__pendingText = new Map();
     this.g = el('g', { type: 'sprite' });
     this.g.setAttribute('sid', String(tag.id));
     this.__cps = new Map();
@@ -1024,6 +1026,16 @@
   MovieClip.prototype.setContentHost = function (host) {
     this.__contentHost = host;
     return this;
+  };
+  // 给具名文本字段登记真值：当前帧已经有这个节点就先写，后续换帧重建时在出生处写。
+  // 只对文本字段生效；数字精灵/其它元件遇到同名忽略。
+  MovieClip.prototype.setPendingText = function (name, value) {
+    const key = String(name || '');
+    if (!key) return false;
+    this.__pendingText.set(key, value == null ? '' : String(value));
+    const node = this.byName(key);
+    if (node && node.__textBox) setText(node, value);
+    return true;
   };
   MovieClip.prototype.getContentHost = function () {
     const host = this.__contentHost;
@@ -1180,6 +1192,7 @@
         node.__clip = clip;
       } else if (child.tp === 11) {
         node = textNode(child, this.rootDefs);
+        if (p.na && this.__pendingText.has(p.na)) setText(node, this.__pendingText.get(p.na));
       } else {
         node = shapeNode(this.rootDefs, child);
       }

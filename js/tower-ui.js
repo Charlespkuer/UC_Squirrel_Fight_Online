@@ -1805,7 +1805,9 @@
         const parts = String(raw).split(':'), id = Number(parts[0]), level = Math.max(1, Number(parts[1]) || 1);
         const inst = kind === 'weapon'
           ? (State.weaponInst ? State.weaponInst(id) : null) : (State.skillInst ? State.skillInst(id) : null);
-        const trueMul = window.TowerHero && TowerHero.trueBaseMul ? TowerHero.trueBaseMul(level) : 1;
+        const trueMul = window.TowerHero && TowerHero.trueBaseMulFor
+          ? TowerHero.trueBaseMulFor(kind, id, level)
+          : (window.TowerHero && TowerHero.trueBaseMul ? TowerHero.trueBaseMul(level) : 1);
         lines[kind].push('<li><span class="hero-status-ws-icon">' + heroWsIcon(kind, id, 36) + '</span>' +
           '<b>' + esc((inst && inst.name) || ((kind === 'weapon' ? '武器 ' : '技能 ') + id)) + '</b>' +
           '<em>' + esc(heroLevelText(level)) + (trueMul > 1 ? ' · 白值×' + trueMul : '') + '</em></li>');
@@ -2531,8 +2533,10 @@
         !(it.kind === 'skill' && [6, 13].includes(it.id)));
       openHeroGoodsPicker({
         title: '大师传承 · 选择武技',
-        note: '选中的武技会直接升到真5满级（15级）。',
-        items: pool.map((it) => Object.assign({}, it, { meta: '当前 ' + heroLevelText(it.level) + ' → 真5' })),
+        note: '选中的武技等级提高5级（最高真5 / 15级）。',
+        items: pool.map((it) => Object.assign({}, it, {
+          meta: '当前 ' + heroLevelText(it.level) + ' → ' + heroLevelText(Math.min(15, it.level + 5)),
+        })),
         empty: '没有未满级的武技可选。',
         onPick: (it) => done({ ref: it.ref }),
       });
@@ -4187,7 +4191,11 @@
     for (const buff of buffs) if (totals[buff.kind] !== undefined) totals[buff.kind] += Math.max(0, Number(buff.count) || 0);
     const buffTotals = Object.keys(kinds).filter(k => totals[k] > 0)
       .map(k => kinds[k] + ' ' + summaryNumber(totals[k]) + ' 份').join(' · ');
-    const mode = summary.uiMode === 'classic' ? '经典界面' : summary.uiMode === 'modern' ? '现代界面' : '界面未记录';
+    // 联机版只有经典界面：结算徽标按剧本显示「联机版·经典模式 / 联机版·勇者模式」。
+    const mode = ONLINE
+      ? (summary.ruleset === 'hero' ? '联机版·勇者模式' : '联机版·经典模式')
+      : (summary.ruleset === 'hero' ? '勇者剧本 · ' : '') +
+        (summary.uiMode === 'classic' ? '经典界面' : summary.uiMode === 'modern' ? '现代界面' : '界面未记录');
     const subtitle = victory
       ? ('第 ' + layer + ' 层魔王已击败' + (settled ? ' · 本局已结算' : ' · 新的镜界仍在前方'))
       : ('征途止于第 ' + layer + ' 层 · ' + (summary.reason === 'defeat' ? '战斗失利' : '离场结算'));
@@ -4267,8 +4275,7 @@
     const report = '<article class="endless-summary" data-outcome="' + (victory ? 'win' : 'lose') + '" aria-label="无尽塔本局战报">' +
       '<header class="summary-heading"><span class="summary-kicker">无尽之塔 · ' + (victory ? '胜利结局' : '未竟结局') + '</span>' +
       '<h2 class="summary-ending">' + (victory ? '破晓登临' : '星火未熄') + '</h2>' +
-      '<p class="summary-subtitle">' + esc(subtitle) + '</p><span class="summary-mode">' +
-      (summary.ruleset === 'hero' ? '勇者剧本 · ' : '') + mode + '</span></header>' +
+      '<p class="summary-subtitle">' + esc(subtitle) + '</p><span class="summary-mode">' + mode + '</span></header>' +
       '<div class="summary-score"><span>本局总分</span><strong>' + summaryNumber(summary.score) + '</strong>' +
       '<small>' + (settled ? '本次攀登的最终得分' : '截至本次百层胜利的累计得分') + '</small></div>' +
       '<div class="summary-body"><section class="summary-section"><h3 class="summary-section-heading">增益足迹<small>' +

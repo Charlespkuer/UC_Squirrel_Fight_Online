@@ -2424,11 +2424,12 @@
     const m = buff.mods || {}, choice = (opts && opts.heroChoice) || {};
     let out;
     if (m.heroTraining) out = heroTraining(run, m.heroTraining || 1, false);
-    else if (m.heroGuaranteedMax) {
+    else if (m.heroLevelUp) {
+      const levels = Math.max(1, Math.min(15, Math.floor(Number(m.heroLevelUp) || 5)));
       const pool = heroOwned(run).filter(it => it.level < 15 && !(it.kind === 'skill' && [6, 13].includes(it.id)));
       const chosen = choice.ref && pool.find(it => it.ref === String(choice.ref));
-      if (chosen) out = TowerHero.maxOut(run.hero, chosen.ref);
-      else if (pool.length) out = TowerHero.maxOut(run.hero, pool[Math.floor(Math.random() * pool.length)].ref);
+      if (chosen) out = TowerHero.addLevels(run.hero, chosen.ref, levels);
+      else if (pool.length) out = TowerHero.addLevels(run.hero, pool[Math.floor(Math.random() * pool.length)].ref, levels);
       else out = { ok: false, msg: '没有可升级的武技。' };
     } else if (m.heroGuaranteed) out = heroTraining(run, 1, true);
     else if (m.heroSecret) out = TowerHero.learn(run.hero, { special: true, level: 5, uncapped: true });
@@ -4085,7 +4086,7 @@
       const owned = heroOwned(run);
       if (buff.mods.heroSecret && owned.length >= TowerHero.catalog().length) return false;
       if (buff.mods.heroReplace && owned.length >= TowerHero.catalog().length) return false;
-      if ((buff.mods.heroTraining || buff.mods.heroGuaranteed || buff.mods.heroGuaranteedMax) && !owned.some(it => it.level < 15 && !(it.kind === 'skill' && [6, 13].includes(it.id)))) return false;
+      if ((buff.mods.heroTraining || buff.mods.heroGuaranteed || buff.mods.heroLevelUp) && !owned.some(it => it.level < 15 && !(it.kind === 'skill' && [6, 13].includes(it.id)))) return false;
     }
     const cap = D().stackCap(buff);
 

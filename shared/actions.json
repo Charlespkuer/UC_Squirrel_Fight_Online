@@ -24,7 +24,7 @@
     "mergeGears":         { "mode": "async", "args": ["keys", "any"] },
     "grantStarterGear":   { "mode": "async", "args": [] },
     "setTutorialStep":    { "mode": "sync", "args": ["int"] },
-    "socketGem":          { "mode": "sync",  "args": ["str", "int"] },
+    "socketGem":          { "mode": "async", "args": ["str", "int"], "note": "附加属性总档随机分配，必须由服务端掷" },
     "unsocketGem":        { "mode": "sync",  "args": ["str"] },
     "mergeGems":          { "mode": "async", "args": ["int"] },
 

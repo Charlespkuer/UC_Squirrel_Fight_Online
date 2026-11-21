@@ -35,6 +35,10 @@
   const FREE_POINT_RANDOM = 2;
   // 联机金宝箱的固定收益：10 点基础属性（自动随机分配）+ 1 件非属性其它奖励。
   const CHEST_FIXED_POINTS = 10;
+  // 原版宝石附加属性总档：1~7 级 = 3/5/8/12/17/23/30（= (n²+n+4)/2）。
+  // 镶嵌时随机分到各条词条，单条最多 12 档（`getAttachment(id, star, count-1)` 的 12 档表）。
+  const GEM_AFFIX_TOTALS = Object.freeze([3, 5, 8, 12, 17, 23, 30]);
+  const GEM_AFFIX_CAP = 12;
   // 到这一级时给玩家一次「自愿支持作者」的提示（一次性，落存档；不换取任何游戏内好处）。
   const SUPPORT_PROMPT_LEVEL = 30;
 
@@ -285,7 +289,7 @@
 
       if (g.starred === true) entry.starred = true;
       const gemLv = g.gem && gemLevel(g.gem.id);
-      if (gemLv) entry.gem = { id: 100 + gemLv };
+      if (gemLv) entry.gem = { id: 100 + gemLv, units: normalizeGemUnits(g.gem.units, entry.ext, gemLv) };
       return entry;
     });
     // 5 级换装教程的一次性白装。新档显式 false；旧档没有字段时按「已经升过 5 级 / 已有装备 /
@@ -2483,7 +2487,7 @@
       if (!info) return null;
       const out = Object.assign(info, { used: g.used, key: g.key });
       if (g.orange === true) { out.orange = true; out.quality = 4; }   // 兼容旧档的实例级橙标记
-      if (g.gem && gemLevel(g.gem.id)) out.gem = { id: Number(g.gem.id), units: gemAffixUnits(g.gem.id) };
+      if (g.gem && gemLevel(g.gem.id)) out.gem = { id: Number(g.gem.id), units: gemUnitsForGear(g) };
       return out;
     }).filter(Boolean).filter((g) => blackGearEnabled() || Number(g.quality) !== 5);
   }
@@ -2635,10 +2639,48 @@
   function gemLevel(id) { id = Number(id); return id >= 101 && id <= 107 ? id - 100 : 0; }
 
   function gemPercent(lv) { lv = integer(lv, 0, 0); return lv > 0 ? 5 * (lv * lv - lv + 2) : 0; }
-  // 宝石对「附加属性」的增幅：原版不是随机百分比，而是按宝石等级给 1~12 个单位的阶梯。
-  // 客户端 `getAttachment(id, star, count-1)` 按单位数取 extraValue，与星级 ability 相加。
-  const GEM_AFFIX_UNITS = Object.freeze([1, 2, 3, 5, 7, 9, 12]);
-  function gemAffixUnits(gemId) { const lv = gemLevel(gemId); return lv ? GEM_AFFIX_UNITS[lv - 1] : 0; }
+  function gemAffixTotal(lv) { lv = integer(lv, 0, 0); return lv > 0 ? GEM_AFFIX_TOTALS[Math.min(7, lv) - 1] : 0; }
+  // 原版镶嵌结果随机：总档逐个掷到某条词条上，单条到 12 档后不再接；
+  // 抓包实证 5 级 8+8+1 / 8+2+7 = 17，7 级 11+11+8 = 30。
+  function rollGemAffixUnits(lv, count) {
+    count = Math.max(0, Math.min(3, integer(count, 0, 0)));
+    const units = new Array(count).fill(0);
+    let left = gemAffixTotal(lv);
+    while (left > 0) {
+      const open = [];
+      for (let i = 0; i < count; i++) if (units[i] < GEM_AFFIX_CAP) open.push(i);
+      if (!open.length) break;
+      units[open[Math.floor(Math.random() * open.length)]] += 1;
+      left -= 1;
+    }
+    return units;
+  }
+  // 旧档没有 units：按总档平均分（7 级 3 条 = 10/10/10），保证读档后总量仍是原版。
+  function evenGemAffixUnits(lv, count) {
+    count = Math.max(0, Math.min(3, integer(count, 0, 0)));
+    const units = new Array(count).fill(0);
+    if (!count) return units;
+    let left = gemAffixTotal(lv);
+    for (let i = 0; left > 0 && i < 1024; i++) {
+      const slot = i % count;
+      if (units[slot] < GEM_AFFIX_CAP) { units[slot] += 1; left -= 1; }
+    }
+    return units;
+  }
+  function normalizeGemUnits(units, ext, lv) {
+    const count = Math.max(0, Math.min(3, Array.isArray(ext) ? ext.length : 0));
+    if (!count) return [];
+    const total = gemAffixTotal(lv);
+    if (Array.isArray(units) && units.length === count) {
+      const clean = units.map((u) => integer(u, 0, 0));
+      if (clean.every((u) => u <= GEM_AFFIX_CAP) && clean.reduce((a, b) => a + b, 0) <= total) return clean;
+    }
+    return evenGemAffixUnits(lv, count);
+  }
+  function gemUnitsForGear(gear) {
+    const lv = gemLevel(gear && gear.gem && gear.gem.id);
+    return normalizeGemUnits(gear && gear.gem && gear.gem.units, normalizeExt(gear && gear.ext), lv);
+  }
 
   function attachmentValue(id, star, units) {
     const def = attachmentMap.getValue(Number(id));
@@ -2685,7 +2727,8 @@
   }
 
 
-  const GEM_SOCKET_COST = 5;
+  const GEM_SOCKET_COST = 0;
+  const GEM_UNSOCKET_COST = 5;
   function socketGem(gearKey, gemId) {
     const g = S.gears.find((x) => x.key === gearKey);
     if (!g) return { ok: false, msg: '装备不存在' };
@@ -2693,27 +2736,29 @@
     if (g.gem) return { ok: false, msg: '每件装备最多镶嵌 1 颗宝石，请先卸下原有宝石' };
     const lv = gemLevel(gemId);
     if (!lv || !(S.props[gemId] > 0)) return { ok: false, msg: '没有该宝石' };
-    if (S.goldPoint < GEM_SOCKET_COST) return { ok: false, msg: '镶嵌需要 ' + GEM_SOCKET_COST + ' 金松果' };
-    S.goldPoint -= GEM_SOCKET_COST;
     S.props[gemId]--;
-    g.gem = { id: Number(gemId) };
-    const units = gemAffixUnits(gemId);
-    const first = normalizeExt(g.ext)[0];
+    const ext = normalizeExt(g.ext);
+    const units = rollGemAffixUnits(lv, ext.length);
+    g.gem = { id: Number(gemId), units };
+    const first = ext[0];
     const firstDef = first ? attachmentMap.getValue(first.id) : null;
-    const firstVal = first ? attachmentValue(first.id, first.level, units) : null;
+    const firstVal = first ? attachmentValue(first.id, first.level, units[0] || 0) : null;
     const sample = firstDef && firstVal ? '，' + firstDef.name.replace('N', String(firstVal.total)) : '';
+    const total = gemAffixTotal(lv), applied = units.reduce((a, b) => a + b, 0);
+    const detail = !units.length ? '该装备没有附加属性，档数无法分配'
+      : (applied === total ? units.join('/') : '本件可分 ' + applied + ' 档：' + units.join('/') + '；总 ' + total + ' 档');
     save();
-    return { ok: true, msg: propMap.getValue(gemId).name + ' 镶嵌成功（−' + GEM_SOCKET_COST + ' 金松果）：主属性 +' + gemPercent(lv) + '%，附加属性增幅 ' + units + ' 档' + sample };
+    return { ok: true, msg: propMap.getValue(gemId).name + ' 镶嵌成功（免费）：主属性 +' + gemPercent(lv) + '%，附加属性 +' + applied + ' 档（' + detail + '）' + sample };
   }
   function unsocketGem(gearKey) {
     const g = S.gears.find((x) => x.key === gearKey);
     if (!g || !g.gem) return { ok: false, msg: '该装备没有镶嵌宝石' };
-    if (S.goldPoint < GEM_SOCKET_COST) return { ok: false, msg: '卸下需要 ' + GEM_SOCKET_COST + ' 金松果' };
-    S.goldPoint -= GEM_SOCKET_COST;
+    if (S.goldPoint < GEM_UNSOCKET_COST) return { ok: false, msg: '卸下需要 ' + GEM_UNSOCKET_COST + ' 金松果' };
+    S.goldPoint -= GEM_UNSOCKET_COST;
     S.props[g.gem.id] = (S.props[g.gem.id] || 0) + 1;
     delete g.gem;
     save();
-    return { ok: true, msg: '已卸下宝石（−' + GEM_SOCKET_COST + ' 金松果），宝石放回背包' };
+    return { ok: true, msg: '已卸下宝石（−' + GEM_UNSOCKET_COST + ' 金松果），宝石放回背包' };
   }
 
 
@@ -2813,7 +2858,7 @@
       // 否则挑战页立绘、查看装备、切磋时的装备品质会退回紫装。
       if (g && g.orange === true) out.orange = true;
       const gemLv = g && g.gem && gemLevel(g.gem.id);
-      if (gemLv) out.gem = { id: 100 + gemLv, units: gemAffixUnits(100 + gemLv) };
+      if (gemLv) out.gem = { id: 100 + gemLv, units: normalizeGemUnits(g.gem.units, normalizeExt(out.ext), gemLv) };
       return out;
     }).filter(Boolean);
   }
@@ -3184,41 +3229,47 @@
   }
 
   function extText(ext, units) {
-    return normalizeExt(ext).map((e) => {
+    const list = normalizeExt(ext);
+    return list.map((e, i) => {
       const id = LEGACY_EXT_ID[Number(e.id)] || e.id;
       const a = attachmentMap.getValue(id);
       if (!a) return '';
-      const v = attachmentValue(id, e.level, units);
+      const unit = Array.isArray(units) ? (units[i] || 0) : units;
+      const v = attachmentValue(id, e.level, unit);
       return a.name.replace('N', String(v.total));
     }).filter(Boolean);
   }
 
   function extTextForGear(gear, detail) {
-    const units = gemAffixUnits(gear && gear.gem && gear.gem.id);
-    return normalizeExt(gear && gear.ext).map((e) => {
+    const list = normalizeExt(gear && gear.ext);
+    const units = gemUnitsForGear(gear);
+    return list.map((e, i) => {
       const id = LEGACY_EXT_ID[Number(e.id)] || e.id;
       const a = attachmentMap.getValue(id);
       if (!a) return '';
-      const v = attachmentValue(id, e.level, units);
+      const v = attachmentValue(id, e.level, units[i] || 0);
       return a.name.replace('N', String(v.total)) + (detail && v.extra > 0 ? '（基础' + v.base + '+增幅' + v.extra + '）' : '');
     }).filter(Boolean);
   }
 
+  // 与 extText 一一对应：没有增幅也返回空串占位，状态页两列才不会错行。
   function extExtraText(ext, units) {
-    return normalizeExt(ext).map((e) => {
+    const list = normalizeExt(ext);
+    const listUnits = Array.isArray(units) ? units : [];
+    return list.map((e, i) => {
       const id = LEGACY_EXT_ID[Number(e.id)] || e.id;
       const a = attachmentMap.getValue(id);
       if (!a) return '';
-      const v = attachmentValue(id, e.level, units);
+      const v = attachmentValue(id, e.level, listUnits[i] || 0);
       if (!v.extra) return '';
       const name = String(a.name || '');
       const sign = name.indexOf('-N%') >= 0 ? '-' : '+';
       const unit = name.indexOf('N点') >= 0 ? '点' : name.indexOf('N倍') >= 0 ? '倍' : '%';
       return sign + v.extra + unit;
-    }).filter(Boolean);
+    });
   }
   function extExtraTextForGear(gear) {
-    return extExtraText(gear && gear.ext, gemAffixUnits(gear && gear.gem && gear.gem.id));
+    return extExtraText(gear && gear.ext, gemUnitsForGear(gear));
   }
   function addGear(id, ext, attr) {
     if (!blackGearEnabled() && isBlackGearId(id)) return null;
@@ -3266,10 +3317,11 @@
       if (!blackGearEnabled() && isBlackGearId(gear.id)) continue;
       const info = gearInst(gear.id, gear.ext, gear.attr);
       if (!info || S.level < info.useLevel) continue;
-      const units = gemAffixUnits(gear.gem && gear.gem.id);
-      for (const ext of normalizeExt(gear.ext)) {
-        const v = attachmentValue(ext.id, ext.level, units);
-        effects[ext.id] = Math.max(effects[ext.id] || 0, Math.round(v.total));
+      const ext = normalizeExt(gear.ext);
+      const units = gemUnitsForGear(gear);
+      for (let i = 0; i < ext.length; i++) {
+        const v = attachmentValue(ext[i].id, ext[i].level, units[i] || 0);
+        effects[ext[i].id] = Math.max(effects[ext[i].id] || 0, v.total);
       }
     }
     return effects;
@@ -4941,8 +4993,8 @@
         orange: g.orange === true,
         setName: set ? set.name : '',
         attrName: info.attrName, abilityVal: info.abilityVal,
-        ext: extText(g.ext),
-        gem: gemLv ? { level: gemLv, percent: gemPercent(gemLv), units: gemAffixUnits(100 + gemLv) } : null,
+        ext: extTextForGear(g),
+        gem: gemLv ? { level: gemLv, percent: gemPercent(gemLv), total: gemAffixTotal(gemLv), units: gemUnitsForGear(g) } : null,
       };
     }).filter(Boolean);
     return {
@@ -5132,12 +5184,11 @@
       const gemLv = gear.gem ? gemLevel(gear.gem.id) : 0;
       const mainMul = gemLv ? 1 + gemPercent(gemLv) / 100 : 1;
       foe[['agility', 'power', 'hp', 'speed'][info.type]] += Math.round(info.abilityVal * mainMul);
-      const gemUnits = gemAffixUnits(gear.gem && gear.gem.id);
-      for (const ext of gear.ext || []) {
-        const def = attachmentMap.getValue(ext.id);
-        if (!def) continue;
-        const val = Math.round(attachmentValue(ext.id, ext.level, gemUnits).total);
-        if (Number.isFinite(val)) foe.effects[ext.id] = Math.max(foe.effects[ext.id] || 0, val);
+      const ext = normalizeExt(gear.ext);
+      const gemUnits = gemUnitsForGear(gear);
+      for (let i = 0; i < ext.length; i++) {
+        const val = attachmentValue(ext[i].id, ext[i].level, gemUnits[i] || 0).total;
+        if (Number.isFinite(val)) foe.effects[ext[i].id] = Math.max(foe.effects[ext[i].id] || 0, val);
       }
     }
 
@@ -5303,7 +5354,7 @@
         piece.orange = true;
         if (Math.random() < aiGemChance(ref)) {
           const lv = aiGemLevel(ref);
-          if (lv) piece.gem = { id: 100 + lv };
+          if (lv) piece.gem = { id: 100 + lv, units: rollGemAffixUnits(lv, normalizeExt(piece.ext).length) };
         }
       }
       out.push(piece);
@@ -6338,7 +6389,7 @@
     FUSION_SAME_NAME_RATE, FUSION_MUTANT_RATE, FUSION_MUTANT_SET, FUSION_ORANGE_MUTANT_SET, FUSION_EXT_UPGRADE_RATE,
     FUSION_EXT_INHERIT_RATE, FUSION_EXT_SLOTS,
     toggleGearStar, isGearStarred, gearsInDisplayOrder,
-    gemLevel, gemPercent, gemMergeRate, rollGemDrop, mergeGems, socketGem, unsocketGem, canSocketGem, gemAffixUnits, attachmentValue, GEM_AFFIX_UNITS,
+    gemLevel, gemPercent, gemMergeRate, rollGemDrop, mergeGems, socketGem, unsocketGem, canSocketGem, gemAffixTotal, gemUnitsForGear, rollGemAffixUnits, normalizeGemUnits, attachmentValue, GEM_AFFIX_TOTALS, GEM_AFFIX_CAP,
     totalStats, equipmentEffects, shopLimit, purchaseStatus, buyProp, useProp, openChestProp, gainRandomWS, wsChoices, wsInfo,
     rankBuy, rankLimitInfo, refreshRankShopDay, rankWeekKey, rankMonthKey, RANK_ACCOUNT_LIMIT_GOODS, RANK_MONTHLY_LIMIT_GOODS,
     chestState, beginChest, confirmChest,
@@ -6352,7 +6403,7 @@
     BERSERK_SET_ID, BERSERK_LEVEL, BERSERK_CHANCE_AT_50, BERSERK_CHANCE_AT_70, berserkChance,
     AI_FULL_GEAR_LEVEL, aiToolMinLevel, aiToolMaxLevel, aiGearMinLevel,
     playerNormalTotal, playerMaxTotal, playerTotalBounds, foeTotalStats, applyFoeTotalBounds, foeLoadout,
-    GEM_SOCKET_COST,
+    GEM_SOCKET_COST, GEM_UNSOCKET_COST,
     gainExp, levelUpPreview, levelFrozen, consumeEnergy, tickPropStates, fightReward, revengeReward, markRevenged, revengeInfo, noteRevenge, REVENGE_EXP_RATIO, expBoostPct, gainExpWithBoost,
     apprenticeTributeExpRatio, apprenticeTributeGoldRatio, TRIBUTE_EXP_MIN, TRIBUTE_EXP_MAX, TRIBUTE_GOLD_MIN, TRIBUTE_GOLD_MAX,
     TRIBUTE_DAILY_EXP_CAP, TRIBUTE_DAILY_GOLD_CAP,

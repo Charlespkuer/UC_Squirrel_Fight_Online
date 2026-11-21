@@ -1094,7 +1094,7 @@ test('读档不会重置装备：主属性 / 词条 / 宝石 / 穿戴原样保�
   assert.equal(migrated.orange, undefined);
 });
 
-test('黑装支持镶嵌/卸下宝石：扣 5 金、主属性生效、卸下返还', () => {
+test('黑装支持镶嵌/卸下宝石：镶嵌免费、卸下扣 5 金、主属性生效、卸下返还', () => {
   const g = game(), S = g.State;
   S.newGame('黑装宝石', { uiMode: 'classic' });
   const s = S.state();
@@ -1106,13 +1106,13 @@ test('黑装支持镶嵌/卸下宝石：扣 5 金、主属性生效、卸下返�
   const before = S.totalStats().agility;
   const r = S.socketGem(gear.key, 103);
   assert.equal(r.ok, true, '黑装镶嵌应成功：' + r.msg);
-  assert.equal(s.goldPoint, 995, '镶嵌扣 5 金松果');
+  assert.equal(s.goldPoint, 1000, '镶嵌免费');
   assert.equal(s.props[103], 0, '镶嵌消耗 1 颗三级宝石');
   assert.ok(s.gears.find((x) => x.key === gear.key).gem, '黑装实例上要写入 gem');
   assert.ok(S.totalStats().agility > before, '宝石主属性加成要进入总属性');
   const un = S.unsocketGem(gear.key);
   assert.equal(un.ok, true, '黑装卸下宝石应成功：' + un.msg);
-  assert.equal(s.goldPoint, 990, '卸下再扣 5 金松果');
+  assert.equal(s.goldPoint, 995, '卸下扣 5 金松果');
   assert.equal(s.props[103], 1, '卸下后宝石回到背包');
   assert.equal(s.gears.find((x) => x.key === gear.key).gem, undefined, '卸下后不再有 gem');
 });

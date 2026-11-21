@@ -1759,6 +1759,7 @@
     settleFrame(view);
     fillChrome(view);
     setTabs(view, key);
+    if (key === 'arena' && current && current.arenaPage === 'menu') paintLadderDailyHint(view);
   }
   // 把左右翻页箭头摆到"名单列两侧"（舞台坐标，实测）。
   // · 真正的坑是箭头元件的原点不在画稿中心：`3156` 的透明热区在局部
@@ -2341,6 +2342,38 @@
   }
 
 
+  // 今日天梯场次：服务端 `Online.daily` 是唯一真值；离线分支退回存档计数。
+  // 必须等 `settleFrame` 把整页铺完后再追加，否则会被原版背景盖住。
+  function paintLadderDailyHint(view) {
+    if (!view || !view.g) return;
+    const d = (window.Online && Online.ready) ? Online.daily : null;
+    const s = S() || {};
+    const played = d ? Math.max(0, Number(d.played) || 0) : Math.max(0, Number(s.joinRankCount) || 0);
+    let hintText = '今日已赛 ' + played + ' 场';
+    if (d) {
+      const left = d.unlimited ? null : Number(d.left);
+      const cost = Math.max(0, Number(d.cost) || 0);
+      if (left != null && left <= 0) hintText += '（今日次数已用完）';
+      else if (cost > 0) hintText += '（本场消耗 ' + cost + ' 金松果）';
+      else if (Number(d.freeLeft) > 0) hintText += '（前10场免费）';
+    } else {
+      const cost = played < 10 ? 0 : played < 20 ? 5 : played < 30 ? 10 : 20;
+      if (cost > 0) hintText += '（本场消耗 ' + cost + ' 金松果）';
+    }
+    let hint = view.g.querySelector('[data-ladder-daily]');
+    if (!hint) {
+      hint = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      hint.setAttribute('data-ladder-daily', '');
+      hint.setAttribute('x', '52');
+      hint.setAttribute('y', '128');
+      hint.setAttribute('font-size', '8');
+      hint.setAttribute('fill', '#673c1a');
+      hint.setAttribute('pointer-events', 'none');
+    }
+    hint.textContent = hintText;
+    // 每次重挂都挪到最后：它必须在背景/按钮之后，才能稳定显示在原版画稿上。
+    view.g.appendChild(hint);
+  }
   function showArenaMenu() {
     const view = current.view;
     stopAt(view, ARENA.menu);

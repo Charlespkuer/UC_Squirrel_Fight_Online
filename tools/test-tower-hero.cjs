@@ -226,11 +226,13 @@ test('勇者专属货品真实扣费生效，剧情之剑唯一且在镜复制�
   run.coins = 500; run.phase = 'shop';
   run.shop = { layer: 1, rest: true, slots: [{ id: 'HS03', sold: false, price: 60 }] };
   const beforeW1 = Number(run.hero.weapons.find(it => it.startsWith('1:')).split(':')[1]);
+  const expectedW1 = Math.min(15, beforeW1 + 5);
   const training = T.buyShopSlot(0, undefined, { heroChoice: { ref: 'w:1' } });
   assert.equal(training.ok, true, training.msg);
   assert.ok(training.price > 0);
   assert.equal(run.coins, 500 - training.price);
-  assert.equal(Number(run.hero.weapons.find(it => it.startsWith('1:')).split(':')[1]), 15, 'HS03 应把选定武技直接升到真5');
+  assert.equal(Number(run.hero.weapons.find(it => it.startsWith('1:')).split(':')[1]), expectedW1,
+    'HS03 应把选定武技提高5级（封顶真5）');
   assert.ok(beforeW1 < 15);
   /* HS02：自选遗忘 + 自选学习，新武技继承旧等级；不改变总数。 */
   const beforeCount = count(run.hero);
@@ -241,7 +243,7 @@ test('勇者专属货品真实扣费生效，剧情之剑唯一且在镜复制�
   assert.equal(swap.ok, true, swap.msg);
   assert.equal(count(run.hero), beforeCount, 'HS02 不改变武技总数');
   assert.equal(run.hero.weapons.some(it => it.startsWith('1:')), false, '被遗忘的武器应移除');
-  assert.equal(run.hero.weapons.find(it => it.startsWith('2:')), '2:15', '新武器继承被遗忘武器的真5等级');
+  assert.equal(run.hero.weapons.find(it => it.startsWith('2:')), '2:' + expectedW1, '新武器继承被遗忘武器的等级');
   for (let n = H.cappedCount(run.hero); n < 24; n++) assert.equal(H.learn(run.hero, { rng: () => 0 }).ok, true);
   const refs = () => [...run.hero.weapons.map(it => 'w:' + it), ...run.hero.skills.map(it => 's:' + it)];
   const known = new Set(refs());
@@ -898,7 +900,7 @@ test('营火与镜外的新雪改为接下来 10 场每回合回血', () => {
   assert.equal(second.eventRegen[0].left, 10);
 });
 
-test('勇者真化武技白值 ×1.5 / 真5 ×2，普通模式不受影响', () => {
+test('勇者真化武技白值 ×1.5 / 真5 ×2，普通模式不受影响（野球拳除外）', () => {
   const { c } = setup(), H = c.TowerHero, S = c.State;
   assert.equal(H.trueBaseMul(10), 1);
   assert.equal(H.trueBaseMul(11), 1.5);
@@ -933,6 +935,30 @@ test('勇者真化武技白值 ×1.5 / 真5 ×2，普通模式不受影响', () 
   hero.skills = ['8:15'];
   const skill = H.fighter(hero);
   assert.equal(skill.skills[0].trueBaseMul, 2, '伤害技能真5标记 ×2');
+
+  /* 野球拳（12）是唯一不吃真化白值乘数的技能：真1 的 ×1.5 和真5 的 ×2 都要去掉。 */
+  hero.weapons = [];
+  for (const lv of [11, 15]) {
+    hero.skills = ['12:' + lv];
+    const heroF = H.fighter(hero);
+    assert.equal(heroF.skills[0].trueBaseMul, 1, '真' + (lv - 10) + ' 野球拳不吃白值乘数');
+    const plainF = plain(heroF); plainF.heroTrueBase = false;
+    const dummy = { name: 'dummy', level: 90, power: 1, agility: 1, speed: 1,
+      hp: 1e9, maxHp: 1e9, weapons: [], skills: [], gears: [] };
+    const oldRandom = vm.runInContext('Math.random', c);
+    c.__oldRandom = oldRandom;
+    vm.runInContext('Math.random = () => 0.1;', c);   // 必出技能、不闪避、不暴击
+    try {
+      const heroRound = c.Sim.simulate(heroF, dummy).rounds.find((r) => r.attacker === 0 && r.action === 'skill' && r.id === 12);
+      const plainRound = c.Sim.simulate(plainF, dummy).rounds.find((r) => r.attacker === 0 && r.action === 'skill' && r.id === 12);
+      assert.ok(heroRound && plainRound);
+      assert.equal(heroRound.dmg, plainRound.dmg, '真' + (lv - 10) + ' 野球拳伤害与普通模式一致');
+      assert.equal(heroRound.dmg, Math.round((heroF.power + heroF.speed) * 2.55), '真' + (lv - 10) + ' 按 255% 原白值结算');
+    } finally {
+      vm.runInContext('Math.random = __oldRandom;', c);
+      delete c.__oldRandom;
+    }
+  }
 });
 
 test('默认无尽模式仍以账号面板开局，不创建勇者资料', () => {

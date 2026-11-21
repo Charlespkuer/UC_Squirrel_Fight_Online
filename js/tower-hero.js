@@ -267,9 +267,14 @@
     return { ok: true, hero, msg: label, label };
   }
 
+  // 勇者真化白值：武技/技能 真1~真4 ×1.5、真5 ×2；野球拳（12）不吃这档倍率（与 js/sim.js 同口径）。
+  const TRUE_BASE_SKIP_SKILLS = new Set([12]);
   function trueBaseMul(level) {
     const lv = Math.max(1, Math.min(15, Math.floor(Number(level) || 1)));
     return lv >= 15 ? 2 : lv >= 11 ? 1.5 : 1;
+  }
+  function trueBaseMulFor(kind, id, level) {
+    return kind === 'skill' && TRUE_BASE_SKIP_SKILLS.has(Number(id)) ? 1 : trueBaseMul(level);
   }
 
   function heroWeapon(raw) {
@@ -290,7 +295,7 @@
       hp: baseMaxHp, maxHp: baseMaxHp,
       weapons: hero.weapons.map((s) => heroWeapon(s)).filter(Boolean),
       skills: hero.skills.map((s) => State.skillInst(s)).filter(Boolean).map((s) =>
-        Object.assign(s, { trueBaseMul: trueBaseMul(s.level) })),
+        Object.assign(s, { trueBaseMul: trueBaseMulFor('skill', s.id, s.level) })),
       effects: {}, masterLevel: 0, pets: [], npcType: null, heroTrueBase: true,
       gears: hero.appearance.map((g) => Object.assign({}, g, { ext: g.ext.map((e) => Object.assign({}, e)) })),
     };
@@ -460,5 +465,5 @@
 
   window.TowerHero = { CONFIG, catalog, create, normalize, fighter, grow, upgrade, upgradeInfoOf, replace, learn,
     maxOut, addLevels, cappedCount, uncappedCount: (hero) => uncappedRefs(hero).length,
-    uncappedRefs, isUncapped, trueBaseMul, heroWeapon, learnChanceForCount, statRules: () => STAT_RULES, initialStats, adjustStat };
+    uncappedRefs, isUncapped, trueBaseMul, trueBaseMulFor, heroWeapon, learnChanceForCount, statRules: () => STAT_RULES, initialStats, adjustStat };
 })();

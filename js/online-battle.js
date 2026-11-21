@@ -390,13 +390,21 @@
       if (window.ClassicExtras && ClassicExtras.startRankFlow) ClassicExtras.startRankFlow(backMenu, { confirmed: true });
       else close();
     };
+    // 10 场免费额度用完后不再给「继续挑战」：它会带 `confirmed:true` 绕过
+    // 金松果二次确认；改回天梯页点开始比赛，由原确认弹窗报价。
+    const day = O.daily || resp.daily || null;
+    const paidOrDone = !!(day && (
+      Number(day.cost) > 0
+      || (day.freeLeft != null && Number(day.freeLeft) <= 0)
+      || (day.left != null && Number(day.left) <= 0)
+    ));
     const actions = rv ? [
       { label: '返回消息', primary: true, run: close },
       { label: '查看录像', muted: true, run: () => { try { UI.runAction('messages'); } catch (e) {} } },
     ] : [
-      { label: '继续挑战', primary: true, run: () => { again(); } },
+      ...(paidOrDone ? [] : [{ label: '继续挑战', primary: true, run: () => { again(); } }]),
       { label: '查看录像', muted: true, run: () => { try { UI.runAction('messages'); } catch (e) {} } },
-      { label: '返回天梯赛', run: close },
+      { label: '返回天梯赛', primary: paidOrDone, run: close },
     ];
     resultPanel({
 
@@ -431,6 +439,11 @@
       } });
     }
     actions.push({ label: '返回', run: () => {} });
+    // 开打前的拒绝只弹一张小提示，保留关卡页（战果容器是全屏原版页，会把底页整块盖掉）。
+    if (window.UI && UI.classic && typeof UI.classic.notice === 'function') {
+      UI.classic.notice(msg, actions);
+      return;
+    }
     resultPanel({ kind: 'stage', title: '关卡无法继续', win: false, text: msg, actions });
   }
 
@@ -441,7 +454,9 @@
     try {
       resp = await requestMatch({ kind: 'stage', stageId: Number(stageId), rev: O.rev });
     } catch (e) {
-      restorePage(hold, o.target);
+      // 开打前被拒不是「打完一场」：`restorePage()` 会清名单并重挂页签，
+      // 关卡的三级页会在这条路径上被拆掉/重建（安卓上表现为页面闪没）。
+      restorePageAfterRejectedRequest(hold, o.target);
       stageBlocked(stageId, e);
       return null;
     }

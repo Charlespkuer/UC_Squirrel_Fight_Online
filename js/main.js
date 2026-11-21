@@ -97,6 +97,22 @@
 
   // 上一次真正落地的缩放参数：新平台（Android 16 / 折叠屏 / 分屏）会连续补发多拍
   let fitSignature = '';
+  // `#ui` 的 CSS transform 变化后，Android WebView 会把 SVG 文本留在旧缩放的布局里
+  // （裁剪框/字号不跟随），表现为文字截断、旧值残影。对每个 SVG 根做一次字号样式抖动，
+  // 强制文本重新布局；合并到下一帧只做一次。
+  let svgTextRepaint = 0;
+  function invalidateSvgTextLayout(ui) {
+    if (!ui || svgTextRepaint) return;
+    const raf = window.requestAnimationFrame || ((fn) => setTimeout(fn, 0));
+    svgTextRepaint = raf(() => {
+      svgTextRepaint = 0;
+      const svgs = ui.querySelectorAll ? ui.querySelectorAll('svg') : [];
+      if (!svgs.length) return;
+      for (const svg of svgs) svg.style.fontSize = '1px';
+      void ui.offsetWidth;
+      for (const svg of svgs) svg.style.fontSize = '';
+    });
+  }
   function fitCanvas(force) {
     const layoutHeight = (window.UI && UI.layoutHeight) ? UI.layoutHeight(W, H)
       : ($('#ui .classic-page') ? W * 560 / 920 : H);
@@ -131,6 +147,7 @@
     ui.style.setProperty('--uiscale', Math.min(sx, sy));
     ui.style.fontSize = (16 * Math.min(sx, sy)) + 'px';
     if (window.UI && UI.renderNumbers) UI.renderNumbers();
+    invalidateSvgTextLayout(ui);
     if (mode === 'title') { try { drawHomeBg(ctx, homeBgBlur()); } catch (e) {} }
   }
   window.addEventListener('resize', () => fitCanvas());

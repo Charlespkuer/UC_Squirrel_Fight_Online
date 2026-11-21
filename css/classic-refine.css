@@ -875,6 +875,22 @@ html[data-ui-mode="classic"] .classic-page.classic-tower,
 /* 当背景；面板 / 四格 / 确定都藏掉，不能压在三选一弹窗（30）和战果页（26）上，也不能吃掉点击。 */
 .sf-levelup-view.sf-levelup-bg-only{z-index:25;pointer-events:none}
 .sf-levelup-view.sf-levelup-bg-only>svg>g:not(.sf-levelup-cg){display:none}
+/* 升级弹窗的 root 挂在 #app 下：page()/renderHome()/innerHTML 清 #ui 时摘不掉它。
+   stage 复制 #ui 的尺寸与非等比缩放，里面的 7795 原版页和三选一面板才能对上舞台。 */
+.sf-levelup-root{position:fixed;left:0;top:0;z-index:10000;overflow:hidden;outline:none;pointer-events:auto;background:transparent}
+.sf-levelup-root>.sf-levelup-stage{position:absolute;left:0;top:0;transform-origin:0 0}
+.sf-levelup-root>.sf-levelup-stage>.sf-levelup-view{z-index:1}
+.sf-levelup-loading{position:absolute;top:0;right:0;bottom:0;left:0;inset:0;display:flex;align-items:center;justify-content:center;
+  color:#fff8e3;font-size:30px;font-weight:700;text-shadow:0 2px 0 #4a2a14,0 0 8px #000}
+.sf-levelup-ws{position:absolute;top:0;right:0;bottom:0;left:0;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;
+  padding:18px;background:#1b1b1b5b;pointer-events:auto}
+.sf-levelup-ws[hidden]{display:none}
+.sf-levelup-ws>.classic-modal.small-modal{width:956px;max-height:620px;padding-left:20px;padding-right:20px}
+.sf-levelup-ws>.classic-modal.small-modal>.modal-body{max-height:490px;overflow-y:auto;scrollbar-gutter:auto}
+.sf-levelup-ws .sf-levelup-error{margin:4px 8px 0;font-size:22px;line-height:1.4;color:#a2231a;text-align:center}
+.sf-levelup-fallback{position:absolute;top:0;right:0;bottom:0;left:0;inset:0;display:flex;align-items:center;justify-content:center;padding:18px}
+.sf-levelup-fallback>.classic-modal.small-modal{width:956px;max-height:620px}
+.sf-levelup-fallback>.classic-modal.small-modal>.modal-body{max-height:470px;overflow-y:auto}
 
 #ui>.sf-guide-view{position:absolute;top:0;right:0;bottom:0;left:0;inset:0;z-index:15;pointer-events:none;overflow:visible}
 

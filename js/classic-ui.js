@@ -2855,13 +2855,18 @@
   // 升级奖励的统一入口：必选的「三选一」优先，其次 30 级支持作者提示。
   function promptLevelUpChoices() {
     if($('.ws-choice-dialog'))return null;
+    // 升级奖励弹窗自己会接三选一；它开着时不要在外面再叠一层。
+    if (window.SfLevelUp && typeof SfLevelUp.isOpen === 'function' && SfLevelUp.isOpen()) return null;
     // 战斗中、战果页和未收起的升级页都不能叠三选一；等它们收掉后由看门狗补弹。
     if (battleUiBusy()) return null;
     if (window.SfFightResult && typeof SfFightResult.isOpen === 'function' && SfFightResult.isOpen()) return null;
     if (document.querySelector && document.querySelector('#ui .sf-levelup-view:not(.sf-levelup-bg-only)')) return null;
     // 任何别的经典弹窗还开着都不要叠新的升级弹窗；关掉后 `modal()` 会再调一次。
     if($('.classic-modal-overlay'))return null;
-    if(typeof State.pendingWS==='function'&&State.pendingWS()>0)return wsChoiceDialog();
+    if(typeof State.pendingWS==='function'&&State.pendingWS()>0){
+      if (window.SfLevelUp && typeof SfLevelUp.sync === 'function') { SfLevelUp.sync(); return null; }
+      return wsChoiceDialog();
+    }
     if (State.supportPromptPending && State.supportPromptPending() && maybeSupportPrompt()) {
 
       const tick = () => {
@@ -2916,7 +2921,7 @@
       modal('升级奖励', upsHtml(list), [{ label: '确定', run: finish }], { small: true });
     };
     if (currentUiMode() === 'classic' && window.SfLevelUp) {
-      try { if (SfLevelUp.open(list, finish, fallback)) return true; } catch (e) {}
+      try { SfLevelUp.open(list, finish, fallback); return true; } catch (e) { fallback(); return true; }
     }
     fallback();
     return true;
@@ -3002,9 +3007,12 @@
   function openGear(key) {
     const g=State.myGears().find(x=>x.key===key);if(!g)return;
     const socketable=State.canSocketGem(g);
-    const gemInfo=g.gem?'<br>镶嵌宝石：'+esc(propMap.getValue(g.gem.id).name)+'（主属性 +'+State.gemPercent(State.gemLevel(g.gem.id))+'%，附加属性增幅 '+State.gemAffixUnits(g.gem.id)+' 档）':'';
+    const gemUnits=g.gem?State.gemUnitsForGear(g):[];
+    const gemTotal=g.gem?State.gemAffixTotal(State.gemLevel(g.gem.id)):0, gemApplied=gemUnits.reduce((a,b)=>a+b,0);
+    const gemDetail=!gemUnits.length?'该装备没有附加属性':(gemApplied===gemTotal?gemUnits.join('/'):'本件可分 '+gemApplied+' 档：'+gemUnits.join('/')+'；总 '+gemTotal+' 档');
+    const gemInfo=g.gem?'<br>镶嵌宝石：'+esc(propMap.getValue(g.gem.id).name)+'（主属性 +'+State.gemPercent(State.gemLevel(g.gem.id))+'%，附加属性 +'+gemApplied+' 档（'+gemDetail+'））':'';
 
-    const gemCost=socketable?'<br><span class="small-label">宝石：镶嵌 / 卸下各 5 金松果</span>':'';
+    const gemCost=socketable?'<br><span class="small-label">宝石：镶嵌免费 / 卸下 5 金松果</span>':'';
     const content='<div class="gear-detail"><div class="catalog-cell"><h3 class="detail-name q'+g.quality+'">'+esc(g.name)+'</h3><span class="item-icon">'+gearImg(g)+'</span><span class="small-label">'+['普通','优秀','杰出','卓越','传说','黑色'][g.quality]+'</span></div><div>装备类别：'+['头部','手部','身体','脚部'][g.type]+'　使用等级：'+g.useLevel+'<br>基本属性：'+esc(g.attrName)+' +'+g.abilityVal+(g.attrBase&&g.attrBase!==g.abilityVal?'（基准 '+g.attrBase+'，本件有浮动）':'')+'<br>附加属性：<br>'+State.extTextForGear(g, true).map(esc).join('<br>')+gemInfo+gemCost+'</div></div>';
     // 装 / 卸之后列表会重排（穿着 > 获得顺序），所以跟着这一件翻到它新位置所在的那一页，
     // 否则在后面的页上点「装备」，东西会当场跳到第一页、看不见了。
@@ -3024,9 +3032,10 @@
     const S=State.state();
     const gems=[101,102,103,104,105,106,107].filter(id=>(S.props[id]||0)>0);
     if(!gems.length){notice('背包里没有宝石。45级后通关关卡或在竞技场获胜有几率获得。',[{label:'返回'}]);return;}
-    modal('选择宝石','<div class="gem-pick">'+gems.map(id=>'<button type="button" class="help-item" data-gem="'+id+'"><span class="item-icon">'+icon('prop',id)+'</span><span>'+esc(propMap.getValue(id).name)+' ×'+S.props[id]+'</span></button>').join('')+'</div><p class="small-label">镶嵌 5 金松果（卸下同样 5 金）；附加属性提升幅度随机，可先卸下再镶嵌来重随。</p>',[{label:'返回',cls:'muted'}],{small:true});
+    modal('选择宝石','<div class="gem-pick">'+gems.map(id=>'<button type="button" class="help-item" data-gem="'+id+'"><span class="item-icon">'+icon('prop',id)+'</span><span>'+esc(propMap.getValue(id).name)+' ×'+S.props[id]+'</span></button>').join('')+'</div><p class="small-label">镶嵌免费；卸下 5 金松果。附加属性总档随机分到各条词条（单条最多 12 档），可先卸下再镶嵌来重随。</p>',[{label:'返回',cls:'muted'}],{small:true});
     const overlays=$$('.classic-modal-overlay'),m=overlays[overlays.length-1];
-    $$('[data-gem]',m).forEach(b=>b.onclick=()=>{const r=State.socketGem(key,+b.dataset.gem);toast(r.msg);if(r.ok){m.remove();openGear(key);}});
+    const callGem=(window.StateCall||((name,...args)=>Promise.resolve(State[name](...args))));
+    $$('[data-gem]',m).forEach(b=>b.onclick=async()=>{let r;try{r=await callGem('socketGem',key,+b.dataset.gem);}catch(e){toast('镶嵌失败：'+((e&&e.message)||e));return;}toast(r&&r.msg||'镶嵌失败');if(r&&r.ok){m.remove();openGear(key);}});
   }
   function openMerge() {
     if (window.ClassicFusion) window.ClassicFusion.open();
@@ -3341,7 +3350,7 @@
       const lv = id - 100;
       if (lv <= 2) lines.push('45 级起：通关关卡 20% 几率、竞技场（经验/碎片）获胜 15% 几率获得（一级 75% / 二级 25%）');
       if (lv < 7) lines.push('合成：3 个同级 + 10 金松果，成功率 ' + Math.round(State.gemMergeRate(lv) * 100) + '%（失败有 50% 几率一颗材料降 1 级，1级则碎裂）');
-      lines.push('镶嵌：镶入橙色（3 件相同紫装融合而来）或黑色装备，主属性 +' + State.gemPercent(lv) + '%（沿用原版曲线 5×(n²−n+2)），附加属性效果随机提升，每件限 1 颗；镶嵌与卸下各 5 金松果');
+      lines.push('镶嵌：镶入橙色（3 件相同紫装融合而来）或黑色装备，主属性 +' + State.gemPercent(lv) + '%（原版曲线 5×(n²−n+2)），附加属性总增幅 ' + State.gemAffixTotal(lv) + ' 档随机分到各条词条（单条最多 12 档，拆下重镶可重随）；每件限 1 颗，镶嵌免费、卸下 5 金松果');
     }
     const visibleLines = window.__SSDZ_ONLINE__ ? lines.filter((line) => !/挑战塔|无尽塔/.test(line)) : lines;
     if (!visibleLines.length) visibleLines.push('当前版本暂无产出途径（图鉴预留物品）');
@@ -3369,7 +3378,7 @@
     { key: 'beast', title: '幻兽', text: '村庄「幻兽牧场」孵化、编队、喂养、进化；孵化消耗 200 孵化点。幻兽竞技场用召唤证报名。' },
     { key: 'ladder', title: '天梯赛', text: '30 级开启，战斗中可拾取属性碎片；通过在天梯战斗来证明自己吧！' },
     { key: 'replay', title: '录像', text: '最近50场战斗保存在消息页，可通过回放进行查看。' },
-    { key: 'gems', title: '宝石', text: '45 级后通关关卡或竞技场获胜有几率获得 1~2 级宝石；3 个同级宝石 + 10 金松果可合成高一级（可能失败）。宝石可镶入橙色或黑色装备，镶嵌/卸下需花费 5 金松果。' },
+    { key: 'gems', title: '宝石', text: '45 级后通关关卡或竞技场获胜有几率获得 1~2 级宝石；3 个同级宝石 + 10 金松果可合成高一级（可能失败）。宝石可镶入橙色或黑色装备，镶嵌免费、卸下 5 金松果。' },
     { key: 'tower', title: '无尽塔', text: '村庄右上角的小径进入（20 级解锁）。免门票的 Roguelike 无尽模式，可从中获取抽奖卷道具。' },
     { key: 'fusion', title: '装备融合', text: '3 件同品质、未穿戴的装备可融合成 1 件更高品质装备，黑装可继续融合洗词条。产物部位从三件材料中随机、优先同套；词条按星级从高到低继承前两条，第三条随机。',
       when: () => State.blackGearEnabled() },

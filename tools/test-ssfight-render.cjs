@@ -1935,6 +1935,15 @@ async function checkClassicFight() {
   assert.deepEqual(cdKids, ['3741', '3743', '3745', '3749'], '3750 的四个数字：3741=3 / 3743=2 / 3745=1 / 3749=GO');
   assert.ok(!byId.get('gocd'), '自造的 gocd 不该再进战斗包（321GO 只留原版那一颗）');
   assert.equal(SfFight.COUNTDOWN.tag, '3750', 'SfFight 播的就是原版 3750');
+  /* 占位串必须在 HUD 滑入前换成真值：部分安卓 WebView 会把先画出的
+   * `9999/9999` / `李二强李二强` 留成残影，和真值叠在一起。 */
+  assert.ok(/function applyHudStats\(hud, names, opts\)/.test(uf)
+    && uf.indexOf('applyHudStats(hud, names)') < uf.indexOf('rec.hudReady = playClip(hud')
+    && /setPendingText\('name1'/.test(uf)
+    && /live\.bloodSig = null/.test(uf)
+    && /'9999\/9999'/.test(fs.readFileSync(path.join(ROOT, 'js/ssfight/render.js'), 'utf8'))
+    && /__pendingText/.test(fs.readFileSync(path.join(ROOT, 'js/ssfight/render.js'), 'utf8')),
+    'HUD 要先写真值再播滑入，9999/9999 不作为占位串绘制');
   assert.equal(SfFight.COUNTDOWN.holderFrame, 8, '3750 挂在血条第 8 帧');
   assert.ok(!/attachChild\('gocd'/.test(uf) && !/function playCountdown/.test(uf),
     'ui-fight.js 不该再自己造一颗倒计时元件挂上去（gocd 那一版已删）');
@@ -2382,6 +2391,11 @@ function checkClassicRankFlow() {
     && /function waitArenaView\(/.test(uc)
     && /return waitArenaView\(\);/.test(uc),
     '经典天梯菜单走 startRankFlow；页面异步挂载时先等背景回来');
+  assert.ok(/paintLadderDailyHint\(view\)/.test(uc)
+    && /data-ladder-daily/.test(uc)
+    && /'今日已赛 ' \+ played/.test(uc)
+    && /current\.arenaPage === 'menu'/.test(uc),
+    '天梯菜单要在 settled 后显示今日已赛场次');
   assert.ok(/onEnd: async winner =>[\s\S]{0,900}?await back\(\)[\s\S]{0,200}?outcome\(/.test(ce),
     '战果弹窗要等背景页恢复后再开（避免被 openChallenge 的 innerHTML 清掉）');
   assert.ok(/Promise\.race\(\[[\s\S]{0,200}?State\.fileLoad\([^)]*\)[\s\S]{0,200}?'__timeout__'/.test(main)
@@ -2679,6 +2693,18 @@ function checkLevelUpStyle() {
     /levelUpUi \? '' : stageUpsHtml/.test(cu) &&
     /\.sf-levelup-view\{[^}]*z-index:60/.test(css),
     '升级奖励要挂原版 7795 升级页（挂不出来退回奖励卡），并保留后续三选一/加点'
+  );
+  /* 2026-11 口径：升级属性页与武技三选一必须在同一个 root 里换阶段 —— root 挂在 #app，
+   * 页面重建（#ui innerHTML / renderHome）摘不掉，确认完三选一之前不会消失。 */
+  assert.ok(
+    /function enqueue\(ups, opts\)/.test(lv) &&
+    /document\.getElementById\('app'\) \|\| document\.body/.test(lv) &&
+    /function showChoice\(\)/.test(lv) && /function showDone\(\)/.test(lv) &&
+    /holdBackground\(\)/.test(lv) && /pendingWs\(\)/.test(lv) &&
+    /SfLevelUp\.sync\(\)/.test(cu) &&
+    /\.sf-levelup-root\{[^}]*z-index:10000/.test(css) &&
+    /\.sf-levelup-ws\{[^}]*z-index:80/.test(css),
+    '升级奖励与三选一要绑在同一个 #app 级弹窗里：页面重建摘不掉，选完再确认才关闭'
   );
   /* 用户 2026-11 口径：升级「三选一」三张候选要并排一行，卡片本身尺寸不动。
    * 卡片 3×284 + 2×16 = 884px，所以外框正文（宽 - 两侧边框 - 左右内边距）必须连

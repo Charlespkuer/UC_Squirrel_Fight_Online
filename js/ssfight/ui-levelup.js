@@ -1,11 +1,12 @@
-// ui-levelup.js —— 升级奖励页（ssfight 原版 7795 第 30 帧）+ 现代升级奖励数据
+// ui-levelup.js —— 升级奖励 + 武器/技能三选一（同一个不可被页面重建摘掉的弹窗）
 (function () {
   'use strict';
   const NS = 'http://www.w3.org/2000/svg';
   const XLINK = 'http://www.w3.org/1999/xlink';
   const SPLASH_SINGLE = 1100;
   const SPLASH_MULTI = 700;
-
+  const LOAD_TIMEOUT = 7000;
+  const ACTION_TIMEOUT = 15000;
   const STAGE_VIEWBOX = '11.3 6.25 320 196';
 
   const STAT = {
@@ -15,8 +16,14 @@
     speed: { name: '速度', prop: 18 },
   };
   const STAT_ORDER = ['hp', 'agility', 'power', 'speed'];   // 与原版 showReward 的数组顺序一致
-  let inst = null;
+
+  // 整个升级流程只有一个实例：奖励页、三选一、完成页都在这一个 root 里换阶段。
+  // root 挂在 #app（不是 #ui）下，因此 page()/renderHome()/innerHTML 清页都摘不掉它。
+  let state = null;
   let seq = 0;
+  let watch = 0;
+  let wsPendingSince = 0;
+  const shownSigs = new Set();
 
   const $ = (sel, root) => (root || document).querySelector(sel);
   const reduceMotion = () => !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -149,13 +156,13 @@
       n.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        confirm();
+        confirmReward();
       });
       n.setAttribute('role', 'button');
       n.setAttribute('tabindex', '0');
       n.setAttribute('aria-label', '确定');
       n.addEventListener('keydown', (e) => {
-        if (!e.repeat && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); confirm(); }
+        if (!e.repeat && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); confirmReward(); }
       });
       if (depth === '20') {
         n.addEventListener('mouseenter', () => { n.style.filter = 'brightness(1.08)'; });
@@ -197,34 +204,41 @@
   }
 
   function currentPages() {
-    return chunks(entriesFor(inst.ups[inst.upIndex]), 4);
+    return chunks(entriesFor(state.ups[state.upIndex] || {}), 4);
   }
   function showSplash() {
-    if (!inst || !inst.view) return;
-    const up = inst.ups[inst.upIndex];
-    inst.page = 0;
-    inst.pages = currentPages();
-    inst.ready = false;
-    inst.lock = false;
-    inst.view.gotoAndStop(1);
-    inst.view.playing = false;
-    freeze(inst.view);
-    setLevel(inst.view, up.level);
-    pageIndicator(inst.view, 0, 0);
-    clearTimeout(inst.timer);
-    const wait = reduceMotion() ? 0 : (inst.ups.length > 1 ? SPLASH_MULTI : SPLASH_SINGLE);
-    inst.timer = setTimeout(() => {
-      if (!inst || inst.seq !== seq) return;
+    if (!state || !state.view) return;
+    const up = state.ups[state.upIndex];
+    if (!up) { afterRewards(); return; }
+    state.phase = 'reward';
+    state.page = 0;
+    state.pages = currentPages();
+    state.ready = false;
+    state.lock = false;
+    state.host.classList.remove('sf-levelup-bg-only');
+    if (state.ws) state.ws.hidden = true;
+    state.view.gotoAndStop(1);
+    state.view.playing = false;
+    freeze(state.view);
+    setLevel(state.view, up.level);
+    pageIndicator(state.view, 0, 0);
+    clearTimeout(state.timer);
+    const mine = state.seq;
+    const wait = reduceMotion() ? 0 : (state.ups.length > 1 ? SPLASH_MULTI : SPLASH_SINGLE);
+    state.timer = setTimeout(() => {
+      if (!state || state.seq !== mine || state.phase !== 'reward') return;
       showReward();
     }, wait);
   }
   function showReward() {
-    if (!inst || !inst.view) return;
+    if (!state || !state.view) return;
     const pages = currentPages();
-    inst.pages = pages;
-    if (inst.page >= pages.length) inst.page = pages.length - 1;
-    const cards = pages[inst.page] || [];
-    const view = inst.view;
+    state.pages = pages;
+    if (state.page >= pages.length) state.page = pages.length - 1;
+    const cards = pages[state.page] || [];
+    const view = state.view;
+    state.host.classList.remove('sf-levelup-bg-only');
+    if (state.ws) state.ws.hidden = true;
     view.gotoAndStop(30);
     view.playing = false;
     freeze(view);
@@ -236,10 +250,10 @@
       freeze(view);
       for (let i = 0; i < cards.length && i < 4; i++) setCard(fp, i + 1, cards[i]);
     }
-    pageIndicator(view, inst.page, pages.length);
+    pageIndicator(view, state.page, pages.length);
     wireConfirm(view);
     markBackground(view);
-    inst.ready = true;
+    state.ready = true;
   }
 
   function markBackground(view) {
@@ -248,117 +262,656 @@
     try { cg = view.g.querySelector(':scope > g > path[fill^="url(#f7775"]'); } catch (e) { cg = null; }
     if (cg && cg.parentNode && cg.parentNode.classList) cg.parentNode.classList.add('sf-levelup-cg');
   }
-  // 升级页关掉后是否还有必须由玩家处理的武技三选一。
   function pendingWs() {
     try {
       return !!(window.State && typeof State.pendingWS === 'function' && State.pendingWS() > 0);
     } catch (e) { return false; }
   }
 
+  // 奖励页收掉后仍留在同一个 root 里的 CG 背景；三选一/完成页盖在它上面。
   function holdBackground() {
-    if (!inst || !inst.host) return false;
-    inst.backgroundHeld = true;
-    inst.ready = false;
-    clearTimeout(inst.timer);
-    if (inst.host.classList) inst.host.classList.add('sf-levelup-bg-only');
-    markBackground(inst.view);
+    if (!state || !state.host) return false;
+    state.backgroundHeld = true;
+    if (state.host.classList) state.host.classList.add('sf-levelup-bg-only');
+    // 7795 没挂出来时奖励卡是 DOM：清掉它，只留宿主自己的 CG 背景。
+    if (state.fallback && state.host) state.host.innerHTML = '';
+    markBackground(state.view);
     return true;
   }
 
   function releaseBackground() {
-    if (!inst || !inst.backgroundHeld) return false;
-    destroy();
-    return true;
+    return false;
   }
-  function confirm() {
-    if (!inst || !inst.ready || inst.lock) return;
-    inst.lock = true;
-    setTimeout(() => { if (inst) inst.lock = false; }, 220);
-    if (inst.page < inst.pages.length - 1) {
-      inst.page++;
+
+  function confirmReward() {
+    if (!state || state.phase !== 'reward' || !state.ready) return;
+    if (state.lock) return;
+    if (state.fallback) { afterRewards(); return; }
+    state.lock = true;
+    setTimeout(() => { if (state) state.lock = false; }, 220);
+    if (state.page < state.pages.length - 1) {
+      state.page++;
       showReward();
       return;
     }
-    if (inst.upIndex < inst.ups.length - 1) {
-      inst.upIndex++;
+    if (state.upIndex < state.ups.length - 1) {
+      state.upIndex++;
       showSplash();
       return;
     }
-    finish();
+    afterRewards();
   }
-  function finish() {
-    if (!inst) return;
-    const cb = inst.onDone;
 
-    if (pendingWs()) {
-      holdBackground();
-      if (typeof cb === 'function') {
-        try { cb(); } catch (e) { err(e); }
+  // 奖励页全部确认后：先接存档里必须选掉的三选一，再收弹窗。
+  function afterRewards() {
+    if (!state) return;
+    state.ready = false;
+    if (pendingWs()) { showChoice(); return; }
+    if (state.deferredUps && state.deferredUps.length) { showDeferred(); return; }
+    close();
+  }
+
+  function showDeferred() {
+    if (!state || !state.deferredUps.length) { afterRewards(); return; }
+    const list = state.deferredUps.splice(0, state.deferredUps.length);
+    state.ups = list;
+    state.upIndex = 0;
+    state.page = 0;
+    state.fallback = false;
+    hideChoicePanel();
+    if (state.view) { showSplash(); return; }
+    // 之前走的是 DOM 兜底：重新用奖励卡显示新增的升级。
+    showFallback();
+  }
+
+  function hideChoicePanel() {
+    if (!state) return;
+    if (state.ws) { state.ws.hidden = true; state.ws.innerHTML = ''; }
+    if (state.host) state.host.classList.remove('sf-levelup-bg-only');
+  }
+
+  function showChoice() {
+    if (!state) return;
+    state.phase = 'choice';
+    state.ready = true;
+    state.lock = false;
+    state.wsError = '';
+    state.wsAutoTries = 0;
+    clearTimeout(state.timer);
+    holdBackground();
+    if (state.ws) {
+      state.ws.hidden = false;
+      renderChoice();
+    }
+  }
+
+  function wsCountText() {
+    const n = pendingWs() ? Number(State.pendingWS()) || 0 : 0;
+    return n > 1 ? ('还有 ' + (n - 1) + ' 组在后面等着') : '最后一组';
+  }
+
+  function wsIconHtml(kind, id) {
+    const c = window.UI && window.UI.classic;
+    if (c && typeof c.icon === 'function') {
+      try {
+        const html = c.icon(kind, id);
+        if (html) return html;
+      } catch (e) { err(e); }
+    }
+    return '<b class="reward-badge">' + (kind === 'weapon' ? '武' : '技') + '</b>';
+  }
+
+  function wsCardHtml(c, i) {
+    return '<button type="button" class="ws-choice" data-ws-pick="' + i + '">' +
+      '<span class="item-icon">' + wsIconHtml(c.kind, c.id) + '</span>' +
+      '<b class="ws-choice-name">' + esc(c.name) + '</b>' +
+      '<span class="ws-choice-kind">' + (c.kind === 'weapon' ? '武器' : '技能') + (c.type ? ' · ' + esc(c.type) : '') + '</span>' +
+      '<span class="ws-choice-desc">' + esc(c.remark || '—') + '</span></button>';
+  }
+
+  function renderChoice() {
+    if (!state || !state.ws) return;
+    if (state.wsBusy) {
+      state.ws.innerHTML = '<div class="classic-modal small-modal sf-levelup-ws-modal" role="dialog" aria-modal="true" aria-label="升级奖励">' +
+        '<h2 class="modal-title cartoon">升级奖励</h2>' +
+        '<div class="modal-body"><p class="free-point-tip">正在结算武器/技能，请稍候……</p></div></div>';
+      return;
+    }
+    if (!pendingWs()) { showDone(); return; }
+    const list = (window.State && typeof State.currentWSChoices === 'function') ? State.currentWSChoices() : [];
+    if (!list.length) {
+      const error = state.wsError
+        ? '<p class="sf-levelup-error" role="alert">' + esc(state.wsError) + '</p>' +
+          '<div class="modal-buttons"><button type="button" class="uc-button gold" data-ws-random>重试</button></div>'
+        : '<p class="free-point-tip">正在挑选可用的武器/技能……</p>';
+      state.ws.innerHTML = '<div class="classic-modal small-modal sf-levelup-ws-modal" role="dialog" aria-modal="true" aria-label="升级奖励">' +
+        '<h2 class="modal-title cartoon">升级奖励</h2>' +
+        '<div class="modal-body">' + error + '</div></div>';
+      if (!state.wsError && !state.wsAutoPending) {
+        if (state.wsAutoTries >= 3) {
+          state.wsError = '没有可选的武器/技能，请重试';
+          renderChoice();
+          return;
+        }
+        state.wsAutoPending = true;
+        setTimeout(() => { if (state && state.phase === 'choice' && !state.wsBusy) chooseRandom(); }, 80);
       }
       return;
     }
-    destroy();
-    if (typeof cb === 'function') {
-      try { cb(); } catch (e) { err(e); }
+    state.wsAutoTries = 0;
+    const n = Number(State.pendingWS()) || 1;
+    const body = '<div class="ws-choice-box"><p class="free-point-tip">升级奖励：从下面' + list.length + ' 个里选一个学会（' +
+      wsCountText() + '）。</p>' +
+      '<div class="ws-choice-row' + (list.length < 3 ? ' few' : '') + '">' + list.map(wsCardHtml).join('') + '</div>' +
+      (state.wsError ? '<p class="sf-levelup-error" role="alert">' + esc(state.wsError) + '</p>' : '') +
+      '</div>';
+    state.ws.innerHTML = '<div class="classic-modal small-modal sf-levelup-ws-modal" role="dialog" aria-modal="true" aria-label="选择武器或技能">' +
+      '<h2 class="modal-title cartoon">选择武器或技能</h2>' +
+      '<div class="modal-body">' + body + '</div>' +
+      '<div class="modal-buttons"><button type="button" class="uc-button muted" data-ws-random>' +
+      (n > 1 ? '全部随机' : '随便来一个') + '</button></div></div>';
+  }
+
+  function chooseCard(index) {
+    if (!state || state.phase !== 'choice' || state.wsBusy) return;
+    let c = null;
+    try { c = State.currentWSChoices()[Number(index)]; } catch (e) { c = null; }
+    if (!c) { state.wsError = '这组候选已变化，请重新选择'; renderChoice(); return; }
+    let r = null;
+    try { r = State.chooseWS(c.kind, c.id); } catch (e) { r = { ok: false, msg: e && e.message }; }
+    if (!r || !r.ok) {
+      state.wsError = (r && (r.msg || r.message)) || '选择失败，请重试';
+      renderChoice();
+      return;
+    }
+    state.wsError = '';
+    if (state.wsLearned.indexOf(c.name) < 0) state.wsLearned.push(c.name);
+    state.wsAutoPending = false;
+    state.wsAutoTries = 0;
+    renderChoice();
+  }
+
+  function chooseRandom() {
+    if (!state || state.phase !== 'choice' || state.wsBusy) return;
+    state.wsBusy = true;
+    state.wsError = '';
+    state.wsAutoPending = false;
+    renderChoice();
+    let settled = false;
+    let timer = 0;
+    const finish = (r) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (!state) return;
+      state.wsBusy = false;
+      if (!r || !r.ok) state.wsError = (r && (r.msg || r.message)) || '选择失败，请重试';
+      else {
+        state.wsError = '';
+        // 服务端说成功但本地仍没有候选：最多自动重试 3 次，随后交给玩家点「重试」。
+        let left = [];
+        try { left = State.currentWSChoices() || []; } catch (e) { left = []; }
+        if (pendingWs() && !left.length) {
+          state.wsAutoTries = (state.wsAutoTries || 0) + 1;
+          if (state.wsAutoTries >= 3) state.wsError = '没有可选的武器/技能，请重试';
+        } else if (left.length) state.wsAutoTries = 0;
+      }
+      renderChoice();
+    };
+    timer = setTimeout(() => finish({ ok: false, msg: '连接超时，请重试' }), ACTION_TIMEOUT);
+    try {
+      if (typeof window.StateCall === 'function') {
+        window.StateCall('chooseWSRandom').then(finish, (e) => finish({ ok: false, msg: (e && e.message) || '选择失败' }));
+      } else if (window.State && typeof State.chooseWSRandom === 'function') {
+        finish(State.chooseWSRandom());
+      } else {
+        finish({ ok: false, msg: '当前不能随机选择' });
+      }
+    } catch (e) {
+      finish({ ok: false, msg: (e && e.message) || '选择失败' });
     }
   }
-  function destroy() {
-    seq++;
-    if (!inst) return;
-    clearTimeout(inst.timer);
-    const old = inst;
-    inst = null;
-    try { if (old.view) old.view.destroy(); } catch (e) {}
-    try { if (old.host && old.host.parentNode) old.host.parentNode.removeChild(old.host); } catch (e) {}
+
+  function showDone() {
+    if (!state || !state.ws) return;
+    state.phase = 'done';
+    state.ready = true;
+    holdBackground();
+    const learned = state.wsLearned.length
+      ? '<p class="free-point-tip">已学会：' + state.wsLearned.map(esc).join('、') + '</p>' : '';
+    state.ws.hidden = false;
+    state.ws.innerHTML = '<div class="classic-modal small-modal sf-levelup-ws-modal" role="dialog" aria-modal="true" aria-label="升级奖励已完成">' +
+      '<h2 class="modal-title cartoon">升级奖励</h2>' +
+      '<div class="modal-body"><p class="free-point-tip">本次升级的奖励已全部处理完。</p>' + learned + '</div>' +
+      '<div class="modal-buttons"><button type="button" class="uc-button gold" data-lv-done>确定</button></div></div>';
   }
-  async function mount(host, mine) {
-    const view = await SfRender.mountSymbol(host, '7795', {
-      frame: 1, label: '等级提升', viewBox: STAGE_VIEWBOX,
-    });
-    if (!inst || inst.seq !== mine) { try { view.destroy(); } catch (e) {} return; }
-    inst.view = view;
-    freeze(view);
-    showSplash();
+
+  function finishDone() {
+    if (!state || state.phase !== 'done') return;
+    if (pendingWs()) { showChoice(); return; }
+    if (state.deferredUps && state.deferredUps.length) { showDeferred(); return; }
+    close();
   }
-  function fail(e) {
-    err(e);
-    if (!inst) return;
-    const cb = inst.onDone, onFail = inst.onFail;
-    destroy();
-    // 有兜底弹窗时由它负责收尾（点确定后再接三选一 / 加点），避免提示被弹窗挡住。
-    if (typeof onFail === 'function') { try { onFail(e); } catch (x) { err(x); } }
-    else if (typeof cb === 'function') { try { cb(); } catch (x) { err(x); } }
+
+  function esc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
-  function open(ups, onDone, onFail) {
-    const list = (ups || []).filter(Boolean);
-    if (!list.length) { if (onDone) onDone(); return false; }
-    destroy();
-    const mine = ++seq;
-    inst = {
-      seq: mine, ups: list, upIndex: 0, page: 0, pages: [], timer: 0, onDone, onFail,
-      host: document.createElement('section'), view: null, backgroundHeld: false,
-    };
-    inst.host.className = 'classic-home ssfight-home ssfight-view sf-levelup-view';
-    inst.host.setAttribute('role', 'dialog');
-    inst.host.setAttribute('aria-modal', 'true');
-    inst.host.setAttribute('aria-label', '升级奖励');
-    inst.host.tabIndex = 0;
-    inst.host.addEventListener('keydown', (e) => {
-      if (!e.repeat && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); confirm(); }
-    });
-    const ui = document.getElementById('ui') || document.body;
-    ui.appendChild(inst.host);
-    try { if (window.Main && Main.resizeLayout) Main.resizeLayout(); } catch (e) {}
-    try { inst.host.focus({ preventScroll: true }); } catch (e) {}
-    if (!window.SfRender || !SfRender.mountSymbol || !SfRender.load) { fail(new Error('素材库未就绪')); return false; }
-    SfRender.load().then(() => {
-      if (!inst || inst.seq !== mine) return null;
-      return mount(inst.host, mine);
-    }).catch(fail);
+
+  function fallbackHtml(list) {
+    const c = window.UI && window.UI.classic;
+    if (c && typeof c.upsHtml === 'function') {
+      try { return c.upsHtml(list); } catch (e) { err(e); }
+    }
+    const rows = (list || []).map((u) => {
+      const gains = [];
+      for (const key of STAT_ORDER) {
+        const value = Number(u[key]) || 0;
+        if (value > 0) gains.push(STAT[key].name + '+' + value);
+      }
+      if (u.autoPoint) gains.push('系统分配 1 点');
+      const extra = [];
+      if (u.chest) extra.push('金宝箱×' + u.chest);
+      if (u.attributeBook) extra.push('属性书×1');
+      (u.gifts || []).forEach((g) => extra.push(g.name + '×' + g.count));
+      return '<div class="reward-panel"><div class="reward-row"><div class="reward-card"><span class="reward-text">' +
+        esc(gains.join('　') || '等级提升') + (extra.length ? '<br>' + esc(extra.join('　')) : '') +
+        '</span></div></div><div class="reward-level">升到 ' + esc(u.level) + ' 级</div></div>';
+    }).join('');
+    return '<div class="reward-stack">' + rows + '</div>';
+  }
+
+  function showFallback() {
+    if (!state) return;
+    state.loading = false;
+    state.fallback = true;
+    state.phase = 'reward';
+    state.ready = true;
+    state.lock = false;
+    state.pages = [];
+    clearTimeout(state.timer);
+    try { if (state.view) { state.view.destroy(); state.view = null; } } catch (e) {  }
+    if (!state.host) return;
+    state.host.classList.remove('sf-levelup-bg-only');
+    if (state.ws) state.ws.hidden = true;
+    state.host.innerHTML = '<div class="sf-levelup-fallback"><section class="classic-modal small-modal" role="dialog" aria-modal="true" aria-label="升级奖励">' +
+      '<h2 class="modal-title cartoon">升级奖励</h2>' +
+      '<div class="modal-body">' + fallbackHtml(state.ups) + '</div>' +
+      '<div class="modal-buttons"><button type="button" class="uc-button gold" data-lv-dom-confirm>确定</button></div>' +
+      '</section></div>';
+    const button = state.host.querySelector('[data-lv-dom-confirm]');
+    if (button) button.addEventListener('click', (e) => { e.preventDefault(); confirmReward(); });
+  }
+
+  function syncGeometry() {
+    const ui = document.getElementById('ui');
+    if (!state || !state.root || !ui || !ui.getBoundingClientRect) return;
+    let rect = null;
+    try { rect = ui.getBoundingClientRect(); } catch (e) { return; }
+    const w = Number(ui.offsetWidth) || 0;
+    const h = Number(ui.offsetHeight) || 0;
+    if (!rect || !(rect.width > 0) || !(rect.height > 0) || !(w > 0) || !(h > 0)) return;
+    // root 直接铺在 #ui 的屏幕矩形上；stage 用左上角原点缩放到同一矩形。
+    // 不能拿「未缩放中心」反推 left：stage 的 transform-origin 已经是 0 0。
+    state.root.style.left = rect.left.toFixed(2) + 'px';
+    state.root.style.top = rect.top.toFixed(2) + 'px';
+    state.root.style.width = rect.width.toFixed(2) + 'px';
+    state.root.style.height = rect.height.toFixed(2) + 'px';
+    if (state.stage) {
+      state.stage.style.width = w + 'px';
+      state.stage.style.height = h + 'px';
+      state.stage.style.transform = 'scale(' + (rect.width / w).toFixed(6) + ',' + (rect.height / h).toFixed(6) + ')';
+    }
+  }
+
+  function rootParent() {
+    return document.getElementById('app') || document.body;
+  }
+
+  function ensureRoot(st) {
+    if (!st.root) {
+      const root = document.createElement('section');
+      root.className = 'sf-levelup-root';
+      root.setAttribute('role', 'dialog');
+      root.setAttribute('aria-modal', 'true');
+      root.setAttribute('aria-label', '升级奖励');
+      root.tabIndex = 0;
+      const stage = document.createElement('div');
+      stage.className = 'sf-levelup-stage';
+      const host = document.createElement('section');
+      host.className = 'classic-home ssfight-home ssfight-view sf-levelup-view';
+      host.setAttribute('aria-label', '升级奖励');
+      const ws = document.createElement('div');
+      ws.className = 'sf-levelup-ws ws-choice-dialog';
+      ws.hidden = true;
+      stage.appendChild(host);
+      stage.appendChild(ws);
+      root.appendChild(stage);
+      root.addEventListener('keydown', (e) => {
+        if (e.repeat || (e.key !== 'Enter' && e.key !== ' ')) return;
+        const t = e.target && e.target.closest ? e.target : null;
+        if (t && t.closest('button,[data-ws-pick],[data-lv-done],[data-ws-random]')) return;
+        if (!state || state.phase !== 'reward') return;
+        e.preventDefault();
+        confirmReward();
+      });
+      ws.addEventListener('click', (e) => {
+        const target = e.target && e.target.closest ? e.target : null;
+        if (!target) return;
+        const pick = target.closest('[data-ws-pick]');
+        if (pick) { e.preventDefault(); chooseCard(pick.dataset.wsPick); return; }
+        if (target.closest('[data-ws-random]')) { e.preventDefault(); chooseRandom(); return; }
+        if (target.closest('[data-lv-done]')) { e.preventDefault(); finishDone(); return; }
+      });
+      st.root = root;
+      st.stage = stage;
+      st.host = host;
+      st.ws = ws;
+      const parent = rootParent();
+      if (!parent) return false;
+      parent.appendChild(root);
+      try { root.focus({ preventScroll: true }); } catch (e) {}
+      syncGeometry();
+      return true;
+    }
+    if (!st.root.isConnected) {
+      const parent = rootParent();
+      if (!parent) return false;
+      parent.appendChild(st.root);
+      syncGeometry();
+    }
     return true;
   }
+
+  function clearView(st) {
+    if (!st || !st.view) return;
+    try { st.view.destroy(); } catch (e) {  }
+    st.view = null;
+  }
+
+  function mountReward() {
+    if (!state) return;
+    const st = state;
+    st.phase = 'loading';
+    st.ready = false;
+    st.loading = true;
+    st.fallback = false;
+    st.loadStart = Date.now();
+    st.host.classList.remove('sf-levelup-bg-only');
+    if (st.ws) st.ws.hidden = true;
+    st.host.innerHTML = '<div class="sf-levelup-loading" role="status">升级奖励加载中……</div>';
+    if (!window.SfRender || !SfRender.mountSymbol || !SfRender.load) { showFallback(); return; }
+    const mine = st.seq;
+    const failTimer = setTimeout(() => {
+      if (state === st && st.seq === mine && st.loading) showFallback();
+    }, LOAD_TIMEOUT);
+    st.loadTimer = failTimer;
+    SfRender.load().then(() => {
+      if (state !== st || st.seq !== mine) return null;
+      const host = st.host;
+      if (!host || !host.isConnected) return null;
+      return SfRender.mountSymbol(host, '7795', {
+        frame: 1, label: '等级提升', viewBox: STAGE_VIEWBOX,
+      });
+    }).then((view) => {
+      clearTimeout(failTimer);
+      if (!view) return;
+      if (state !== st || st.seq !== mine) { try { view.destroy(); } catch (e) {  } return; }
+      // 加载超时已经切到 DOM 兜底：迟到的 7795 不能再把兜底页顶掉。
+      if (st.fallback) {
+        try { view.destroy(); } catch (e) {  }
+        if (st.host) st.host.innerHTML = '';
+        return;
+      }
+      st.view = view;
+      st.loading = false;
+      freeze(view);
+      showSplash();
+    }).catch((e) => {
+      clearTimeout(failTimer);
+      if (state !== st) return;
+      err(e);
+      showFallback();
+    });
+  }
+
+  function tick() {
+    if (!state) return;
+    const st = state;
+    if (document.querySelector('.online-login') || document.querySelector('#ui .title-screen')) { close(); return; }
+    if (st.root && !st.root.isConnected) {
+      const parent = rootParent();
+      if (parent) { parent.appendChild(st.root); }
+    }
+    syncGeometry();
+    if (st.root) {
+      let battling = false;
+      try { battling = !!(window.Main && typeof Main.isBattle === 'function' && Main.isBattle()); } catch (e) { battling = false; }
+      st.root.style.visibility = battling ? 'hidden' : '';
+    }
+    if (st.phase === 'loading' && st.loading && st.loadStart && Date.now() - st.loadStart > LOAD_TIMEOUT) {
+      showFallback();
+      return;
+    }
+    if (st.phase === 'choice') {
+      if (!pendingWs() && !st.wsBusy) { showDone(); return; }
+      if (pendingWs() && !st.wsBusy) {
+        let list = [];
+        try { list = State.currentWSChoices() || []; } catch (e) { list = []; }
+        if (!list.length && !st.wsAutoPending && !st.wsError && st.wsAutoTries < 3) {
+          st.wsAutoPending = true;
+          setTimeout(() => { if (state === st && st.phase === 'choice' && !st.wsBusy) chooseRandom(); }, 300);
+        }
+      }
+    }
+  }
+
+  function close() {
+    if (!state) return;
+    const st = state;
+    state = null;
+    clearTimeout(st.timer);
+    clearTimeout(st.loadTimer);
+    clearView(st);
+    if (st.root && st.root.parentNode) {
+      try { st.root.parentNode.removeChild(st.root); } catch (e) {  }
+    }
+    const callbacks = st.callbacks.slice();
+    for (const cb of callbacks) {
+      if (!cb || typeof cb.onDone !== 'function') continue;
+      try { cb.onDone(); } catch (e) { err(e); }
+    }
+    setTimeout(() => {
+      if (state) return;
+      try {
+        if (window.UI && UI.classic && typeof UI.classic.promptLevelUpChoices === 'function') UI.classic.promptLevelUpChoices();
+      } catch (e) { err(e); }
+    }, 0);
+  }
+
+  function fail(st, e) {
+    err(e);
+    if (state === st) state = null;
+    if (!st) return;
+    clearTimeout(st.timer);
+    clearTimeout(st.loadTimer);
+    clearView(st);
+    if (st.root && st.root.parentNode) {
+      try { st.root.parentNode.removeChild(st.root); } catch (x) {  }
+    }
+    const callbacks = st.callbacks.slice();
+    for (const cb of callbacks) {
+      if (!cb) continue;
+      try {
+        if (typeof cb.onFail === 'function') cb.onFail(e);
+        else if (typeof cb.onDone === 'function') cb.onDone();
+      } catch (x) { err(x); }
+    }
+  }
+
+  function upSig(u) {
+    return [u.level, u.power, u.agility, u.speed, u.hp, u.autoPoint, u.wsChoice,
+      u.chest, u.attributeBook, u.reward, u.rewardId, u.rewardKind,
+      (u.gifts || []).map((g) => g.id + ':' + g.count).join(',')].join('|');
+  }
+
+  function createState(ups, callbacks) {
+    return {
+      seq: ++seq,
+      ups: ups.slice(),
+      upIndex: 0,
+      page: 0,
+      pages: [],
+      phase: 'loading',
+      ready: false,
+      loading: true,
+      fallback: false,
+      lock: false,
+      backgroundHeld: false,
+      view: null,
+      root: null,
+      stage: null,
+      host: null,
+      ws: null,
+      timer: 0,
+      loadTimer: 0,
+      loadStart: 0,
+      callbacks: callbacks.slice(),
+      deferredUps: [],
+      wsBusy: false,
+      wsError: '',
+      wsLearned: [],
+      wsAutoPending: false,
+      wsAutoTries: 0,
+    };
+  }
+
+  function begin(st) {
+    if (!ensureRoot(st)) return false;
+    if (!st.ups.length) {
+      if (pendingWs()) { showChoice(); return true; }
+      return false;
+    }
+    mountReward();
+    return true;
+  }
+
+  // 所有入口都走这里：同一时间只有一个 root；后来的奖励接在队列后面。
+  function enqueue(ups, opts) {
+    const o = opts || {};
+    const clean = [];
+    for (const u of (ups || [])) {
+      if (!u) continue;
+      const sig = upSig(u);
+      if (shownSigs.has(sig)) continue;
+      shownSigs.add(sig);
+      clean.push(u);
+    }
+    if (!clean.length) {
+      if (state) {
+        if (typeof o.onDone === 'function') state.callbacks.push({ onDone: o.onDone });
+        return true;
+      }
+      if (pendingWs() && sync()) {
+        if (typeof o.onDone === 'function' && state) state.callbacks.push({ onDone: o.onDone });
+        return true;
+      }
+      if (typeof o.onDone === 'function') { try { o.onDone(); } catch (e) { err(e); } }
+      return false;
+    }
+    if (state) {
+      if (state.phase === 'choice' || state.phase === 'done') {
+        state.deferredUps.push(...clean);
+      } else {
+        state.ups.push(...clean);
+        // DOM 兜底是一次性把整批奖励卡画完的：后到的升级要重画，否则会漏掉。
+        if (state.fallback) showFallback();
+      }
+      if (typeof o.onDone === 'function') state.callbacks.push({ onDone: o.onDone });
+      if (typeof o.onFail === 'function') state.callbacks.push({ onFail: o.onFail });
+      return true;
+    }
+    const callbacks = [{ onDone: o.onDone, onFail: o.onFail }];
+    const st = createState(clean, callbacks);
+    state = st;
+    try {
+      if (!begin(st)) {
+        fail(st, new Error('升级弹窗无法挂载'));
+        return false;
+      }
+    } catch (e) {
+      fail(st, e);
+      return false;
+    }
+    return true;
+  }
+
+  function canOpenWsOnly() {
+    if (typeof State === 'undefined' || typeof State.state !== 'function') return false;
+    try { if (!State.state()) return false; } catch (e) { return false; }
+    try { if (window.Main && typeof Main.isBattle === 'function' && Main.isBattle()) return false; } catch (e) {  }
+    if (document.querySelector('#ui .online-login, #ui .title-screen')) return false;
+    if (!document.querySelector('#ui .classic-home, #ui .classic-page')) return false;
+    const stale = !!(wsPendingSince && Date.now() - wsPendingSince > 8000);
+    if (!stale) {
+      if (window.SfFightResult && typeof SfFightResult.isOpen === 'function' && SfFightResult.isOpen()) return false;
+      if (document.querySelector('.classic-modal-overlay')) return false;
+      if (document.querySelector('#ui .sf-levelup-view:not(.sf-levelup-bg-only)')) return false;
+    }
+    return true;
+  }
+
+  function sync() {
+    if (state) { tick(); return true; }
+    if (!pendingWs()) { wsPendingSince = 0; return false; }
+    if (!wsPendingSince) wsPendingSince = Date.now();
+    if (!canOpenWsOnly()) return false;
+    const st = createState([], []);
+    state = st;
+    try {
+      if (!begin(st)) { fail(st, new Error('没有可展示的升级内容')); return false; }
+    } catch (e) {
+      fail(st, e);
+      return false;
+    }
+    return true;
+  }
+
+  function open(ups, onDone, onFail) {
+    return enqueue(ups, { onDone, onFail });
+  }
+
+  function startWatch() {
+    if (watch || typeof setInterval !== 'function') return;
+    watch = setInterval(() => {
+      try {
+        if (state) tick();
+        else if (pendingWs()) {
+          if (!wsPendingSince) wsPendingSince = Date.now();
+          sync();
+        } else {
+          wsPendingSince = 0;
+        }
+      } catch (e) { err(e); }
+    }, 500);
+    if (watch && typeof watch.unref === 'function') watch.unref();
+    if (typeof window !== 'undefined' && window.addEventListener) {
+      window.addEventListener('resize', () => { try { syncGeometry(); } catch (e) {  } });
+      if (window.visualViewport && window.visualViewport.addEventListener) {
+        window.visualViewport.addEventListener('resize', () => { try { syncGeometry(); } catch (e) {  } });
+      }
+    }
+  }
+  startWatch();
+
   window.SfLevelUp = Object.freeze({
-    open, destroy, releaseBackground,
-    isOpen: () => !!(inst && inst.host && inst.host.isConnected),
+    open,
+    enqueue: (ups, opts) => enqueue(ups, opts),
+    sync,
+    destroy: close,
+    close,
+    releaseBackground,
+    isOpen: () => !!state,
+    // 诊断用：模拟器上直接看当前阶段 / 待处理数量，不参与业务判断。
+    debug: () => state ? { phase: state.phase, ups: state.ups.length, upIndex: state.upIndex, page: state.page, pendingWS: pendingWs(), deferred: state.deferredUps.length, wsBusy: state.wsBusy, wsError: state.wsError } : null,
   });
 })();

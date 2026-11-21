@@ -71,6 +71,7 @@ async function main() {
   ok('health ok', health.ok === true && health.db === 'ok');
   const meta = await call('GET', '/api/meta');
   ok('meta has actions', meta.ok && meta.actions && meta.actions.doUpgrade && meta.actions.doUpgrade.mode === 'async');
+  ok('meta socketGem async', meta.ok && meta.actions && meta.actions.socketGem && meta.actions.socketGem.mode === 'async');
   ok('meta sellGear compat sync', meta.ok && meta.actions && meta.actions.sellGear && meta.actions.sellGear.mode === 'sync' && Array.isArray(meta.actions.sellGear.args) && meta.actions.sellGear.args[1] === 'bool');
   ok('meta has limits', meta.limits && meta.limits.rankDaily === 0 && meta.limits.rankFree === 10
     && meta.limits.rankPaidCost === 5 && meta.limits.rankLateCost === 10

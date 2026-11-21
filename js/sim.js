@@ -378,6 +378,8 @@
     return lv >= 15 ? 2 : lv >= 11 ? 1.5 : 1;
   };
   const heroBaseMul = (att, level) => att && att.heroTrueBase ? trueBaseMul(level) : 1;
+  // 勇者真化白值：武技 真1~真4 ×1.5、真5 ×2；野球拳（12）不吃这档倍率，真1~真5 都按原白值。
+  const HERO_TRUE_BASE_SKIP_SKILLS = new Set([12]);
   function skill(c, id) { return c.silence > 0 && id > 4 ? 0 : c.skills[id] || 0; }
 
   function weaponEffect(w, base, perLevel) {
@@ -769,7 +771,7 @@
       }
       const action = opts.action || r.action;
 
-      if (att.heroTrueBase && action === 'skill') {
+      if (att.heroTrueBase && action === 'skill' && !HERO_TRUE_BASE_SKIP_SKILLS.has(Number(r.id))) {
         rawDmg = Math.round(rawDmg * heroBaseMul(att, att.skills[Number(r.id)]));
       }
       if (att.mods && att.mods.dmgMul) rawDmg = Math.round(rawDmg * Number(att.mods.dmgMul));
@@ -1359,6 +1361,8 @@
     function playerLikeAction(att, def, followup) {
       const r = { attacker: att.side };
       const forcedThrow = ONLINE_COMBAT && followup && followup.reason === 'doubleThrow' ? followup.weapon : null;
+      // 真·野球拳「有N%几率可多使用一次」= 同一手再打一次野球拳，不是追加一次任意行动。
+      const forcedSkill = followup && followup.reason === 'skillAgain' ? Number(followup.skill) : 0;
 // 师父只在濒危时尝试救场，每场至多一次；无师父时不能凭空治疗。
       if (!forcedThrow && att.skills[13] && !att.usedMaster && att.masterLevel > 0 && att.silence <= 0 &&
           att.hp <= att.maxHp * rules.masterHpRatio && chance(rules.masterChance)) {
@@ -1399,6 +1403,7 @@
       }
       if (att.pendingWeapon && canWeapon && !att.petSealWeapons[att.pendingWeapon.id]) kind = 'weapon';
       if (forcedThrow) kind = 'weapon';
+      if (forcedSkill && att.silence <= 0) kind = 'skill';
 
       if (kind === 'weapon') {
         const prepared = att.pendingWeapon && !att.petSealWeapons[att.pendingWeapon.id] ? att.pendingWeapon : null;
@@ -1554,7 +1559,8 @@
       }
 
       if (kind === 'skill') {
-        const sid = forceCosmos ? 14
+        const sid = forcedSkill ? forcedSkill
+          : forceCosmos ? 14
           : (att.pattern
             ? nextPatternSkill(att, actives)                            // 固定循环：按技能表的轮转顺序出
             : pickSkill(att, actives));
@@ -1566,6 +1572,7 @@
         if (att.pattern) att.skillCd[sid] = Number(RULES.skillCooldown) + 1;
         const lv = att.skills[sid];
         r.action = 'skill'; r.id = sid; r.level = lv;
+        if (forcedSkill) r.repeatUse = true;
         const freeSkill = att.mods && att.mods.firstSkillFree && !att.usedFreeSkill;
         switch (sid) {
           case 8: {
@@ -1588,10 +1595,15 @@
           }
           case 12: {
             const raw = Math.round((effPower(att) + effSpeed(att)) * (1.2 + 0.15 * (Math.min(lv, 10) - 1)));
-            if (chance(dodgeChance(att, def) * 0.7)) { att.mustHitNext = false; markDodge(r, def); break; }
-            applyDamage(att, def, raw, r, {});
-            const doublePct = trueVal(12, lv);
-            if (doublePct > 0 && def.hp > 0 && att.hp > 0 && !r.fakeDie && chance(doublePct)) { r.actAgain = true; r.doubleHit = true; }
+            // 真阶只加「多使用一次」的几率，不加伤害；第二下是再一次野球拳（forcedSkill 那一拍不再掷）。
+            const doublePct = forcedSkill ? 0 : trueVal(12, lv);
+            // 命中判定必须先于真化判定：非真化野球拳不额外消耗随机数；第一下被闪避也要补第二下。
+            const dodged = chance(dodgeChance(att, def) * 0.7);
+            if (dodged) { att.mustHitNext = false; markDodge(r, def); }
+            else applyDamage(att, def, raw, r, {});
+            if (doublePct > 0 && att.hp > 0 && (dodged || def.hp > 0) && chance(doublePct)) {
+              r.actAgain = true; r.doubleHit = true; r.repeatSkill = 12;
+            }
             break;
           }
           case 14: {
@@ -1646,7 +1658,12 @@
         maybeCounter(att, def, r, 'skill');
         pushRound(r);
         const followupBlocked = pendingImmediate.some((x) => x.reason === 'fakeDie' && x.actor === def);
-        if (r.actAgain && att.hp > 0 && def.hp > 0 && !followupBlocked && !pendingImmediate.some((x) => x.actor === att)) {
+        const canFollow = att.hp > 0 && def.hp > 0 && !followupBlocked && !pendingImmediate.some((x) => x.actor === att);
+        // 装死抢到下一手时第二下野球拳作废（与双投同口径），不能留到之后的回合再补。
+        if (r.repeatSkill) {
+          if (canFollow) queueImmediate({ actor: att, reason: 'skillAgain', skill: r.repeatSkill });
+          else r.repeatCancelled = true;
+        } else if (r.actAgain && canFollow) {
           queueImmediate({ actor: att, reason: 'freeAction' });
         }
         return;

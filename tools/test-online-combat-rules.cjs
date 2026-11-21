@@ -23,9 +23,34 @@ for (const lv of [1,15]) {
   }
   for (const id of [8,12,15,18,23]) for(let seed=0;seed<30;seed++) {
     const r=run(seed,fighter({skills:[{id,level:lv}]}),fighter({speed:20})).rounds;
-    assert(r.filter(x=>x.attacker===0&&x.action==='skill'&&x.id===id).length <= 1);
+    /* 真·野球拳是「一次使用打两下」的唯一例外，见下方专项。 */
+    const cap = id===12 && lv>10 ? 2 : 1;
+    assert(r.filter(x=>x.attacker===0&&x.action==='skill'&&x.id===id).length <= cap);
   }
 }
+/* 真·野球拳（12）：原表「有N%几率可多使用一次」= 同一手再打一次野球拳，不是白送一次任意行动；
+ * 第一下被闪避也要补（原攻略「就算没打中不是还有第2下么」），真5 的 100% 必须连打两下。 */
+let fistPairs=0, fistFirstDodged=0;
+for(let seed=0;seed<60;seed++) {
+  const rounds=run(seed,fighter({skills:[{id:12,level:15}]}),fighter({speed:200,agility:150})).rounds;
+  const idx=rounds.map((r,i)=>i).filter(i=>rounds[i].attacker===0&&rounds[i].action==='skill'&&rounds[i].id===12);
+  assert.equal(idx.length,2,'真5 野球拳必须连打两下（seed '+seed+'）');
+  assert.equal(rounds[idx[0]].doubleHit,true,'第一下要标记真化触发');
+  assert.equal(rounds[idx[1]].repeatUse,true,'第二下必须是同技能追加');
+  for(let j=idx[0]+1;j<idx[1];j++) {
+    assert(!['weapon','skill','common','rest','stunned'].includes(rounds[j].action),
+      '第二下野球拳不能被别的行动插队（seed '+seed+'）');
+  }
+  fistPairs++;
+  if(rounds[idx[0]].dodge) fistFirstDodged++;
+}
+assert.equal(fistPairs,60,'真5 每场都要打满两下');
+assert.ok(fistFirstDodged>0,'样本里应出现「第一下被闪避、第二下照打」，实际 '+fistFirstDodged);
+for(let seed=0;seed<60;seed++) {
+  const rounds=run(seed,fighter({skills:[{id:12,level:10}]}),fighter({speed:200})).rounds;
+  assert.equal(rounds.filter(r=>r.attacker===0&&r.action==='skill'&&r.id===12).length,1,'10 级野球拳没有第二下');
+}
+console.log(`PASS true fist: same skill twice (${fistPairs} doubles, ${fistFirstDodged} first-punch dodges)`);
 for(const id of [5,6,8,9,13,14]) {
   let observed=0, dodged=0;
   for(let seed=0;seed<60;seed++) {

@@ -1,6 +1,6 @@
 {
   "name": "ssdz-online-app",
-  "version": "1.0.76",
+  "version": "1.0.78",
   "private": true,
   "scripts": {
     "stage": "node ../tools/build-online-app.cjs --web",
@@ -11,4 +11,3 @@
     "@tauri-apps/cli": "^2"
   }
 }
-

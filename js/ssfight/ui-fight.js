@@ -1833,14 +1833,21 @@
     clip.playing = false;
     clip.setExtraTransform('scale(1.4)');
   }
-  function showFightInfo(hud, names) {
-    const t = T();
-    stopAt(hud, HUD_FRAME);
+  // HUD 素材的文本字段带作者占位串（`9999/9999` / `李二强李二强`），昵称/血量节点第 8 帧才出生。
+  // 真值先登记在 HUD 上，节点出生即写入；否则先画出的占位串会在部分安卓 WebView 上留成残影。
+  function applyHudStats(hud, names, opts) {
     setNameText(hud.byName('name1'), names[0]);
     setNameText(hud.byName('name2'), names[1]);
     // 状态格 `c1..c3`（3414）由 `showStates` 管药丸；这一场还没接药丸，照旧收掉。
     // 左侧 1→2→3，右侧 3→2→1（原版对右方传入的顺序就是反的）。
     for (let i = 0; i < 3; i++) visible(hud.byName('c' + (i + 1)), false);
+    // 换帧后文本节点可能重建，签名相同就跳过会让新节点停在占位串上。
+    if (live) live.bloodSig = null;
+    refreshBlood(hud, opts);
+  }
+  function showFightInfo(hud, names) {
+    stopAt(hud, HUD_FRAME);
+    applyHudStats(hud, names);
     const teams = (live && live.petTeams) || [[], []];
     for (const side of [0, 1]) {
       const slots = side === 0 ? ['attackerS1', 'attackerS2', 'attackerS3'] : ['defenderS3', 'defenderS2', 'defenderS1'];
@@ -1854,12 +1861,11 @@
         mountPetSlot(slot, pets[i], side === 1 ? DEFENDER_PET_DX : 0);
       }
     }
-    refreshBlood(hud);
-    void t;
   }
-  function refreshBlood(hud) {
+  function refreshBlood(hud, opts) {
     const t = T();
     if (!live || !hud) return;
+    const textOnly = !!(opts && opts.textOnly);
     // 才重写血条帧与文本（`stopAt` 会走 showFrame），否则这一拍纯属重复劳动。
     const sig = [live.fighters[0] && live.fighters[0].blood.leftBlood,
       live.fighters[0] && live.fighters[0].blood.totalBlood,
@@ -1875,15 +1881,15 @@
       const left = Math.max(0, Math.min(total, f.blood.leftBlood));
       const shield = Math.max(0, Math.round(Number(live.shields && live.shields[i]) || 0));
       const bar = hud.byName('bloodbar' + (i + 1));
-      stopAt(bar, Math.max(1, Math.min(BLOOD_BAR_FRAMES, Math.floor((total - left) * 100 / total) || 1)));
+      if (!textOnly) stopAt(bar, Math.max(1, Math.min(BLOOD_BAR_FRAMES, Math.floor((total - left) * 100 / total) || 1)));
       const txt = hud.byName('bloodtext' + (i + 1));
       // 血量数字不按原版 59 单位字段框裁切：高层/高 buff 的生命会超过六位，
       // 裁掉后看起来像“数字被血条边界挡住”。只放开这两条字段。
       // 护盾算进分子：x = 血量+护盾，y = 生命上限。
       if (txt) setText(txt, (left + shield) + '/' + total + ' ', { noClip: true });
-      drawShieldBar(live, i, bar, left, total, shield);
+      if (!textOnly) drawShieldBar(live, i, bar, left, total, shield);
     }
-    if (t) t.showNumber(Math.max(0, live.roundsLeft), hud, 0, 0, 'right', 2);
+    if (!textOnly && t) t.showNumber(Math.max(0, live.roundsLeft), hud, 0, 0, 'right', 2);
   }
   // 护盾条：画在血条自己的 SVG 子树里（不再用按屏幕 px 定位的 DOM 小牌 ——
   // Android 上主机缩放/留边会让那块「盾 N」明显偏移）。淡蓝色压在黄色血条最左一段，
@@ -2289,7 +2295,20 @@
       if (f && f.campaign && !startCampaignIdle(f)) startCampaignBreath(rec, f);
     }
     if (hud) {
-
+      // 名字/血量字段在第 8 帧才新建；先在 HUD 上登记真值，节点出生时就带真值。
+      if (hud.setPendingText) {
+        hud.setPendingText('name1', names[0]);
+        hud.setPendingText('name2', names[1]);
+        for (let i = 0; i < 2; i++) {
+          const f = live && live.fighters[i];
+          if (!f) continue;
+          const total = Math.max(1, f.blood.totalBlood || 1);
+          const left = Math.max(0, Math.min(total, f.blood.leftBlood));
+          const shield = Math.max(0, Math.round(Number(live.shields && live.shields[i]) || 0));
+          hud.setPendingText('bloodtext' + (i + 1), (left + shield) + '/' + total + ' ');
+        }
+      }
+      applyHudStats(hud, names, { textOnly: true });
       rec.hudReady = playClip(hud, {
         stop: HUD_STOP,
         onFrame: (n) => { if (n >= HUD_STOP && live === rec) showFightInfo(hud, names); },

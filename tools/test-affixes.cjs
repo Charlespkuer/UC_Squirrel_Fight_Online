@@ -54,7 +54,7 @@ function run(g, me, foe, seed, opts) {
 }
 const first = (rounds, pred) => rounds.find(pred);
 
-test('ssfight 装备词条：48 条、32 空号、宝石 12 档增幅与 42~49 都按原表生效', () => {
+test('ssfight 装备词条：48 条、32 空号、宝石总档 3~30 / 单条 12 档与 42~49 都按原表生效', () => {
   const g = game();
   const { State, Sim, attachmentMap } = g;
 
@@ -66,8 +66,8 @@ test('ssfight 装备词条：48 条、32 空号、宝石 12 档增幅与 42~49 �
   assert.equal(a44.extra, '2.50,5,7.50,10,12.50,15,17.50,20,22.50,25,27.50,30');
   for (const id of [42, 43, 44, 45, 46, 47, 48, 49]) assert.ok(attachmentMap.hasKey(id), '缺少词条 ' + id);
 
-  /* ② 宝石单位阶梯：1/2/3/5/7/9/12；词条值 = 星级 ability + 增幅 extra。 */
-  assert.deepEqual([1, 2, 3, 4, 5, 6, 7].map((lv) => State.gemAffixUnits(100 + lv)), [1, 2, 3, 5, 7, 9, 12]);
+  /* ② 宝石总档：1~7 级 = 3/5/8/12/17/23/30；词条值 = 星级 ability + 分到的 extra。 */
+  assert.deepEqual([1, 2, 3, 4, 5, 6, 7].map((lv) => State.gemAffixTotal(lv)), [3, 5, 8, 12, 17, 23, 30]);
   const v0 = State.attachmentValue(44, 3, 0);
   assert.equal(v0.base, 30); assert.equal(v0.extra, 0); assert.equal(v0.total, 30);
   const v12 = State.attachmentValue(44, 3, 12);
@@ -83,6 +83,20 @@ test('ssfight 装备词条：48 条、32 空号、宝石 12 档增幅与 42~49 �
   assert.equal(State.equipmentEffects()[44], 60, '七级宝石 +12 档增幅后应为 60%');
   assert.equal(State.unsocketGem(gear.key).ok, true);
   assert.equal(State.equipmentEffects()[44], 30);
+
+  /* ③b 三词条：7 级总 30 档随机分配，单条不超过 12；战斗效果按各条档数各算各的。 */
+  s.props[107] = 1;
+  const multi = State.addGear(206, [{ id: 45, level: 3 }, { id: 46, level: 3 }, { id: 48, level: 3 }]);
+  assert.ok(multi && State.wear(multi.key), '三词条橙装应能穿上');
+  assert.equal(State.socketGem(multi.key, 107).ok, true);
+  const units = State.state().gears.find((x) => x.key === multi.key).gem.units;
+  assert.equal(units.length, 3, '三词条装备应存 3 个档数');
+  assert.equal(units.reduce((a, b) => a + b, 0), 30, '7 级总档数应为 30');
+  assert.ok(units.every((u) => u >= 0 && u <= 12), '单条最多 12 档');
+  const effects = State.equipmentEffects();
+  for (const [i, id] of [45, 46, 48].entries()) {
+    assert.equal(effects[id], State.attachmentValue(id, 3, units[i]).total, '词条 ' + id + ' 应按自己的档数生效');
+  }
 
   /* ④ 47 绝对防御：反弹加点（2012 攻略 76%+35%=111% 的同一口径）。 */
   fixedRandom(g, 0);

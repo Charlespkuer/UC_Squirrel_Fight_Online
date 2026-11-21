@@ -331,6 +331,13 @@ test('联机无尽塔百层奖励：通过 >=100 层每周首次额外 +2 张，
   assert.match(towerUi, /通过 100 层奖励/, '结算页要显示百层奖励');
 });
 
+test('联机无尽塔结算徽标：按剧本显示「联机版·经典模式 / 联机版·勇者模式」', () => {
+  const ui = read('js/tower-ui.js');
+  assert.match(ui, /ONLINE\s*\n\s*\?\s*\(summary\.ruleset === 'hero' \? '联机版·勇者模式' : '联机版·经典模式'\)/,
+    '联机版结算徽标按 summary.ruleset 选择标签');
+  assert.ok(!/勇者剧本 · ' : ''\) \+ mode/.test(ui), '联机版徽标不再追加「勇者剧本 · 」前缀');
+});
+
 test('联机每日抽奖：十连抽恢复，服务端按 10 次开奖并逐次扣费', () => {
   const c = boot();
   c.State.newGame('抽奖十连');
