@@ -90,6 +90,13 @@ const serverOnly = new Set(((() => {
   } catch (e) { return []; }
 })()));
 
+/* 祭坛领取由服务端掷 1~3 的 buffId；标成 sync 时客户端会先预测另一个值，
+ * 随后整档重同步把界面换成服务端存档，玩家看到的就是「退出重进变了个奖励」。 */
+const sharedActions = JSON.parse(fs.readFileSync(path.join(ROOT, 'shared/actions.json'), 'utf8'));
+assert.equal(sharedActions.actions.claimBuildingBuff.mode, 'async', 'claimBuildingBuff 是随机动作，必须 async');
+const villageSrc = fs.readFileSync(path.join(ROOT, 'js/ssfight/ui-village.js'), 'utf8');
+assert.match(villageSrc, /StateCall\(\s*'claimBuildingBuff'\s*,\s*'altar'\s*\)/, '祭坛领取按钮必须 await 服务端结果');
+
 const missingCalls = [];
 for (const file of loaded) {
   if (SKIP.has(file)) continue;

@@ -156,6 +156,9 @@
     return true;
   }
   function mondayKey() {
+    try {
+      if (window.State && typeof State.rankWeekKey === 'function') return State.rankWeekKey();
+    } catch (e) {}
     const d = new Date(Date.now());
     d.setDate(d.getDate() - (d.getDay() + 6) % 7);
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');

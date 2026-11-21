@@ -233,10 +233,15 @@ function compareRows(a, b) {
   return Number(a.accountId) - Number(b.accountId);
 }
 
-function divisionRows(division) {
+// `viewerAccountId` 决定看不看得到隐身账号：隐身账号看全榜（含所有隐身），
+// 普通视角排除隐身。省略时按普通视角处理，保持旧调用/旧测试的默认行为。
+function divisionRows(division, viewerAccountId) {
   const d = division || null;
   if (!d) return [];
   const w = ensureBots();
+  const viewerHidden = viewerAccountId != null && visibility.isHidden(viewerAccountId);
+  const hiddenSql = visibility.hiddenSqlFor('r.account_id', viewerHidden);
+  const hiddenParams = visibility.hiddenParamsFor(viewerHidden);
   const players = db.all(
     `SELECT r.account_id, r.score, r.wins, r.losses, a.name, a.tag, sv.level
        FROM ratings r
@@ -245,8 +250,8 @@ function divisionRows(division) {
       WHERE r.season = ? AND a.banned = 0
         AND sv.level BETWEEN ? AND ?
         AND NOT EXISTS (SELECT 1 FROM simulated_accounts sa WHERE sa.account_id = r.account_id)
-        AND ${visibility.notHiddenSql('r.account_id')}`,
-    w, d.lo, d.hi, Date.now()
+        AND ${hiddenSql}`,
+    w, d.lo, d.hi, ...hiddenParams
   );
   const rows = players.map((r) => ({
     bot: false, botId: '', accountId: Number(r.account_id), name: String(r.name),
@@ -266,23 +271,22 @@ function divisionRows(division) {
 }
 
 function rankOf(accountId) {
-  if (visibility.isHidden(accountId)) return 0;
   const row = db.get('SELECT * FROM ratings WHERE account_id = ? AND season = ?', Number(accountId), weekKey());
   if (!row) return 0;
   const div = divisionOfAccount(accountId);
   if (!div) return 0;
-  const rows = divisionRows(div);
+  const rows = divisionRows(div, accountId);
   const i = rows.findIndex((r) => !r.bot && r.accountId === Number(accountId));
   return i >= 0 ? i + 1 : 0;
 }
 
 // 一次算齐自己与候选真人的赛区名次：天梯匹配页要同时显示双方名次，不能每人间隔一次全表扫描。
-// 人机不占真人名次；隐身账号已被 divisionRows 过滤，取不到名次时按 0 返回。
+// 名次口径跟 viewers 自己的榜一致：隐身看全榜，普通玩家看不到隐身，取不到名次时按 0 返回。
 function rankPositions(accountId, accountIds) {
   const div = divisionOfAccount(accountId);
   if (!div) return { rank: 0, ranks: new Map() };
   const want = new Set((accountIds || []).map((id) => Number(id)).filter((id) => id > 0));
-  const rows = divisionRows(div);
+  const rows = divisionRows(div, accountId);
   const ranks = new Map();
   let mine = 0;
   rows.forEach((row, i) => {
@@ -425,27 +429,21 @@ function rankAwardStatus(accountId) {
   const week = weekKey();
   const rating = ensureRating(accountId, week);
   const div = divisionOfAccount(accountId);
-  const rows = div ? divisionRows(div) : [];
+  const rows = div ? divisionRows(div, accountId) : [];
   const myIdx = rows.findIndex((r) => !r.bot && r.accountId === Number(accountId));
   const out = awardStatusFrom(accountId, week, rating, div, rows, myIdx);
-  if (visibility.isHidden(accountId)) {
-    out.hidden = true;
-    out.rank = 0;
-    out.eligible = false;
-  }
+  // 隐身只作为展示标记；排名与领奖按「隐身看全榜」的口径正常计算。
+  if (visibility.isHidden(accountId)) out.hidden = true;
   return out;
 }
 
 function claimRankAward(accountId) {
-  if (visibility.isHidden(accountId)) {
-    return { ok: false, hidden: true, rank: 0, msg: '该账号处于隐身状态，不参与天梯排名与排名奖励。' };
-  }
   const week = weekKey();
   const rating = ensureRating(accountId, week);
   const played = Math.max(0, Number(rating.wins) || 0) + Math.max(0, Number(rating.losses) || 0);
   if (played <= 0) return { ok: false, msg: '本周还没有参加天梯赛，先打一场再来领奖吧。', rank: 0 };
   const div = divisionOfAccount(accountId);
-  const rows = div ? divisionRows(div) : [];
+  const rows = div ? divisionRows(div, accountId) : [];
   const myIdx = rows.findIndex((r) => !r.bot && r.accountId === Number(accountId));
   const rank = myIdx >= 0 ? myIdx + 1 : 0;
   if (!(rank > 0) || rank > config.rankWeeklyTop) {
@@ -485,7 +483,7 @@ function ladder(accountId, limit) {
       award: awardStatusFrom(accountId, week, mine, null, [], -1),
     };
   }
-  const rows = divisionRows(div);
+  const rows = divisionRows(div, accountId);
   const myIdx = rows.findIndex((r) => !r.bot && r.accountId === Number(accountId));
   const top = rows.slice(0, n).map((r) => Object.assign({}, r));
   return {
@@ -494,7 +492,7 @@ function ladder(accountId, limit) {
     frame: div.frame, label: div.label,
     top, me: Object.assign({}, meBase, { rank: myIdx >= 0 ? myIdx + 1 : 0 }),
     hidden: !!hidden, hiddenUntil: hidden ? hidden.until : 0,
-    award: Object.assign(awardStatusFrom(accountId, week, mine, div, rows, myIdx), hidden ? { hidden: true, rank: 0, eligible: false } : {}),
+    award: Object.assign(awardStatusFrom(accountId, week, mine, div, rows, myIdx), hidden ? { hidden: true } : {}),
   };
 }
 

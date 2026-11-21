@@ -172,6 +172,24 @@
     const w = p.getBoundingClientRect().width;
     return w ? w / 100 : 1;
   }
+  // 卡片内容区（设计 px，相对 container）。`max-width:100%` 生效时 SVG 会按 viewBox 留边，
+  // 所以按 meet 反算真实内容区，立绘定位不能直接用 SVG 的外框。
+  function cardContentBox(container) {
+    const svg = container && container.querySelector('svg');
+    if (!svg || !container.getBoundingClientRect) return null;
+    const host = container.getBoundingClientRect();
+    const rect = svg.getBoundingClientRect();
+    if (!(rect.width > 0 && rect.height > 0)) return null;
+    let x = rect.left - host.left, y = rect.top - host.top, w = rect.width, h = rect.height;
+    const vb = svg.viewBox && svg.viewBox.baseVal;
+    if (vb && vb.width > 0 && vb.height > 0) {
+      const k = Math.min(w / vb.width, h / vb.height);
+      const cw = vb.width * k, ch = vb.height * k;
+      x += (w - cw) / 2; y += (h - ch) / 2; w = cw; h = ch;
+    }
+    const hs = layoutScale(container) || 1;
+    return { left: x / hs, top: y / hs, width: w / hs, height: h / hs };
+  }
   // 收掉幻兽格画稿里自带的 `level` 文本（4276，占位串固定是 "lv23"）。
   // ⚠ 它是 tp11 文本 `<g>`，不是 MovieClip：老的 `lv.g.style.display` 对文本节点无效，
   function hidePetLevel(cell) {
@@ -360,9 +378,11 @@
       : b.buffId === 2 ? '本日特殊状态：竞技场碎片双倍奖励！'
         : b.buffId === 3 ? '本日特殊状态：关卡金松果双倍！' : '';
     setTextByName(view, 'text3', buffText);
-    // 「领取当日状态」：原版 `gainBuff`（一天一次，服务端判定）。按钮在已经领过时
-    wireClickable(clipOf(view, 'button1'), () => {
-      const r = State.claimBuildingBuff('altar');
+    // 「领取当日状态」：原版 `gainBuff`（一天一次，服务端判定）。按钮在已经领过时隐藏。
+    // 奖励项由服务端掷随机，客户端不能本地预测，否则预测值会和权威存档分叉。
+    wireClickable(clipOf(view, 'button1'), async () => {
+      const r = await StateCall('claimBuildingBuff', 'altar');
+      if (!r) return;
       toast(r.msg);
       if (r.ok) openPage('altar');
     });
@@ -589,6 +609,30 @@
       }
     });
   }
+  // 详情页的大立绘：原版把「全身」挂进 c1 再让 c1 跳末帧（空帧），所以格子边框是不出现的。
+  // 复刻没有那张大图，用 4280 的矢量立绘放大：藏掉格子，在卡片左栏居中并留边，不像原版那样溢出卡片。
+  function paintPetPortrait(view, name, pet, container) {
+    if (!pet) return;
+    const box = cardContentBox(container);
+    // 量不到卡片（宿主还没布局）就退回地格内的旧画法：宁可小一点，也别什么都不画。
+    if (!box) { paintPetCell(view, name, pet, container); return; }
+    const cell = clipOf(view, name);
+    if (cell && cell.g) {
+      const node = (cell.g.closest && cell.g.closest('g[sid="4279"]')) || cell.g;
+      node.style.visibility = 'hidden';
+    }
+    // 左栏 = 卡片宽 3.5%~35%：右边界是 4381 第 3 帧 text1 的 x（112 / 320），左边留出圆角描边。
+    const colLeft = box.left + box.width * 0.035;
+    const colRight = box.left + box.width * 0.35;
+    const colW = Math.max(0, colRight - colLeft);
+    const size = Math.min(colW * 0.9, box.height * 0.62);
+    const art = document.createElement('div');
+    art.className = 'ssfight-pet-art sf-clickthrough';
+    art.style.cssText = 'left:' + (colLeft + (colW - size) / 2) + 'px;top:' +
+      (box.top + (box.height - size) / 2) + 'px;width:' + size + 'px;height:' + size + 'px';
+    container.appendChild(art);
+    mountPetArt(art, pet);
+  }
   function wireBeastChoose(view, page, container) {
     preparePetPage(view, 'title1 title2 c1 c2 c3 c4 c5 c6 text1 text2 text3 text4 text5 text6 left right page button1');
     const picker = petChooser;
@@ -780,7 +824,7 @@
     setTextByName(view, 'text5', pet.level >= pet.maxLevel ? '已达到最高等级'
       : (skillNext ? '下一级：' + skillNext : '喂养召唤兽可获得经验并升级'));
     setTextByName(view, 'expText', pet.level >= pet.maxLevel ? '' : pet.exp + '/' + pet.nextExp);
-    paintPetCell(view, 'c1', pet, container);
+    paintPetPortrait(view, 'c1', pet, container);
     stopAt(clipOf(view, 'star'), pet.grade);
 
     const levelMc = clipOf(view, 'levelMc');

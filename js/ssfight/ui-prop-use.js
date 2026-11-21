@@ -152,6 +152,17 @@
     return p.length === 6 && p.every((v) => Number.isFinite(v)) ? p : null;
   }
 
+  // 画稿在舞台坐标里的水平中心。`getBBox()` 不含元件自身的放置矩阵，所以要先补 m[4]。
+  function stageCenterX(clip) {
+    if (!clip || !clip.g) return null;
+    const m = baseMatrix(clip);
+    if (!m) return null;
+    let box = null;
+    try { box = clip.g.getBBox(); } catch (e) { return null; }
+    if (!box || !(box.width > 0)) return null;
+    return m[4] + (box.x + box.width / 2) * m[0];
+  }
+
   // （主路径现在走 `layoutActionButtons`；这里保留为拿不到几何时的兜底。）
   function swapButtons(use, cancel) {
     const a = baseMatrix(use), b = baseMatrix(cancel);
@@ -167,11 +178,13 @@
   const BUTTON_GAP_RATIO = 0.45;
   // 按钮排版只依赖画稿 bbox + 原版 base matrix，不依赖屏幕缩放；
   // 首帧未布局/窗口缩放都不会把两键挤到一起。先包反馈壳再调用，`__hitBox` 是画稿尺寸。
-  function layoutActionButtons(view, right, cancel, mode) {
+  // `centerAt`：舞台坐标里的对齐中心；不传时用舞台中心（4886 的弹窗面板本身居中）。
+  function layoutActionButtons(view, right, cancel, mode, centerAt) {
     if (!right || !cancel || !right.g || !cancel.g || !right.setExtraTransform) return false;
     const svg = right.g.ownerSVGElement || view.g.ownerSVGElement;
     const vb = svg && svg.viewBox && svg.viewBox.baseVal;
-    const centerX = vb && vb.width ? vb.x + vb.width / 2 : 160;
+    const wanted = centerAt == null ? NaN : Number(centerAt);
+    const centerX = Number.isFinite(wanted) ? wanted : (vb && vb.width ? vb.x + vb.width / 2 : 160);
     const measure = (clip) => {
       const m = baseMatrix(clip);
       if (!m) return null;
@@ -513,6 +526,179 @@
     writeRemark(rec.view, base.remark);
   }
 
+  /* 属性书分配 = 原版「属性书弹出」3730（MainMovie_frame40.as:866 showPropertyAddWin）：
+   * `text1` 剩余点数；`button1..3` = 力/敏/速三行（`text1` 当前值 / `text2` 已分配 / `left`·`right` 3156 箭头）；
+   * `b_ok` 确定 / `b_back` 返回。只填数字与接线，版面全用素材。 */
+  const ALLOCATE_SYMBOL = '3730';
+  const ALLOCATE_ATTRS = ['power', 'agility', 'speed'];
+  const ALLOCATE_POINTS = 8;
+
+  // 本模块不依赖全局 `toast`（经典页把它包在 `UI.toast` 里）。
+  function tipAllocate(msg) {
+    try {
+      if (window.UI && typeof UI.toast === 'function') { UI.toast(msg); return; }
+      if (typeof window.toast === 'function') window.toast(msg);
+    } catch (e) {}
+  }
+
+  // 剩余点数的文本框在自己的框里居中，但那个框和右侧棕色药丸（`f5` = 3708）不是同一中心：
+  // 实测数字偏右 ~0.9、偏下 ~1.5 个舞台单位。按画稿屏幕矩形把文本中心对到药丸中心；
+  // 位移只算一次（字号固定，数字宽窄不改变文本中心的定义），之后每次重填复用，避免累计漂移。
+  function centerAllocateNumber(rec) {
+    const view = rec && rec.view;
+    if (!view) return;
+    const pill = clipOf(view, 'f5');
+    const num = clipOf(view, 'text1');
+    const node = num && (num.g || num);
+    if (!pill || !pill.g || !node || !node.__textBox) return;
+    const box = node.__textBox;
+    if (!box.__allocateBase) {
+      const pr = pill.g.getBoundingClientRect();
+      const nr = node.getBoundingClientRect();
+      if (!(pr.width > 0) || !(nr.width > 0)) return;
+      const ctm = node.getScreenCTM ? node.getScreenCTM() : null;
+      const scale = ctm ? Math.hypot(ctm.c, ctm.d) : 1;
+      if (!(scale > 0)) return;
+      const dx = ((pr.left + pr.width / 2) - (nr.left + nr.width / 2)) / scale;
+      const dy = ((pr.top + pr.height / 2) - (nr.top + nr.height / 2)) / scale;
+      if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
+      box.__allocateBase = { x: Number(box.x) || 0, base: Number(box.base) || 0 };
+      box.__allocateShift = { dx: dx, dy: dy };
+    }
+    box.x = box.__allocateBase.x + box.__allocateShift.dx;
+    box.base = box.__allocateBase.base + box.__allocateShift.dy;
+    SfRender.setText(node, String(rec.remain));
+  }
+
+  function paintAllocate(rec) {
+    if (!rec || !rec.view) return;
+    setText(rec.view, 'text1', String(rec.remain));
+    centerAllocateNumber(rec);
+    ALLOCATE_ATTRS.forEach((key, i) => {
+      const row = clipOf(rec.view, 'button' + (i + 1));
+      if (!row) return;
+      setText(row, 'text1', String(rec.stats[key]));
+      setText(row, 'text2', String(rec.alloc[key]));
+    });
+  }
+
+  // 三条提示照抄原版 addPropertyCount / reducePropertyCount / 确定键的判断文案。
+  function bumpAllocate(rec, key, delta) {
+    if (delta < 0 && rec.alloc[key] <= 0) { tipAllocate('该属性已无分配点数。'); return; }
+    if (delta > 0 && rec.remain <= 0) { tipAllocate('属性点已用完，不能再分配了。'); return; }
+    rec.alloc[key] += delta;
+    rec.remain -= delta;
+    paintAllocate(rec);
+  }
+
+  // 箭头 3156：f1 深绿常态 / f3 浅绿悬停（与道具页翻页箭头同一套帧）。
+  function wireAllocateArrow(clip, onFire) {
+    if (!clip || !clip.g) return;
+    clip.g.style.cursor = 'pointer';
+    clip.g.style.pointerEvents = 'auto';
+    stopAt(clip, 1);
+    clip.g.addEventListener('pointerenter', () => stopAt(clip, 3));
+    clip.g.addEventListener('pointerleave', () => stopAt(clip, 1));
+    clip.g.addEventListener('click', (e) => {
+      if (e) { if (e.preventDefault) e.preventDefault(); if (e.stopPropagation) e.stopPropagation(); }
+      onFire();
+    });
+  }
+
+  async function openAllocate(opts) {
+    opts = opts || {};
+    destroy();
+    const host = createHost('sf-prop-allocate-view');
+    if (!host) return null;
+    const S = (window.State && State.state) ? State.state() : {};
+    const statOf = (key) => {
+      const v = opts.stats && opts.stats[key] != null ? opts.stats[key] : S[key];
+      return Math.max(0, Math.floor(Number(v) || 0));
+    };
+    const rec = {
+      host: host, view: null, observer: null, mode: 'allocate',
+      remain: ALLOCATE_POINTS,
+      alloc: { power: 0, agility: 0, speed: 0 },
+      stats: { power: statOf('power'), agility: statOf('agility'), speed: statOf('speed') },
+      busy: false,
+      onConfirm: opts.onConfirm, onClose: opts.onClose, onStale: opts.onStale,
+    };
+    session = rec;
+    if (window.MutationObserver) {
+      try {
+        rec.observer = new MutationObserver(() => { if (!host.isConnected && !rec.closed) closeSession(rec); });
+        if (host.parentNode) rec.observer.observe(host.parentNode, { childList: true });
+        rec.observer.observe(document.body, { childList: true });
+      } catch (e) { rec.observer = null; }
+    }
+    let view = null;
+    try {
+      await SfRender.loadExtra('tags-daoju.json');
+      if (session !== rec || !host.isConnected) {
+        if (opts.onStale) { try { opts.onStale(); } catch (e) {} }
+        if (session === rec) destroy();
+        return null;
+      }
+      // 静态策略必须传：不传时子元件保持 playing=true，三行 3718 会在常态/高亮两帧间自播，
+      // 每帧重建文本、把已分配数字冲回素材占位串。
+      view = await SfRender.mountSymbol(host, ALLOCATE_SYMBOL, { frame: 1, label: '属性书', blank: ['text1'], policy: {} });
+      if (session !== rec || !host.isConnected) {
+        if (opts.onStale) { try { opts.onStale(); } catch (e) {} }
+        try { view.destroy(); } catch (e) {}
+        view = null;
+        if (session === rec) destroy();
+        return null;
+      }
+      rec.view = view;
+      paintAllocate(rec);
+
+      ALLOCATE_ATTRS.forEach((key, i) => {
+        const row = clipOf(view, 'button' + (i + 1));
+        if (!row) return;
+        // ⚠ 不要给整行挂 gotoAndStop(2)：换行帧会重建子节点，箭头上的监听和命中框一起失效。
+        wireAllocateArrow(clipOf(row, 'left'), () => bumpAllocate(rec, key, -1));
+        wireAllocateArrow(clipOf(row, 'right'), () => bumpAllocate(rec, key, 1));
+      });
+
+      const submit = () => {
+        if (rec.busy) return;
+        if (rec.remain > 0) { tipAllocate('还有未分配的属性点，请继续分配。'); return; }
+        rec.busy = true;
+        Promise.resolve(rec.onConfirm ? rec.onConfirm(Object.assign({}, rec.alloc)) : true)
+          .then((done) => {
+            rec.busy = false;
+            if (done === false) return;
+            closeSession(rec);
+          }, (e) => {
+            rec.busy = false;
+            if (window.__errs) window.__errs.push('attr book: ' + (e && e.message));
+            tipAllocate('分配失败，请重试');
+          });
+      };
+      const ok = clipOf(view, 'b_ok');
+      const back = clipOf(view, 'b_back');
+      wireButton(ok, submit, 'use');
+      wireButton(back, () => closeSession(rec), 'cancel');
+      // 原版 3730 是「确定在左、返回在右」。按背包其它弹窗的口径把主键放右，两颗键对调；
+      // 传 'swap'（不是 'use'）保持各自画稿缩放，只按舞台居中重新排一次。
+      // 对齐到三行内容的中心而不是舞台中心：面板内容比 160 略偏左，按钮居 160 会看着偏右。
+      const rowCenter = stageCenterX(clipOf(view, 'button1'));
+      layoutActionButtons(view, ok, back, 'swap', rowCenter);
+      try { if (window.Main && Main.resizeLayout) Main.resizeLayout(); } catch (e) {}
+      return {
+        close: () => closeSession(rec),
+        element: host,
+        get view() { return rec.view; },
+        allocation: () => Object.assign({}, rec.alloc),
+      };
+    } catch (e) {
+      if (window.__errs) window.__errs.push('attr book open: ' + (e && e.message));
+      if (view) { try { view.destroy(); } catch (e2) {} }
+      if (session === rec) destroy();
+      return null;
+    }
+  }
+
 
   async function open(propId, opts) {
     const id = Number(propId);
@@ -583,6 +769,7 @@
     open: open,
     openBuy: openBuy,
     openInfo: openInfo,
+    openAllocate: openAllocate,
     close: close,
     destroy: destroy,
     active: () => !!session,
@@ -590,6 +777,7 @@
     frame: 1,
     buyFrame: 1,
     buyButtonsFrame: 2,
+    allocateSymbol: ALLOCATE_SYMBOL,
     symbol: '4886',
   });
 })();

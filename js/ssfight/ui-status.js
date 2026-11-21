@@ -164,6 +164,15 @@
   }
 
 
+  // 切页签会换掉 7218 的 mc_* 实例；新实例没有挂件，但装备帧号签名可以完全一样。
+  // 签名里带上宿主身份，换实例就重挂，宿主没换仍跳过每秒一次的 188 帧容器重跑。
+  let dressHostSeq = 0;
+  function dressHostKey(clip) {
+    if (!clip) return 0;
+    if (!clip.__dressHostKey) clip.__dressHostKey = ++dressHostSeq;
+    return clip.__dressHostKey;
+  }
+
   function dressParts(view, byType) {
     if (!view || !portraitContainerIds) return 0;
     // 每秒的 fillValues 只有数值会变；立绘帧号没变就不 detach/attach ——
@@ -172,7 +181,8 @@
       const gear = byType[row.type];
       const info = gear ? wearInfo(gear) : null;
       return info ? info.frame : 0;
-    }).join(',');
+    }).join(',') + '|'
+      + FACE_PARTS.map((row) => row.cells.map((pair) => dressHostKey(clipOf(view, pair[0]))).join(',')).join(';');
     if (view.__dressSig === sig) return 0;
     view.__dressSig = sig;
     let n = 0;

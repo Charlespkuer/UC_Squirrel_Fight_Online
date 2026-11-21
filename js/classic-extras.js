@@ -471,6 +471,9 @@
       RANK_LEVEL_BASE + Math.max(0, (Number(integral) || 0) - RANK_INTEGRAL_BASE) / RANK_INTEGRAL_PER_LEVEL)));
   }
   function rankWeekKey() {
+    try {
+      if (window.State && typeof State.rankWeekKey === 'function') return State.rankWeekKey();
+    } catch (e) {}
     const d = new Date(Date.now());
     d.setDate(d.getDate() - (d.getDay() + 6) % 7);
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -1538,6 +1541,9 @@
     '\u96fe\u6797\u730e\u624b', '\u96ea\u539f\u65c5\u4eba', '\u53e4\u6811\u5b88\u671b\u8005', '\u661f\u8fb0\u4e4b\u5f71'];
   let toplistCache = Object.create(null);
   function rankWeekSeed() {
+    const key = rankWeekKey();
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+    if (m) return Number(m[1]) * 10000 + Number(m[2]) * 100 + Number(m[3]);
     const d = new Date(Date.now());
     d.setDate(d.getDate() - (d.getDay() + 6) % 7);
     return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();

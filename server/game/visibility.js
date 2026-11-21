@@ -1,6 +1,7 @@
 'use strict';
 // server/game/visibility.js — 临时隐身账号
-// 只影响天梯/公开匹配/直连挑战候选的可见性与排名；搜索、好友、师徒等社交关系不受隐身影响。
+// 影响其他玩家看到的天梯榜/公开匹配/直连挑战候选；隐身账号自己的榜仍包含所有隐身账号
+// （见 settlement.divisionRows 的 viewer 口径）。搜索、好友、师徒等社交关系不受隐身影响。
 // `hidden_until` 到点自动失效，读路径一律用 hidden_until > now 判断，不需要定时任务。
 
 const db = require('../db');
@@ -49,7 +50,7 @@ function notHiddenSql(column) {
   return 'NOT EXISTS (SELECT 1 FROM hidden_accounts h WHERE h.account_id = ' + col + ' AND h.hidden_until > ?)';
 }
 
-// 隐身账号自己看别人时不做过滤（六个隐身测试号之间仍能互相看到/匹配）；
+// 隐身账号自己看榜/候选时不做过滤（含所有隐身账号，可互相看到/匹配）；
 // 非隐身视角才用 notHiddenSql。
 function hiddenSqlFor(column, viewerHidden) {
   return viewerHidden ? '1=1' : notHiddenSql(column);

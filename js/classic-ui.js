@@ -2588,7 +2588,7 @@
     const keepOpen=stayOpen||(shop&&status&&status.limit!==1);
     const useOne=async()=>{
       if(!shop&&!canUse&&!isFragment&&!isConvertShard&&!isSeed&&!isGem)return;
-      if(!shop&&id===37){allocateAttributes();return;}
+      if(!shop&&id===37){m.close();allocateAttributes();return;}
 
       if(!shop&&window.SfCompose&&UI.currentUiMode&&UI.currentUiMode()==='classic'
           &&(isFragment||isSeed||isConvertShard||isGem)){
@@ -2785,14 +2785,31 @@
       if (res.ok) { m.close(); openBag(false, bagPage); }
     }));
   }
+  // 属性书分配：原版「属性书弹出」3730（`SfPropUse.openAllocate`）。
+  // 旧的自绘输入框已删；数字/箭头/确定/返回都在素材里，这里只接 State 动作。
   function allocateAttributes() {
-    const keys=[['power','力量'],['agility','敏捷'],['speed','速度']];
-    const m=modal('分配属性','<p>将属性书的8点潜力分配给力量、敏捷和速度。</p><div class="attribute-allocation">'+keys.map(([key,name])=>'<label>'+name+'<input type="number" min="0" max="8" step="1" value="0" data-stat="'+key+'" aria-label="分配'+name+'点数"></label>').join('')+'</div><p class="allocation-remaining" role="status">剩余 8 点</p>',[{label:'确定分配',close:false,run:async()=>{
-      const allocation=Object.fromEntries(keys.map(([key])=>[key,Number($('[data-stat="'+key+'"]',m.element).value)]));
-      const r=await StateCall('useProp',37,allocation);toast(r.msg);if(r.ok){m.close();openBag(false,bagPage);}
-    }},{label:'取消',cls:'muted'}],{small:true});
-    const refresh=()=>{const values=$$('input',m.element).map(e=>Number(e.value));const remaining=8-values.reduce((sum,n)=>sum+n,0);$('.allocation-remaining',m.element).textContent='剩余 '+remaining+' 点';$('[data-action="0"]',m.element).disabled=remaining!==0||values.some(n=>!Number.isInteger(n)||n<0||n>8);};
-    $$('input',m.element).forEach(e=>e.oninput=refresh);refresh();
+    if (!window.SfPropUse || !SfPropUse.openAllocate) { toast('经典素材未加载，无法分配属性'); return; }
+    const page = document.querySelector('.classic-page[data-screen="bag"]');
+    let stale = false;
+    const S = State.state();
+    SfPropUse.openAllocate({
+      stats: { power: S.power, agility: S.agility, speed: S.speed },
+      onConfirm: async (allocation) => {
+        const r = await StateCall('useProp', 37, allocation);
+        toast(r.msg);
+        return !!r.ok;
+      },
+      onClose: () => {
+        if (!stale && page && page.isConnected) openBag(false, bagPage);
+      },
+      onStale: () => { stale = true; },
+    }).then((h) => {
+      if (h) return;
+      if (!stale && page && page.isConnected) toast('属性书界面没有加载出来，请重新打开背包再试。');
+    }).catch((e) => {
+      if (window.__errs) window.__errs.push('attr book: ' + (e && e.message));
+      toast('属性书界面打开失败');
+    });
   }
   // 到 WS_LEVELS 的等级时发一组候选（最多 3 个），必须在弹窗里选一个才继续。
   let wsRandomPending = false;

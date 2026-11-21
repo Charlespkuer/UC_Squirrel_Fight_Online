@@ -779,14 +779,14 @@ test('连续登录：第1天100，每多一天+10，200封顶；附加奖励按�
     const x = g.State.dailyGiftExtra(d.date);
     assert.equal(d.streak, n, '第 ' + n + ' 天连续');
     assert.equal(d.gold, Math.min(200, 100 + (n - 1) * 10), '第 ' + n + ' 天金松果（第 11 天起 200 封顶）');
-    assert.equal(d.ticket, n % 3 === 0 ? 1 : 0, '第 ' + n + ' 天征战令（每 3 天 1 个）');
+    assert.equal(d.ticket, n % 3 === 0 ? 1 : 0, '第 ' + n + ' 天征战令（2026-11-23 前的老口径：每 3 天 1 个）');
     assert.equal(d.extra.id, x.id, '第 ' + n + ' 天的附加奖励要轮换');
     ids.push(d.extra.id);
     assert.equal(g.State.claimDaily().ok, true);
     assert.ok(g.State.state().props[x.id] >= 1, '附加道具进背包');
   }
   assert.equal(g.State.state().loginStreak, 12);
-  assert.equal(g.State.state().props[87], 4, '第 3/6/9/12 天各送 1 个征战令');
+  assert.equal(g.State.state().props[87], 4, '第 3/6/9/12 天各送 1 个征战令（老口径）');
   g.advance(day * 3);                       // 断签三天
   const d8 = g.State.dailyStatus();
   assert.equal(d8.streak, 1); assert.equal(d8.gold, 100);
@@ -795,6 +795,42 @@ test('连续登录：第1天100，每多一天+10，200封顶；附加奖励按�
   assert.equal(new Set(ids).size, 7, '连续七天应轮换到七种不同附加道具');
   assert.deepEqual([...new Set(ids)].sort((a, b) => a - b), [23, 36, 39, 41, 42, 43, 82],
     '轮换池只能是挑战书/英雄帖/勇气徽章/召唤证/三种超级药丸');
+});
+
+test('每日签到征战令：2026-11-23 起只在周六、周日各送 1 个', () => {
+  const g = game();
+  const day = 24 * 60 * 60 * 1000;
+  // harness 的时钟固定从 2026-09-23 23:55 起步，先跳到 11-18（周三）中午再逐日领取。
+  g.advance(new Date(2026, 10, 18, 12, 0).getTime() - new Date(2026, 8, 23, 23, 55).getTime());
+  const got = [];
+  for (let i = 0; i < 14; i++) {
+    const d = g.State.dailyStatus();
+    got.push([d.date, d.ticket]);
+    assert.equal(g.State.claimDaily().ok, true, d.date + ' 应当能领');
+    if (i < 13) g.advance(day);
+  }
+  assert.deepEqual(got, [
+    ['2026-11-18', 0], ['2026-11-19', 0], ['2026-11-20', 1],
+    ['2026-11-21', 0], ['2026-11-22', 0],
+    ['2026-11-23', 0], ['2026-11-24', 0], ['2026-11-25', 0], ['2026-11-26', 0], ['2026-11-27', 0],
+    ['2026-11-28', 1], ['2026-11-29', 1],
+    ['2026-11-30', 0], ['2026-12-01', 0],
+  ], '征战令只看领取日的星期，与连续天数无关；11-22 仍是老口径、11-23 起切新口径');
+  assert.equal(g.State.state().props[87], 3, '只入账 11-20、11-28、11-29 各 1 个');
+});
+
+test('联机客户端按服务端时区算今天/本周：设备日期不同也不会重新点亮已领状态', () => {
+  // 设备本地时间停在 2026-09-23，服务端是上海时间 2026-11-22 01:50（UTC 仍是 21 日）。
+  const g = game(undefined, { online: true, serverNow: () => Date.UTC(2026, 10, 21, 17, 50) });
+  const S = g.State;
+  assert.equal(S.localDate(), '2026-11-22', '联机日期键要按 Asia/Shanghai 算');
+  assert.equal(S.rankWeekKey(), '2026-11-16', '周账按上海时区的周一');
+  assert.equal(S.blackCardWeekKey(), '2026-11-16', '黑卡周账与周账同一口径');
+  const st = S.state();
+  st.level = 40;
+  st.buildings.altar.buffId = 2;
+  st.buildings.altar.buffDate = '2026-11-22';
+  assert.equal(S.buildingBuffClaimed('altar'), true, '服务端已领的祭坛状态在设备时区不同时仍要算已领');
 });
 
 test('金杯当日累计：进账才累加，跨天归零，花掉不减', () => {

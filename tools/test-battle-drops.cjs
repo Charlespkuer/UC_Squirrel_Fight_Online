@@ -54,6 +54,27 @@ test('没有到出场时刻不可领取，三次逐次出现且按钮实际点�
   assert.equal(g.saved().props[21],1);
 });
 
+test('自定义呈现器接管悬浮卡：不建 DOM 按钮，显示/点击/隐藏都转发',()=>{
+  const g=setup(), calls={show:[],hide:0,close:0}; let pick=null;
+  const presenter={
+    show(reward,fn){calls.show.push(reward);pick=fn;},
+    hide(){calls.hide++;},
+    close(){calls.close++;}
+  };
+  const drop=g.c.BattleDrops.create({root:g.root,random:()=>0,presenter});
+  g.advance(drop,2000);
+  assert.equal(g.live('button').length,0,'有呈现器时不能再建旧 DOM 按钮');
+  assert.equal(calls.show.length,1);
+  assert.equal(calls.show[0].id,15);
+  pick();
+  assert.equal(drop.summary().items.length,1);
+  assert.equal(g.s().exp,5);
+  drop.skip();
+  assert.ok(calls.hide>0,'隐藏要转发给呈现器');
+  assert.equal(calls.close,1);
+  assert.equal(g.live('button').length,0);
+});
+
 test('拾取战斗掉落会计入每日任务的 pickup 计数',()=>{
   const g=setup(),drop=g.create([0,.4,.4,.4]);
   g.c.State.questStatus();   // 先建好当天计数器

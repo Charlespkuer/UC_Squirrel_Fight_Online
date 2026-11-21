@@ -43,7 +43,7 @@
     "evolvePet":          { "mode": "async", "args": ["str", "keys"] },
 
     "upgradeBuilding":    { "mode": "async", "args": ["str"] },
-    "claimBuildingBuff":  { "mode": "sync",  "args": ["str"] },
+    "claimBuildingBuff":  { "mode": "async", "args": ["str"] },
 
     "claimDaily":         { "mode": "async", "args": [] },
     "lotteryDraw":        { "mode": "async", "args": ["int"] },

@@ -933,7 +933,8 @@ async function checkClassicViewLifecycle() {
     setInterval: fn => { const id = ++timerSeq; timers.set(id, fn); return id; }, clearInterval: id => timers.delete(id),
     setTimeout: fn => { const id = ++timerSeq; timers.set(id, fn); timeouts.add(id); return id; },
     clearTimeout: id => { timers.delete(id); timeouts.delete(id); },
-    State: { state: () => state, totalStats: () => ({ power: 12, agility: 34, speed: 56, hp: 789 }), myGears: () => [] },
+    State: { state: () => state, totalStats: () => ({ power: 12, agility: 34, speed: 56, hp: 789 }),
+      myGears: () => [{ id: 1, used: true, type: 0, ext: [] }] },
     GData: { nextExp: () => 100 }, UI: { classic: { catalogInfo: () => ({ page: 0, pages: 1, items: [] }) } }, __errs: [],
   };
   env.window = env; vm.createContext(env);
@@ -1041,6 +1042,9 @@ async function checkClassicViewLifecycle() {
   assert.equal(env.SfStatus.current().tab, 'status');
   assert.deepEqual(digits(), initial, '返回状态必须在当前事件内填好四维，不能先露0000再等下一秒刷新');
   assert.equal(view.byName('expNum').textContent, '7/100', '经验也必须同步恢复真值');
+  const headAfterTabs = view.byName('mc_head');
+  assert.ok(headAfterTabs && headAfterTabs.__attached && headAfterTabs.__attached.length === 1,
+    '从技能页签返回会重建 mc_*，装备画稿必须重新挂到新实例上');
   assert.deepEqual(env.__errs, [], '真实挂载和接线不能靠吞异常通过');
   /* 装备画稿是灰阶 + 放置上的 `cx` 颜色变换（`p.cx` 直接就是 Rm/Ra/...，没有 `p.cx.cx` 这一层）。
    * 以前只认 `p.cx.cx`，彩色套装全被画成黑白；这里用狂战头盔 B 容器 1918 第 71 帧钉住这条路径。 */
@@ -2020,6 +2024,15 @@ async function checkClassicFight() {
   const html = fs.readFileSync(path.join(ROOT, 'scripts/index-online.html'), 'utf8');
   assert.ok(html.indexOf('js/ssfight/ui-fight.js') > 0 && html.indexOf('js/ssfight/ui-fight.js') < html.indexOf('js/main.js'),
     'ui-fight.js 必须在 main.js 之前加载');
+  // 整蛊专家要把被封锁的那一个武技/武器用原版卡面亮出来；拾取卡也走 3960 的矢量 UI。
+  const sealTable = JSON.parse(fs.readFileSync(path.join(ROOT, 'images/ssfight/ui/weapon-skill-icons.json'), 'utf8'));
+  assert.equal(String(sealTable.skill['24'].id), '2201');
+  const wsTags = JSON.parse(fs.readFileSync(path.join(ROOT, 'images/ssfight/ui/tags-wsicon.json'), 'utf8'));
+  assert.ok(wsTags.some((t) => String(t.id) === '2201'), 'tags-wsicon 要带 2201（致命反击）');
+  assert.ok(/showSealCard\(rec, r\.petSeal, def\)/.test(uf) && /sealCard = showSealCard/.test(uf),
+    '幻兽拍里要按 petSeal 挂出被吸取的武技卡');
+  assert.ok(/presenter:\s*createDropPresenter\(rec\)/.test(uf) && /mountSymbol\(art, SYM\.gain/.test(uf),
+    '悬浮奖励必须使用原版获取道具 3960，而不是 DOM 拼图');
 }
 
 /* ---------- 27. 「更换装备」= 原版 4673 第 3/4 帧（2026-10 第一百六十七批）----------
@@ -3036,6 +3049,12 @@ function checkVillageBuildings() {
    * 探针必须判 isConnected 并重建。 */
   assert.ok(/if \(!p \|\| !p\.isConnected\)/.test(vil) && /host\.__petProbe = p/.test(vil),
     '幻兽牧场重挂后缩放探针要判 isConnected 并重建，否则孵出的幻兽图会偏右偏大');
+  /* 详情页：原版是 c1 跳空帧 + 挂「全身」，格子边框不出现。放大后的立绘若还走 paintPetCell，
+   * 又会被塞回 4279 的小格子里（边框回来、立绘被裁）。 */
+  assert.ok(/function paintPetPortrait\(view, name, pet, container\)/.test(vil)
+    && /closest\('g\[sid="4279"\]'\)/.test(vil) && /function cardContentBox\(container\)/.test(vil)
+    && /function wireBeastDetail\(view, page, container\) \{[\s\S]{0,2600}?paintPetPortrait\(view, 'c1', pet, container\)/.test(vil),
+    '幻兽详情页要藏掉 4279 地格、按卡片左栏放大立绘（paintPetPortrait），不能塞回 paintPetCell 的格子');
   assert.ok(/function wireClickable\(clip, onFire, opts\)/.test(vil)
     && /hoverFrame = \(opts && opts\.hover != null\)/.test(vil)
     && /wireClickable\(left, \(\) => \{ if \(beastPage > 1\)[^\n]*\}, \{ hover: 1 \}\)/.test(vil)
@@ -3253,6 +3272,21 @@ function checkClassicPropUseFlow() {
     /sf-prop-use-view \[data-prop-use\]/.test(guide) &&
     ['4886', '3573', '4419', '4505', '4504', '3150', '4849', '4850', '3414'].every((id) => ids.has(id)),
     '经典购买窗要挂 4886 f1（与背包详情同版式）并只并入 f2 的购买/取消两颗按钮；按钮默认灰、hover 绿；多件限购留在购买窗'
+  );
+  /* 属性书分配走原版「属性书弹出」3730：三行 button1..3（text1 当前值 / text2 已分配）、
+   * 3156 左右箭头、b_ok / b_back；不再用旧的自绘数字输入框。 */
+  assert.ok(
+    ['3730', '3718', '3723', '3729', '3711', '3644', '3156', '3709'].every((id) => ids.has(id)) &&
+    /const ALLOCATE_SYMBOL = '3730'/.test(propUse) &&
+    /mountSymbol\(host, ALLOCATE_SYMBOL, \{ frame: 1, label: '属性书', blank: \['text1'\], policy: \{\} \}\)/.test(propUse) &&
+    /setText\(row, 'text1', String\(rec\.stats\[key\]\)\)/.test(propUse) &&
+    /setText\(row, 'text2', String\(rec\.alloc\[key\]\)\)/.test(propUse) &&
+    /layoutActionButtons\(view, ok, back, 'swap', rowCenter\)/.test(propUse) &&
+    /function stageCenterX\(clip\)/.test(propUse) &&
+    /function centerAllocateNumber\(rec\)/.test(propUse) && /centerAllocateNumber\(rec\)/.test(propUse) &&
+    /openAllocate: openAllocate/.test(propUse) && /SfPropUse\.openAllocate\(/.test(cu) &&
+    !/attribute-allocation/.test(cu),
+    '属性书分配要复用原版 3730（三行 + 箭头 + 确定/返回），不再自绘分配输入框'
   );
   /* 用户 2026-11：长介绍的第二行会压到「使用/取消」上；按单机版把 4886 f1 的
    * 上方框底边从 109.95 收回到 98，图标/名称/介绍同步上移（c1 37.0 / name 76.2 / vipDes 99.25）。

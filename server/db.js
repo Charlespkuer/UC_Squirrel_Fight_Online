@@ -65,7 +65,7 @@ const SCHEMA = [
      created_at INTEGER NOT NULL
    )`,
 
-  // 临时隐身：hidden_until 到点自动失效；只影响天梯/公开匹配，不改存档、天梯分数与社交关系。
+  // 临时隐身：hidden_until 到点自动失效；影响其他玩家看到的天梯/公开匹配，不改存档、天梯分数与社交关系。
   `CREATE TABLE IF NOT EXISTS hidden_accounts (
      account_id   INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
      hidden_until INTEGER NOT NULL,

@@ -3056,7 +3056,7 @@
   },
   "daoju": {
    "bundle": "tags-daoju.json",
-   "count": 46,
+   "count": 48,
    "names": {
     "c1": {
      "id": "3414",
@@ -3520,6 +3520,22 @@
       3
      ],
      "owner": "7180"
+    },
+    "属性书弹出": {
+     "id": "3730",
+     "kind": "sprite",
+     "frames": 1,
+     "inFrames": [],
+     "owner": "7180",
+     "dynamic": "原版 showPropertyAddWin() 运行时 attachMovie（实例名 daojuSub）：text1 剩余点数 / button1..3 三行（text1 当前值、text2 已分配、left·right 箭头）/ b_ok 确定 / b_back 返回"
+    },
+    "propAddPopup": {
+     "id": "3730",
+     "kind": "sprite",
+     "frames": 1,
+     "inFrames": [],
+     "owner": "7180",
+     "dynamic": "原版 showPropertyAddWin() 运行时 attachMovie（实例名 daojuSub）：text1 剩余点数 / button1..3 三行（text1 当前值、text2 已分配、left·right 箭头）/ b_ok 确定 / b_back 返回"
     }
    }
   },

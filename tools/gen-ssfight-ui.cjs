@@ -26,6 +26,7 @@
  *                                            # （同上，不补静态放置：原版运行时 attachMovie）
  *   node tools/gen-ssfight-ui.cjs repair     # 只增量重出村庄升级动画 tags-repair.json
  *                                            # （不重写其它页包/索引，只合并清单里的 repair 条目）
+ *   node tools/gen-ssfight-ui.cjs --prop-add # 只把属性书分配弹窗 (3730) 并进 tags-daoju.json
  *
  * 缺参考目录时会明确报错（与 gen-vendor-data.cjs 同一约定：不静默产出空文件）。
  * ========================================================================== */
@@ -75,6 +76,12 @@ const ACTIVITY_NAME = 'activityBtn';
  * ⚠ 它同样**不在**第 20 帧的静态放置里（原版是运行时有 hint 才挂、换圈时摘），
  *   所以这里只把闭包并进 `tags.json`，**不补静态放置** —— 挂/摘由 `ui-main.js` 照原版做。 */
 const TALK_BOARD = '3704';
+/* ---------- 属性书分配弹窗 = 原版运行时 attachMovie 的库元件 ----------
+ * `MainMovie_frame40.as:866 showPropertyAddWin()`：
+ *   `loadMcs([["属性书弹出", "daojuSub", currentFrame]])`；SWF ExportAssets「属性书弹出」= **3730**。
+ * 结构：`text1` 剩余点数；`button1..3` 三行（`text1` 当前值 / `text2` 已分配 / `left`·`right` 3156 箭头）；
+ * `b_ok`(3711) / `b_back`(3644)。它不在任何页的静态放置里，所以单独并进 `tags-daoju.json`。 */
+const PROP_ADD_POPUP = '3730';
 /* 主页放置矩阵：缩到 90%，并下移到与村庄门同一水平线（原版 3043 礼盒在 3963 内
  * 的 bbox 是 y=57.05..93.95；×0.9 再 +62.3 → 113.7..146.9，中心 ≈130.3，
  * 与右侧村庄门（视觉 bbox 中心 ≈130.3）同一行；旧 `.ssfight-gift` 中心 ≈124.5，
@@ -777,10 +784,58 @@ function talkBoardBundle() {
     additions.length, additions.map((t) => t.id).join('/'), tags.length);
 }
 
+/* ---------- 增量：只把「属性书分配弹窗」并进现有 tags-daoju.json ----------
+ * 与 `activityBundle()` 同一个理由：`tags-daoju.json` 里 4886 的排版补丁与其它标签
+ * 不能为了加一颗弹窗整包重生成（重生成还会把 textfields-index 截成只剩道具页）。
+ * 弹窗由 `ui-prop-use.js` 在点「分配属性」时挂载，**不补静态放置**。 */
+function propAddBundle() {
+  const tagsFile = path.join(OUT, 'tags-daoju.json');
+  if (!fs.existsSync(tagsFile)) die('缺 tags-daoju.json：先跑 node tools/gen-ssfight-ui.cjs daoju');
+  const tags = JSON.parse(fs.readFileSync(tagsFile, 'utf8'));
+  const have = new Set(tags.map((t) => String(t.id)));
+  const { data } = readMovie();
+  const byId = new Map(data.tg.map((t) => [String(t.id), t]));
+  const r = closure(byId, [PROP_ADD_POPUP]);
+  if (r.missing.length) die('属性书分配弹窗闭包缺标签：' + r.missing.join(','));
+  const additions = r.tags.map(prune).filter((t) => !have.has(String(t.id)));
+  additions.forEach((t) => tags.push(t));
+  fs.writeFileSync(tagsFile, JSON.stringify(tags));
+  const manifestFile = path.join(OUT, 'manifest.json');
+  if (fs.existsSync(manifestFile)) {
+    const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+    const entry = (manifest.bundles || []).find((b) => b.file === 'tags-daoju.json');
+    if (entry) entry.tags = tags.length;
+    manifest.exportedTags = (manifest.bundles || []).reduce((n, b) => n + (Number(b.tags) || 0), 0);
+    fs.writeFileSync(manifestFile, JSON.stringify(manifest, null, 1) + '\n');
+  }
+  /* 索引里补一行（`inFrames: []` + `dynamic`）：它是运行时 attachMovie 挂的，
+   * 留这一行只为 `ssfight-index.cjs --name 属性书弹出` 能搜到。 */
+  const symFile = path.join(OUT, 'symbol-index.json');
+  if (fs.existsSync(symFile)) {
+    const idx = JSON.parse(fs.readFileSync(symFile, 'utf8'));
+    const daoIdx = idx.bundles && idx.bundles.daoju;
+    if (daoIdx) {
+      if (!daoIdx.names) daoIdx.names = {};
+      const note = '原版 showPropertyAddWin() 运行时 attachMovie（实例名 daojuSub）：'
+        + 'text1 剩余点数 / button1..3 三行（text1 当前值、text2 已分配、left·right 箭头）/ b_ok 确定 / b_back 返回';
+      let added = 0;
+      for (const key of ['属性书弹出', 'propAddPopup']) {
+        if (!daoIdx.names[key]) added++;
+        daoIdx.names[key] = { id: PROP_ADD_POPUP, kind: 'sprite', frames: 1, inFrames: [], owner: String(PAGES.daoju), dynamic: note };
+      }
+      daoIdx.count = (daoIdx.count || 0) + added;
+      fs.writeFileSync(symFile, JSON.stringify(idx, null, 1));
+    }
+  }
+  console.log('属性书分配弹窗增量：新增 %d 个标签（%s）；tags-daoju.json 共 %d 个标签',
+    additions.length, additions.map((t) => t.id).join('/'), tags.length);
+}
+
 function main() {
   const args = process.argv.slice(2);
   if (args.includes('--talk')) { talkBoardBundle(); return; }
   if (args.includes('--activity')) { activityBundle(); return; }
+  if (args.includes('--prop-add')) { propAddBundle(); return; }
   /* 默认 = 村庄主菜单页 + **真正的村庄页（homeLand）** + 道具页 + **状态页（zhuangtai）**
    * + 6 个装备容器 + 三个「地点场景页」库元件 + 村庄升级动画：这几样是运行时真正要用的。
    * ⚠ 状态页也在默认里 —— manifest 的 `bundles` 是"跑过哪些"的记录，
@@ -884,8 +939,9 @@ function main() {
       : name === 'tiaozhan' ? CHALLENGE_PARTS
         /* 道具页的通用弹窗「道具1」= **4886**（导出符号表把它误记成 4887，那一颗是 45×55
          * 的小按钮）。背包「使用」用它的第 1 帧，合成页用第 5 帧；两处都从道具页进，
-         * 所以跟 `tags-daoju.json` 一起按需拉取，避免再开一份包。 */
-        : name === 'daoju' ? ['4886'].concat(propIconRoots())
+         * 所以跟 `tags-daoju.json` 一起按需拉取，避免再开一份包。
+         * 属性书分配弹窗 3730 同属道具页流程（见 PROP_ADD_POPUP）。 */
+        : name === 'daoju' ? ['4886', PROP_ADD_POPUP].concat(propIconRoots())
           : name === ICON_BUNDLE ? iconRoots() : [];
     if (sel.length) parts.push({ file: BUNDLES[name], roots: sel.map((w) => ROOTS[w]).filter(Boolean).concat(extra), pages: sel.slice() });
   }

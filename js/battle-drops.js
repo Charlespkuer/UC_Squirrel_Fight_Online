@@ -56,9 +56,14 @@
   function create(options) {
     const opts = options || {}, drops = opts.plan || plan(opts.random, opts.kind), collected = [], upgrades = [], awarded = new Set(), pending = [];
     const owner = State.state();
+    const presenter = opts.presenter || null;
     let elapsed = 0, next = 0, active = null, closed = false, button = null, notice = null, noticeUntil = 0;
     const root = opts.root;
-    function removeButton() { if (button) button.remove(); button = null; active = null; }
+    function removeButton() {
+      if (presenter && presenter.hide) { try { presenter.hide(); } catch (e) {} }
+      if (button) button.remove();
+      button = null; active = null;
+    }
     // 点击拾取后的「获得…」提示（与单机版同一句文案 / 同一套 `.battle-pickup-notice`）。
     // 单机版发奖是同步的，点击后立刻亮；联机版等服务端确认回包后用回包里的 `prize` 亮，
     function showPickupNotice(reward) {
@@ -75,6 +80,10 @@
     };
     function show(reward) {
       removeButton(); active = reward;
+      if (presenter) {
+        try { presenter.show(reward, () => collect(reward.index)); } catch (e) {}
+        return;
+      }
       if (!root) return;
       const ladder = opts.kind === 'rank';
       button = document.createElement('button'); button.type = 'button';
@@ -143,7 +152,13 @@
       if (notice && elapsed >= noticeUntil) { notice.remove(); notice = null; }
       if (next < drops.length && elapsed >= drops[next].at) { const drop = drops[next++]; if (elapsed < drop.at + RULES.lifetime) show(drop); }
     }
-    function close() { closed = true; removeButton(); if (notice) notice.remove(); notice = null; }
+    function close() {
+      closed = true;
+      removeButton();
+      if (presenter && presenter.close) { try { presenter.close(); } catch (e) {} }
+      if (notice) notice.remove();
+      notice = null;
+    }
 
     function summary() {
       return { items: collected.map(item => ({ ...item })), ups: upgrades.slice(),

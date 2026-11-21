@@ -3492,6 +3492,7 @@
   const BERSERK_MONTHLY_GOODS = Object.freeze([11, 12, 13, 14, 20, 21, 22, 23]);
   const RANK_MONTHLY_LIMIT_GOODS = Object.freeze(ONLINE ? [7, 8, 9, 10].concat(BERSERK_MONTHLY_GOODS) : []);
   function rankWeekKey() {
+    if (liveServerClock()) return serverWeekKey(nowMs());
     const d = new Date(Date.now());
     d.setDate(d.getDate() - (d.getDay() + 6) % 7);
     return dateKey(d);
@@ -3945,6 +3946,7 @@
   const ENDLESS_BLACK_CARD_CAP = 10;
 
   function blackCardWeekKey() {
+    if (liveServerClock()) return serverWeekKey(nowMs());
     const d = new Date(Date.now());
     const day = (d.getDay() + 6) % 7;
     d.setDate(d.getDate() - day);
@@ -5581,10 +5583,37 @@
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   }
 
+  // 联机客户端的「今天 / 本周」必须按服务端时区算：设备时区不同时，服务端已按
+  // Asia/Shanghai 记账，客户端再用本机日期判断就会把已领的祭坛 / 每日礼包重新点亮。
+  let serverDayFormatter = null;
+  function serverDayKey(ms) {
+    try {
+      if (!serverDayFormatter) serverDayFormatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+      });
+      const parts = serverDayFormatter.formatToParts(new Date(ms));
+      const get = (type) => (parts.find((p) => p.type === type) || {}).value || '';
+      const y = get('year'), m = get('month'), d = get('day');
+      if (y && m && d) return y + '-' + m + '-' + d;
+    } catch (e) {}
+    const d = new Date(ms + 8 * 3600000);
+    return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0');
+  }
+  function serverWeekKey(ms) {
+    const day = serverDayKey(ms).split('-').map(Number);
+    const weekday = new Date(Date.UTC(day[0], day[1] - 1, day[2])).getUTCDay();
+    const monday = new Date(Date.UTC(day[0], day[1] - 1, day[2] - (weekday + 6) % 7));
+    return monday.toISOString().slice(0, 10);
+  }
+  function liveServerClock() {
+    return ONLINE && !SERVER && typeof window !== 'undefined' && typeof window.__ssdzServerNow === 'function';
+  }
+
   function shortDay() { return !!(window.Debug && window.Debug.enabled && window.Debug.enabled('shortDay')); }
   // 打开「12 小时一天」时，12:00 起换成「第二天」的日期键，于是每日礼包、免费抽奖、
   // 格式仍是 YYYY-MM-DD（存档校验 validLocalDate、earnOn 按日期查表都依赖它）。
   function localDate() {
+    if (liveServerClock()) return serverDayKey(nowMs());
     const now = new Date(Date.now());
     if (shortDay() && now.getHours() >= 12) {
       const next = new Date(now.getTime());
@@ -5636,6 +5665,17 @@
     const idx = ((day % n) + n) % n;
     return Object.assign({ count: 1, index: idx, date: src }, DAILY_GIFT_EXTRAS[idx]);
   }
+  // 征战令发放口径按领取日切：2026-11-23 起周六/周日各 +1，之前仍是连续第 3/6/9 天。
+  const TICKET_WEEKEND_FROM = '2026-11-23';
+  function weekdayOf(date) {
+    const [y, m, d] = String(date).split('-').map(Number);
+    return new Date(y, m - 1, d).getDay();
+  }
+  function dailyTicket(date, streak) {
+    if (date < TICKET_WEEKEND_FROM) return streak % 3 === 0 ? 1 : 0;
+    const day = weekdayOf(date);
+    return day === 0 || day === 6 ? 1 : 0;
+  }
   function dailyStatus() {
     const date = localDate();
     const claimed = S.dailyClaimDate === date;
@@ -5645,7 +5685,7 @@
       : (S.dailyClaimDate === yesterdayDate() ? Math.max(1, days) + 1 : 1);
     const extra = dailyGiftExtra(date);
     // 走独立的 ticket 字段，不占每日礼包的 7 种附加道具轮换。
-    const ticket = streak % 3 === 0 ? 1 : 0;
+    const ticket = dailyTicket(date, streak);
     return { date, claimed, streak, gold: Math.min(200, 100 + (streak - 1) * 10), extra, ticket,
       newbie: newbieGift(date),
       // 兼容旧界面/旧调用：只有轮到挑战书时才是 1。

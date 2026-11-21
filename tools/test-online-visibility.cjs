@@ -1,5 +1,6 @@
 'use strict';
-/* 临时隐身：天梯/公开候选不可见；搜索、好友、师徒、直连切磋保持可用；存档与分数不变；到期自动恢复。 */
+/* 临时隐身：他人看到的天梯/公开候选不可见；隐身自己的排名与周奖励按含隐身的全榜正常计算；
+ * 搜索、好友、师徒、直连切磋保持可用；存档与分数不变；到期自动恢复。 */
 const path = require('node:path');
 const fs = require('node:fs');
 const OUT = path.resolve(__dirname, '..', 'out');
@@ -66,7 +67,10 @@ async function main() {
   ok('setup: three level 30 accounts with snapshots', stA.save.level === 30 && stB.save.level === 30 && stC.save.level === 30 && stA.snapshot && stB.snapshot && stC.snapshot);
 
   const week = settlement.weekKey();
-  db.run('UPDATE ratings SET score = 100 WHERE account_id IN (?,?) AND season = ?', aId, bId, week);
+  // 高分 + 至少一场天梯：保证三个人都在人机之上，且满足周奖励的 played>0。
+  // 两个隐身号刻意高于 A：A 的榜/领奖若把隐身算进去就会掉到第 3，能钉住「普通玩家不计隐身」。
+  db.run('UPDATE ratings SET score = 500, wins = 1 WHERE account_id = ? AND season = ?', aId, week);
+  db.run('UPDATE ratings SET score = 600, wins = 1 WHERE account_id IN (?,?) AND season = ?', bId, cId, week);
   const ladderBefore = await call('GET', '/api/ladder?limit=200', undefined, A.token);
   const bBefore = ladderBefore.top.find((x) => Number(x.accountId) === bId);
   const rankBefore = settlement.rankOf(bId);
@@ -76,13 +80,29 @@ async function main() {
 
   const ladderA = await call('GET', '/api/ladder?limit=200', undefined, A.token);
   const ladderB = await call('GET', '/api/ladder?limit=200', undefined, B.token);
-  ok('hidden: B absent from A ladder top', !ladderA.top.some((x) => Number(x.accountId) === bId));
-  ok('hidden: B own ladder flags hidden/rank 0, still sees score', ladderB.hidden === true && ladderB.me.hidden === true && ladderB.me.rank === 0 && ladderB.me.score === 100);
-  ok('hidden: settlement.rankOf(B) === 0', settlement.rankOf(bId) === 0);
-  const award = settlement.rankAwardStatus(bId);
-  const claim = settlement.claimRankAward(bId);
-  ok('hidden: B has no weekly rank award eligibility/claim', award.hidden === true && award.eligible === false && award.rank === 0
-    && claim.ok === false && claim.hidden === true);
+  ok('hidden: B/C absent from A ladder top', !ladderA.top.some((x) => Number(x.accountId) === bId || Number(x.accountId) === cId));
+  ok('hidden: B own ladder includes hidden C and keeps a real rank', ladderB.hidden === true
+    && ladderB.me.hidden === true && ladderB.me.rank === 1 && ladderB.me.score === 600
+    && ladderB.top.some((x) => Number(x.accountId) === cId));
+  ok('hidden: settlement.rankOf(B) matches inclusive ladder rank', settlement.rankOf(bId) === 1
+    && settlement.rankOf(bId) === ladderB.me.rank);
+  const awardB = settlement.rankAwardStatus(bId);
+  ok('hidden: B is eligible for the weekly top-30 award', awardB.hidden === true && awardB.eligible === true
+    && awardB.rank > 0 && awardB.rank <= 30 && awardB.surpassedBot === true, awardB);
+  // 普通玩家 A 的榜/领奖排名不计隐身 B/C：A 仍是第 1。
+  const awardA = settlement.rankAwardStatus(aId);
+  ok('normal: A rank/award ignores hidden B/C', awardA.rank === 1 && awardA.eligible === true
+    && settlement.rankOf(aId) === 1, awardA);
+  const bBeforeClaim = await call('GET', '/api/state', undefined, B.token);
+  const bClaim = await call('POST', '/api/ladder/award', {}, B.token);
+  const bAfterClaim = await call('GET', '/api/state', undefined, B.token);
+  ok('hidden: B can claim the weekly top-30 award', bClaim.ok === true && Number(bClaim.cups) === 50
+    && Number(bClaim.rank) === awardB.rank
+    && bAfterClaim.save.goldCup === bBeforeClaim.save.goldCup + 50
+    && bClaim.award && bClaim.award.claimed === true, { bClaim, before: bBeforeClaim.save.goldCup, after: bAfterClaim.save.goldCup });
+  const aClaim = await call('POST', '/api/ladder/award', {}, A.token);
+  ok('normal: A can claim with hidden players excluded from its rank', aClaim.ok === true
+    && Number(aClaim.rank) === 1 && Number(aClaim.cups) === 50, aClaim);
 
   const rankOpp = await call('GET', '/api/opponents', undefined, A.token);
   const bOpp = await call('GET', '/api/opponents', undefined, B.token);

@@ -7,6 +7,7 @@
 
   const raf = (fn) => (window.requestAnimationFrame ? window.requestAnimationFrame(fn) : setTimeout(() => fn(Date.now()), 16));
   const caf = (id) => { try { (window.cancelAnimationFrame || clearTimeout)(id); } catch (e) {} };
+  const timeNow = () => ((window.performance && performance.now) ? performance.now() : Date.now());
 
   const SYM = {
     fight: '7772', fighter: '7689', hero: '6532', fightSub: '4847',
@@ -203,6 +204,139 @@
     const hit = lootIcons && lootIcons[Number(item.id)];
     if (!hit) return null;
     return target.attachChild(hit.id, 1, 'prize');
+  }
+
+  // 幻兽「整蛊专家」封住的武器/技能：把原版库元件里的那张武技卡挂出来。
+  // 卡面元件按武器/技能 id 查 `weapon-skill-icons.json`，实际图标在 tags-wsicon。
+  let sealIcons = null;
+  async function loadSealIcons() {
+    if (sealIcons) return sealIcons;
+    try {
+      await SfRender.loadExtra('tags-wsicon.json');
+      sealIcons = (await SfRender.loadTable('weapon-skill-icons.json')) || {};
+    } catch (e) {
+      if (window.__errs) window.__errs.push('[SfFight] seal icons: ' + (e && e.message));
+      return null;
+    }
+    return sealIcons;
+  }
+  function sealIconOf(seal) {
+    if (!seal || !sealIcons) return null;
+    const kind = seal.kind === 'weapon' ? 'weapon' : 'skill';
+    const row = sealIcons[kind] && sealIcons[kind][Number(seal.id)];
+    return row && row.id ? row : null;
+  }
+  // 卡面晚到不能把整场战斗卡住；超时就放弃这一张，后台请求继续跑。
+  function waitSealIcons(ms, signal) {
+    if (sealIcons) return Promise.resolve(sealIcons);
+    const wait = [
+      loadSealIcons(),
+      new Promise((resolve) => setTimeout(() => resolve(null), Math.max(0, Number(ms) || 0))),
+    ];
+    if (signal) wait.push(signal);
+    return Promise.race(wait);
+  }
+  const SEAL_CARD_HALF = 23;
+  const SEAL_CARD_SCALE = 0.95;
+  const SEAL_CARD_POS = [[70, 85], [250, 85]];
+  function showSealCard(rec, seal, side) {
+    const row = sealIconOf(seal);
+    if (!row || !rec || !rec.view) return null;
+    let clip = null;
+    try { clip = rec.view.attachChild(row.id, 1, 'seal'); } catch (e) { clip = null; }
+    if (!clip || !clip.g || !clip.setExtraTransform) return null;
+    // 卡面上的等级/名字是状态页的占位字；战斗里只保留这张“被吸走的武技”图。
+    for (const name of ['level', 'sname', 'sname1']) {
+      const field = clip.byName && clip.byName(name);
+      if (field) visible(field, false);
+    }
+    clip.g.setAttribute('role', 'img');
+    clip.g.setAttribute('aria-label', '吸取了' + (seal.name || '武技'));
+    clip.g.style.filter = 'drop-shadow(0 0 3px rgba(196,108,255,.95)) drop-shadow(0 0 9px rgba(255,110,230,.4))';
+    const center = SEAL_CARD_POS[side === 1 ? 1 : 0];
+    const start = timeNow();
+    const draw = (now) => {
+      if (!clip || !clip.g || rec.stopped) return;
+      const t = Math.min(1, (now - start) / 280);
+      const ease = 1 - Math.pow(1 - t, 3);
+      const s = SEAL_CARD_SCALE * (0.55 + 0.45 * ease);
+      const cy = center[1] + 12 * (1 - ease);
+      clip.setExtraTransform('translate(' + (center[0] - SEAL_CARD_HALF * s).toFixed(2) + ',' +
+        (cy - SEAL_CARD_HALF * s).toFixed(2) + ') scale(' + s.toFixed(3) + ')');
+      clip.g.style.opacity = String(Math.min(1, t * 1.6));
+      if (t < 1) rec.rafs.push(raf(draw));
+    };
+    draw(start);
+    return clip;
+  }
+  function fadeSealCard(rec, clip) {
+    if (!clip || !clip.g) return;
+    const start = timeNow();
+    const draw = (now) => {
+      if (!clip || !clip.g) return;
+      const t = Math.min(1, (now - start) / 180);
+      clip.g.style.opacity = String(1 - t);
+      if (t < 1) rec.rafs.push(raf(draw));
+      else { try { clip.destroy(); } catch (e) {} }
+    };
+    rec.rafs.push(raf(draw));
+  }
+
+  // 原版「获取道具」3960 的拾取卡：悬浮奖励不再用 DOM 图+边框拼，改成库元件 + 原版图标。
+  // 3960 的卡面/提示是固定矢量，动态的只有 `daoju.c1` 里那一枚道具图标。
+  const GAIN_VIEWBOX = '134 56 50 63';
+  function createDropPresenter(rec) {
+    let layer = null, view = null, closed = false;
+    function clear() {
+      if (layer && layer.parentNode) layer.parentNode.removeChild(layer);
+      layer = null;
+      if (view) { try { view.destroy(); } catch (e) {} view = null; }
+    }
+    function show(reward, pick) {
+      clear();
+      closed = false;
+      const host = rec && rec.host;
+      if (!host || !window.SfRender) return;
+      const wrap = document.createElement('div');
+      wrap.className = 'sf-gain-layer';
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'sf-gain';
+      card.setAttribute('aria-label', '拾取' + reward.name + ' ×' + reward.count);
+      const pop = document.createElement('span'); pop.className = 'sf-gain-pop';
+      const bob = document.createElement('span'); bob.className = 'sf-gain-bob';
+      const glow = document.createElement('span'); glow.className = 'sf-gain-glow';
+      const art = document.createElement('span'); art.className = 'sf-gain-art';
+      bob.appendChild(glow); bob.appendChild(art);
+      for (let i = 1; i <= 8; i++) {
+        const spark = document.createElement('span');
+        spark.className = 'sf-gain-spark s' + i;
+        bob.appendChild(spark);
+      }
+      pop.appendChild(bob); card.appendChild(pop); wrap.appendChild(card);
+      host.appendChild(wrap);
+      layer = wrap;
+      card.onclick = (e) => {
+        if (e) { e.preventDefault(); e.stopPropagation(); }
+        if (closed) return;
+        const fn = pick;
+        clear();
+        if (fn) fn();
+      };
+      SfRender.mountSymbol(art, SYM.gain, { viewBox: GAIN_VIEWBOX, policy: {} }).then((v) => {
+        if (closed || layer !== wrap) { try { v.destroy(); } catch (e) {} return; }
+        view = v;
+        const icon = lootIcons && lootIcons[Number(reward.id)];
+        const daoju = v.byName && v.byName('daoju');
+        const c1 = daoju && daoju.byName && daoju.byName('c1');
+        if (c1 && icon && icon.id) {
+          try { c1.attachChild(icon.id, 1, 'mc'); c1.gotoAndStop(2); } catch (e) {}
+        }
+      }).catch((e) => {
+        if (window.__errs) window.__errs.push('[SfFight] gain card: ' + (e && e.message));
+      });
+    }
+    return { show, hide: clear, close: () => { closed = true; clear(); } };
   }
 
 
@@ -2170,6 +2304,8 @@
     if (rec.petTeams.some((list) => list.length)) {
       try { await SfRender.loadExtra('tags-fight-pets.json'); } catch (e) {  }
     }
+    // 已知录像里有整蛊专家时先偷偷预取卡面；随机对战等出结果再取，别让每只小丑都把 wsicon 拉一遍。
+    if (o.result && Array.isArray(o.result.rounds) && o.result.rounds.some((r) => r && r.petSeal)) loadSealIcons();
 
     if (window.Engine && Engine.loadSheets) {
       const kinds = new Set();
@@ -2233,7 +2369,8 @@
     // 悬浮掉落必须在 `Sim.simulate()` 之后创建（与现代 `Battle.run` 同一顺序）。
     // `dropRandom`（QA 夹具）只替掉落那一包随机，不会替 Sim 的随机，所以顺序必须一致。
     pickups = (o.collectDrops !== false && (!o.result || o.pickupPlan) && window.BattleDrops)
-      ? BattleDrops.create({ root: ui, random: o.dropRandom, kind: o.kind, plan: o.pickupPlan, onCollect: o.claimPickup, onError: o.onClaimError }) : null;
+      ? BattleDrops.create({ root: ui, random: o.dropRandom, kind: o.kind, plan: o.pickupPlan,
+        onCollect: o.claimPickup, onError: o.onClaimError, presenter: createDropPresenter(rec) }) : null;
     rec.pickups = pickups;
 
 
@@ -2273,6 +2410,8 @@
     }
     if (Array.isArray(result.startShell) && result.startShell.length === 2) rec.shields = result.startShell.map((v) => Math.max(0, Math.round(Number(v) || 0)));
     rec.rounds = Array.isArray(result.rounds) ? result.rounds : [];
+    // 预取失败不能挡住战斗；真到整蛊那一拍会再试一次。
+    if (rec.rounds.some((r) => r && r.petSeal)) { try { await waitSealIcons(1000, rec.skipSignal); } catch (e) {} }
 
     rec.roundsLeft = Math.max(1, Math.floor(Number(o.maxRounds) || 60));
 
@@ -2637,6 +2776,11 @@
     const attacker = rec.fighters[att];
     const defender = rec.fighters[def];
     if (!attacker || !defender) { applyHp(rec, r); await wait(300); return; }
+    let sealCard = null;
+    if (r.action === 'pet' && r.petSeal) {
+      if (!sealIcons) { try { await waitSealIcons(800, rec.skipSignal); } catch (e) {} }
+      sealCard = showSealCard(rec, r.petSeal, def);
+    }
 
     // ⚠ 出手这一拍原版只按 `currentRound.specialEffectType` 给受击方拨状态图标
     defender.setStatu(effectStatu(r));
@@ -2727,6 +2871,11 @@
     if (!attacker.isDead() && att !== fakeSide) attacker.idle();
     if (!defender.isDead() && def !== fakeSide) defender.idle();
 
+    // 武技卡要停够一眼能看清的时间；原版锁定后整场都不能再用，值得多给这一拍。
+    if (sealCard) {
+      await wait(900);
+      fadeSealCard(rec, sealCard);
+    }
     await wait(ROUND_GAP);
   }
 
