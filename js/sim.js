@@ -272,6 +272,12 @@
   function statOf(c, key) { return stripped(c) ? c.baseStats[key] : c[key]; }
 
   function healOf(c, amount) { return Math.max(0, Math.round(Number(amount) * (c.healMul == null ? 1 : c.healMul))); }
+  // 空手 = 虚拟拳套白值 × (1 + 力量/120)：和武器共用同一套力量缩放，
+  // 拳套白值随等级成长（3 + 0.55×等级），保证徒手始终弱于同级中位武器。
+  function fistDamage(c, roll) {
+    const lv = Math.max(1, Number(c.level) || 1);
+    return (3 + 0.55 * lv) * (1 + effPower(c) / 120) * (roll == null ? 1 : roll);
+  }
   function effPower(c) {
     let p = statOf(c, 'power') * (1 - c.debuffs.power / 100) + c.buffFlat.power;
     const rage = c.mods && Number(c.mods.lowHpPowerMul) || 0;
@@ -1312,7 +1318,7 @@
         return;
       }
       if (chance(dodgeChance(att, def))) { markDodge(r, def); pushRound(r); return; }
-      let raw = Math.round(effPower(att) * (0.8 + Math.random() * 0.4));
+      let raw = Math.round(fistDamage(att, 0.9 + Math.random() * 0.2));
       if (xhEarly !== 1) raw = Math.round(raw * xhEarly);
       if (att.npcType === 'tl' && att.hp < att.maxHp * 0.25) raw = Math.round(raw * 1.3);
       if (att.petNextCrit) { att.petNextCrit = false; raw = Math.round(raw * 2.5); r.crit = true; r.petCrit = true; }
@@ -1696,7 +1702,7 @@
       const dodge = chance(dodgeChance(att, def));
       att.mustHitNext = false;
       if (dodge) { markDodge(r, def); pushRound(r); return; }
-      let raw = Math.round(effPower(att) * (0.8 + Math.random() * 0.4) * (1 + effect(att, 5) / 100));
+      let raw = Math.round(fistDamage(att, 0.9 + Math.random() * 0.2) * (1 + effect(att, 5) / 100));
       if (att.petNextCrit) {
         att.petNextCrit = false;
         raw = Math.round(raw * (2 + Math.random() + effect(att, 45) / 100 + effect(att, 1) / 100 + critDmgBonus(att)));

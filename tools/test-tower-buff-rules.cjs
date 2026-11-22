@@ -255,10 +255,10 @@ test('60 手打满时先复活加时；失败也扣本层次数；悬停按真�
   const T = c.Tower, Sim = c.Sim;
   /* —— ① Sim：玩家 10% 血、双方都打不死对方 → 60 手按血量比例判负；
    *       带涅槃时先复活（回 50%）并开下一个 60 手窗口，而不是直接结束。 —— */
-  /* maxHp 放到 100000：高于武技 5% 保底的 20000 阈值，双方才可能打满 60 手。 */
-  const mk = (mods) => ({ name: 'p', level: 70, power: 1, agility: 1, speed: 1, maxHp: 100000, hp: 1000,
+  /* 空手改成「虚拟拳套」后单次约 41 点；血量放到 10 万，双方才可能打满 60 手。 */
+  const mk = (mods) => ({ name: 'p', level: 70, power: 1, agility: 1, speed: 1, maxHp: 100000, hp: 50000,
     baseStats: { power: 1, agility: 1, speed: 1 }, weapons: [], skills: [], wears: [], effects: {}, masterLevel: 0, mods });
-  const foe = () => ({ name: 'e', level: 70, power: 1, agility: 1, speed: 1, maxHp: 100000, hp: 10000,
+  const foe = () => ({ name: 'e', level: 70, power: 1, agility: 1, speed: 1, maxHp: 100000, hp: 100000,
     baseStats: { power: 1, agility: 1, speed: 1 }, weapons: [], skills: [], wears: [], effects: {}, masterLevel: 0 });
   const plain = Sim.simulate(mk(null), foe());
   assert.equal(plain.winner, 1, '没有涅槃：60 手后按血量比例判负');

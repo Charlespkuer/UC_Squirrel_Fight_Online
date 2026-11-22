@@ -68,7 +68,7 @@
       // 幻兽等级期望 ≈19.0（16~24；1★ 封顶 10、2★ 封顶 20）。
       // 高星权重也随首领提高，否则低星幻兽会被自己的等级上限压回 10 级。
       pet: { level: [16, 24], grades: [8, 24, 40, 28] },
-      bias: { power: 2.6, agility: 1.1, speed: 1.10, hp: 4.3 },
+      bias: { power: 3.0, agility: 1.1, speed: 1.10, hp: 4.8 },
       weapons: [{ id: 2, level: 12 }],
       skills: [{ id: 14, level: 12 }, { id: 16, level: 10 }, { id: 5, level: 10 }, { id: 10, level: 10 }],
       castable: [14], pattern: ['weapon', 'skill', 'common', 'skill'], mech: [],

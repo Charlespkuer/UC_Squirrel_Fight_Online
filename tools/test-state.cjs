@@ -2140,11 +2140,9 @@ test('无敌模式：玩家血量只增不减（残血进场也先顶满），�
 
 test('师父驾到使用师父等级，下一次普通攻击保留必中', () => {
   const g = game();
-  const ordinary = [0.9, 0.9, 0.5, 0.9, 0.9];
-  // 对手先攻击：100→65→30；低血呼叫真实7级师父，恢复28点。
-  const rolls = [...ordinary, ...ordinary, ...ordinary, 0.1, ...ordinary, 0.9, 0, 0.5, 0.9, 0.9];
-  g.math.random = () => rolls.length ? rolls.shift() : 0.9;
-  const result = g.Sim.simulate(fighter({ power: 1, skills: ['13:1'], masterLevel: 7 }), fighter({ speed: 11, power: 35, hp: 10000 }));
+  g.math.random = () => 0.9;
+  // 对手先攻击，每次约 9~10 点：血量过半后固定呼叫 7 级师父，恢复 28 点。
+  const result = g.Sim.simulate(fighter({ power: 1, skills: ['13:1'], masterLevel: 7 }), fighter({ speed: 11, power: 200, hp: 10000 }), { masterChance: 100 });
   const mine = result.rounds.filter((r) => r.attacker === 0);
   const summoned = mine.findIndex((r) => r.id === 13);
   assert.ok(summoned > 0, '满血时不呼叫师父');
@@ -2153,6 +2151,21 @@ test('师父驾到使用师父等级，下一次普通攻击保留必中', () =>
   assert.equal(mine[summoned + 1].action, 'common');
   assert.equal(mine[summoned + 1].dodge, undefined);
   assert.ok(mine[summoned + 1].dmg > 0);
+});
+
+test('空手用虚拟拳套：同级始终弱于中位武器，力量收益与武器同结构', () => {
+  const g = game(); g.math.random = () => 0.5;
+  for (const lv of [10, 30, 60, 90]) {
+    const me = g.State.genAI(lv, '', { levelJitter: 0, gearSelfLevel: true });
+    const ws = (me.weapons || []).map((w) => typeof w === 'string' ? g.State.weaponInst(w) : w).filter(Boolean);
+    const dmg = ws.map((w) => Math.round((w.harmLo + w.harmHi) / 2 * (1 + me.power / 120))).sort((a, b) => a - b);
+    const mid = dmg[Math.floor(dmg.length / 2)] || 0;
+    const round = g.Sim.simulate({ ...me, pattern: ['common'], hp: 1e6, maxHp: 1e6 }, fighter({ hp: 1e6, maxHp: 1e6 }))
+      .rounds.find((r) => r.attacker === 0 && r.action === 'common');
+    assert.ok(round && round.dmg > 0, 'L' + lv + ' 应打出空手');
+    assert.ok(round.dmg < mid * 0.7, 'L' + lv + ' 空手应明显弱于中位武器：' + round.dmg + ' vs ' + mid);
+    assert.ok(round.dmg > mid * 0.3, 'L' + lv + ' 空手也不能弱到没用：' + round.dmg + ' vs ' + mid);
+  }
 });
 
 test('装备词条改变对应武器伤害与减伤，不只显示说明', () => {
