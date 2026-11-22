@@ -208,6 +208,35 @@
     return on;
   }
   function setBackgroundRun(on) { persistSettings({ backgroundRun: on === true }); applyBackgroundRun(); return on === true; }
+  /* 画面兼容模式：Android 16 + Adreno 的 WebView 合成层会整块丢栅格，屏幕上只剩一块纯绿 ——
+     `#203a27` 之类的界面色都在代码里，这个绿不属于任何样式，是那层没内容。硬件合成路径修不了，
+     只能让 WebView 退回软件图层自己画。开关是本机渲染能力的事，存 localStorage，不写账号存档。 */
+  const RENDER_COMPAT_KEY = 'ssdz-render-compat';
+  function renderCompatOn() {
+    try { return localStorage.getItem(RENDER_COMPAT_KEY) === '1'; } catch (e) { return false; }
+  }
+  function applyRenderCompat() {
+    const on = renderCompatOn();
+    try {
+      const bridge = window.SSDZAndroid;
+      if (bridge && typeof bridge.setRenderMode === 'function') bridge.setRenderMode(on ? 'compat' : 'auto');
+    } catch (e) {}
+    return on;
+  }
+  function redrawSurface() {
+    try {
+      const bridge = window.SSDZAndroid;
+      if (bridge && typeof bridge.redraw === 'function') bridge.redraw();
+    } catch (e) {}
+  }
+  function setRenderCompat(on) {
+    const next = on === true;
+    try { localStorage.setItem(RENDER_COMPAT_KEY, next ? '1' : '0'); } catch (e) {}
+    applyRenderCompat();
+    // 换图层后整页要重新量一次：软件图层的像素对齐和硬件层不同，不重量会留下半像素裁切。
+    setTimeout(() => { try { fitCanvas(true); } catch (e) {} redrawSurface(); }, 0);
+    return next;
+  }
   // 存档载入后把偏好接过来：存档优先，并回写 localStorage 供下次启动（标题画面）用。
   let appliedSettingsSig = '';
   function applyStoredSettings(force) {
@@ -390,6 +419,8 @@
     const seq = ++foregroundRepaintSeq;
     const paint = () => {
       if (seq !== foregroundRepaintSeq) return;
+      // 原生先整窗重画一次：只丢合成层时这一步就够，页面状态不用动。
+      redrawSurface();
       try { fitCanvas(); } catch (e) {}
       if (mode === 'title') {
         try { drawHomeBg(ctx, homeBgBlur()); } catch (e) {}
@@ -457,6 +488,20 @@
     window.__ssdzEnterForeground = enterForeground;
 
     window.__ssdzRelayout = relayoutNow;
+    // 原生绿屏自愈的两条入口：先让页面把栅格整层重挂一次；仍不回来时原生切软件图层，
+    // 这里只同步开关状态并提示（切图层的能力在原生，页面改不了）。
+    window.__ssdzRepairSurface = () => {
+      try { repaintCssBackgrounds(); } catch (e) {}
+      try { if (window.SfRender && SfRender.repaintRaster) SfRender.repaintRaster(); } catch (e) {}
+      try { relayoutNow(); } catch (e) {}
+      redrawSurface();
+    };
+    window.__ssdzRenderCompatAuto = () => {
+      try { localStorage.setItem(RENDER_COMPAT_KEY, '1'); } catch (e) {}
+      try { fitCanvas(true); } catch (e) {}
+      redrawSurface();
+      try { if (window.UI && UI.toast) UI.toast('画面异常，已自动切换到兼容渲染'); } catch (e) {}
+    };
     window.__ssdzIsBackgrounded = () => inBackground;
     window.addEventListener('ssdz-native-pause', enterBackground);
     window.addEventListener('ssdz-native-resume', () => { enterForeground(); scheduleForegroundRepaint(); });
@@ -610,6 +655,7 @@
     fitCanvas();
     // 标题页也要沉浸：`applyStoredSettings()` 要等存档载入之后才跑，旧机（Android 11 /
     applySystemBars();
+    applyRenderCompat();
     armFirstGesture();
     playBgm('main');
     drawLoading(0.05, '松鼠大战 · 怀旧复刻版');
@@ -1427,6 +1473,7 @@
     resumeHomeScene,
     volume: volumeValue, setVolume, homePlayer: () => mainPlayer, setHomeFps, W, H,
     settings: settingsSnapshot, setResolution, setFullscreen, setHideStatusBar, applySystemBars, setBackgroundRun, applyBackgroundRun,
+    isRenderCompat: renderCompatOn, setRenderCompat, applyRenderCompat, redrawSurface,
     isFullscreen: () => !!document.fullscreenElement,
 
     preloadBattleAssets, pinBattleAssets, battleAssetsReady: () => !!battleAssetsPromise,

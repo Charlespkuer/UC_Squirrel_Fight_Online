@@ -5767,7 +5767,7 @@
     { id: 23, range: [1, 2], weight: 1.0 },
     { id: 1, range: [1, 2], weight: 1.0 },
     { id: 7, range: [1, 1], weight: 0.7, pill: true },
-    { id: 45, range: [1, 1], weight: 0.2 },
+    { id: 45, range: [1, 1], weight: 0.1 },
     { id: 2, range: [1, 1], weight: 0.3 },
     { id: 44, range: [1, 1], weight: 0.06, pill: true },
   ];

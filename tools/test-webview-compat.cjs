@@ -99,6 +99,19 @@ test('深色系统不压暗游戏：WebView 关掉自动深色，入口页只声
   assert.match(style, /color-scheme:\s*light/, '全局 CSS 要声明 color-scheme: light');
 });
 
+test('绿屏兜底链路：原生软件图层开关 + 纯绿取样 + 页面开关与重挂栅格入口', () => {
+  const activity = read('src-tauri/android/MainActivity.kt');
+  const mainJs = read('js/main.js');
+  const settingsJs = read('js/online-settings.js');
+  assert.match(activity, /fun setRenderMode\(mode: String\)[\s\S]{0,700}LAYER_TYPE_SOFTWARE/, '原生要能把 WebView 切到软件图层');
+  assert.match(activity, /fun probeScreen\(\)[\s\S]{0,1200}isPureGreen\(bitmap\)/, '原生要抽查画面是不是整块纯绿');
+  assert.match(activity, /setBackgroundColor\(Color\.BLACK\)/, 'WebView 底色必须是不透明黑，不能露出未初始化的合成层');
+  assert.match(mainJs, /function applyRenderCompat\(\)[\s\S]{0,300}setRenderMode/, '页面的「画面兼容」要落到原生');
+  assert.match(mainJs, /function setRenderCompat\(on\)[\s\S]{0,300}applyRenderCompat\(\)/, '切换开关后要立刻重落一次渲染模式');
+  assert.match(mainJs, /window\.__ssdzRepairSurface\s*=/, '页面要暴露重挂栅格的入口给原生');
+  assert.match(settingsJs, /render-compat/, '设置页要有「画面兼容」开关');
+});
+
 console.log('');
 if (failed) { console.log(`${passed} passed, ${failed} failed`); process.exit(1); }
 console.log(`全部通过：${passed}/${passed}`);

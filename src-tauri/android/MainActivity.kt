@@ -4,6 +4,9 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -11,6 +14,8 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.util.Log
+import android.view.PixelCopy
+import android.view.View
 import android.webkit.JavascriptInterface
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -33,6 +38,11 @@ import org.json.JSONObject
 class MainActivity : TauriActivity() {
     private var gameWebView: WebView? = null
     @Volatile private var backgroundRun = false
+    /* 画面兼容模式：个别 Android 16 + Adreno 机型（荣耀 MagicPad3 Pro / MagicOS 10 实测）
+     * 的 WebView 合成层会整块丢栅格，屏幕上只剩一块纯绿。硬件合成路径修不了，只能让 WebView
+     * 退回软件图层自己画；打开后所有绘制走 CPU，帧率会降，所以默认关闭、由设置页开关或
+     * 页面自己的修复流程按需打开。 */
+    @Volatile private var compatRender = false
     private val ui = Handler(Looper.getMainLooper())
     private var lifecycleSeq = 0
     private var frozen = false
@@ -59,6 +69,109 @@ class MainActivity : TauriActivity() {
 
     private fun failJson(msg: String): String =
         JSONObject().put("ok", false).put("msg", msg).toString()
+
+    /* 绿屏自愈：荣耀 MagicPad3 Pro（Android 16 / MagicOS 10）上 WebView 的合成层会整块丢栅格，
+     * 屏幕只剩一块纯绿 —— 那不是任何一个界面色（界面里最绿的草皮是 94,180,49），是那层没内容。
+     * 每 2 秒抓 WebView 中心 96×96 取色：连续两拍接近纯绿先让页面重挂栅格，还不恢复就切软件图层。
+     * 阈值要求红通道 ≈ 0，草绿/深绿页面不会误判。 */
+    private var greenStrikes = 0
+    private var lastSurfaceRepair = 0L
+    @Volatile private var screenProbeOn = false
+    private val screenProbe = object : Runnable {
+        override fun run() {
+            if (!screenProbeOn) return
+            try { probeScreen() } catch (_: Exception) {}
+            ui.postDelayed(this, 2000L)
+        }
+    }
+
+    private fun startScreenProbe() {
+        screenProbeOn = true
+        ui.removeCallbacks(screenProbe)
+        ui.postDelayed(screenProbe, 3000L)
+    }
+
+    private fun stopScreenProbe() {
+        screenProbeOn = false
+        ui.removeCallbacks(screenProbe)
+        greenStrikes = 0
+    }
+
+    private fun probeScreen() {
+        if (compatRender) return
+        val view = gameWebView ?: return
+        if (view.width <= 0 || view.height <= 0 || !view.isShown) return
+        val loc = IntArray(2)
+        view.getLocationInWindow(loc)
+        val size = 96
+        val left = (loc[0] + view.width / 2 - size / 2).coerceAtLeast(0)
+        val top = (loc[1] + view.height / 2 - size / 2).coerceAtLeast(0)
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        try {
+            PixelCopy.request(window, Rect(left, top, left + size, top + size), bitmap, { result ->
+                try {
+                    if (result == PixelCopy.SUCCESS && isPureGreen(bitmap)) onGreenFrame() else greenStrikes = 0
+                } finally {
+                    bitmap.recycle()
+                }
+            }, ui)
+        } catch (e: Exception) {
+            try { bitmap.recycle() } catch (_: Exception) {}
+        }
+    }
+
+    // 纯绿：红 ≈ 0、绿亮、蓝低于满值。游戏调色板里最绿的草皮是 (94,180,49)、页签 (130,201,72)，
+    // 红通道都远大于 40，不会误判。
+    private fun isPureGreen(bmp: Bitmap): Boolean {
+        var green = 0
+        for (y in 0 until bmp.height) {
+            for (x in 0 until bmp.width) {
+                val c = bmp.getPixel(x, y)
+                val r = (c shr 16) and 0xff
+                val g = (c shr 8) and 0xff
+                val b = c and 0xff
+                if (r < 40 && g > 130 && b < 212 && g - r > 90 && g - b > 25) green++
+            }
+        }
+        return green * 100 >= bmp.width * bmp.height * 92
+    }
+
+    private fun onGreenFrame() {
+        greenStrikes++
+        if (greenStrikes < 2) return
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - lastSurfaceRepair > 12000L) {
+            // 第一拍先便宜地修：整窗重画 + 页面重挂栅格，很多机型到这一步就回来了。
+            lastSurfaceRepair = now
+            gameWebView?.invalidate()
+            gameWebView?.requestLayout()
+            gameWebView?.evaluateJavascript(
+                "window.__ssdzRepairSurface && window.__ssdzRepairSurface()", null
+            )
+            return
+        }
+        if (!compatRender) {
+            greenStrikes = 0
+            enableCompatRender("screen still pure green")
+        }
+    }
+
+    private fun enableCompatRender(reason: String) {
+        if (compatRender) return
+        compatRender = true
+        try {
+            gameWebView?.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+            gameWebView?.invalidate()
+        } catch (e: Exception) {
+            Log.e("SSDZOnline", "compat render failed", e)
+        }
+        Log.w("SSDZOnline", "compat render enabled: $reason")
+        // 页面据此把设置页开关和提示同步到「开」，并弹一次说明。
+        gameWebView?.evaluateJavascript(
+            "window.__ssdzRenderCompatAuto && window.__ssdzRenderCompatAuto()", null
+        )
+    }
+
 
     // App/signing-key + Android user/device scoped on Android 8+, no dangerous
     // permissions. The JS side never receives the underlying ANDROID_ID.
@@ -184,6 +297,45 @@ class MainActivity : TauriActivity() {
 
         @JavascriptInterface
         fun abi(): String = Build.SUPPORTED_ABIS.joinToString(",")
+
+        /** 画面兼容模式开关：`compat` 让 WebView 走软件图层（整块丢栅格时的兜底），
+         *  `auto` 恢复默认硬件合成。返回值里带实际生效的模式，页面据此回写开关。 */
+        @JavascriptInterface
+        fun setRenderMode(mode: String): String {
+            val compat = mode.trim().equals("compat", ignoreCase = true)
+            compatRender = compat
+            ui.post {
+                try {
+                    gameWebView?.setLayerType(
+                        if (compat) View.LAYER_TYPE_SOFTWARE else View.LAYER_TYPE_NONE, null
+                    )
+                    gameWebView?.invalidate()
+                    gameWebView?.requestLayout()
+                } catch (e: Exception) {
+                    Log.e("SSDZOnline", "setRenderMode failed", e)
+                }
+            }
+            return JSONObject().put("ok", true)
+                .put("mode", if (compat) "compat" else "auto").toString()
+        }
+
+        @JavascriptInterface
+        fun renderMode(): String =
+            JSONObject().put("ok", true)
+                .put("mode", if (compatRender) "compat" else "auto").toString()
+
+        /** 强制整窗重画。页面切换 / 回前台 / 图形层可疑时由 JS 主动叫一次，
+         *  不走软件图层也常能把丢掉的那层栅格补回来。 */
+        @JavascriptInterface
+        fun redraw(): String {
+            ui.post {
+                try {
+                    gameWebView?.invalidate()
+                    gameWebView?.requestLayout()
+                } catch (_: Exception) {}
+            }
+            return "{\"ok\":true}"
+        }
 
         @JavascriptInterface
         fun apkUpdateStatus(): String = synchronized(apkLock) {
@@ -345,6 +497,10 @@ class MainActivity : TauriActivity() {
         super.onWebViewCreate(webView)
         gameWebView = webView
         webView.resumeTimers()
+        /* 底色必须是不透明黑：页面还没画到的地方宁可黑，也不要露出未初始化的合成层。
+         * 绿色不是本应用的任何颜色，出现纯绿就是这一层没内容。 */
+        webView.setBackgroundColor(Color.BLACK)
+        if (compatRender) webView.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
         /* 游戏只有浅色界面：系统深色模式下 WebView 的自动深色会把米色/金色压成暗褐/墨绿
          * （Android 13+ / WebView 133 实测）。这里显式关掉，不能只靠主题的 Light 父类。 */
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -361,6 +517,7 @@ class MainActivity : TauriActivity() {
 
     override fun onPause() {
         lifecycleSeq++
+        stopScreenProbe()
         gameWebView?.evaluateJavascript(
             "window.__ssdzEnterBackground && window.__ssdzEnterBackground();", null
         )
@@ -387,9 +544,12 @@ class MainActivity : TauriActivity() {
         super.onResume()
         lifecycleSeq++
         ui.removeCallbacks(relayoutRunnable)
+        startScreenProbe()
         gameWebView?.resumeTimers()
         gameWebView?.onResume()
         frozen = false
+        // 回前台先补一次整窗重画，再让页面自己重排；丢栅格的机型只靠 JS 重排补不回来。
+        gameWebView?.invalidate()
         gameWebView?.evaluateJavascript(
             "window.__ssdzRelayout && window.__ssdzRelayout();" +
                 "window.__ssdzEnterForeground && window.__ssdzEnterForeground();", null
@@ -408,6 +568,7 @@ class MainActivity : TauriActivity() {
 
     override fun onDestroy() {
         lifecycleSeq++
+        screenProbeOn = false
         ui.removeCallbacksAndMessages(null)
         // pauseTimers is process-wide: a replacement Activity must never inherit it.
         gameWebView?.resumeTimers()

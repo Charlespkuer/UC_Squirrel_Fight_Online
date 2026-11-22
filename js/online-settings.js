@@ -379,6 +379,8 @@
     const st = Main.settings(), account = Net.account() || {}, music = !Main.isMuted() && Main.volume() > 0;
     // 纯网页端才挂「下载客户端」；安装包内已有自己的更新通道（见 online-update.js）。
     const clientDownload = window.OnlineClientDownload && OnlineClientDownload.available() ? OnlineClientDownload : null;
+    // 画面兼容靠 Android 原生桥切软件图层；网页 / Windows 壳没有这条桥，不摆无效开关。
+    const renderBridge = window.SSDZAndroid && typeof window.SSDZAndroid.setRenderMode === 'function';
     const resolutions = State.RESOLUTIONS || [], ri = Math.max(0, resolutions.findIndex(r => r.key === st.resolution));
     const button = (label, action, value, on) => '<button type="button" class="uc-button gold' + (on ? ' on' : '') + '" data-online-setting="' + action + '">' +
       label + (value ? '<span class="btn-badge">' + esc(value) + '</span>' : '') + '</button>';
@@ -392,6 +394,7 @@
       button('全面屏', 'fullscreen', st.fullscreen ? '开' : '关', st.fullscreen) +
       button('状态栏', 'statusbar', st.hideStatusBar !== false ? '隐藏' : '显示', st.hideStatusBar !== false) +
       button('后台运行', 'background-run', st.backgroundRun === true ? '开' : '关', st.backgroundRun === true) +
+      (renderBridge ? button('画面兼容', 'render-compat', Main.isRenderCompat() ? '开' : '关', Main.isRenderCompat()) : '') +
       (clientDownload ? button('下载客户端', 'client-download', clientDownload.shortLabel()) : '') + '</div>' +
       '<section class="online-account-panel"><div class="online-account-heading"><h3 class="classic-section-title">联机账号</h3><b>' + esc(account.name || State.state().name) +
       '</b>' + (account.forumAdmin ? '<span class="online-forum-badge" title="论坛管理员">管理员</span>' : '') +
@@ -439,6 +442,12 @@
     bind('fullscreen', () => { Main.setFullscreen(!st.fullscreen); settingsPage(); });
     bind('statusbar', () => { Main.setHideStatusBar(st.hideStatusBar === false); settingsPage(); });
     bind('background-run', () => { Main.setBackgroundRun(st.backgroundRun !== true); settingsPage(); });
+    if (renderBridge) bind('render-compat', () => {
+      const on = !Main.isRenderCompat();
+      Main.setRenderCompat(on);
+      toast(on ? '已开启画面兼容：改用软件绘制，可修复整块绿屏' : '已关闭画面兼容');
+      settingsPage();
+    });
     if (clientDownload) {
       bind('client-download', async () => {
         const b = p.querySelector('[data-online-setting="client-download"]');

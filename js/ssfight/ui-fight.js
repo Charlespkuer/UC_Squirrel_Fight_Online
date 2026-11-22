@@ -308,11 +308,6 @@
       const glow = document.createElement('span'); glow.className = 'sf-gain-glow';
       const art = document.createElement('span'); art.className = 'sf-gain-art';
       bob.appendChild(glow); bob.appendChild(art);
-      for (let i = 1; i <= 8; i++) {
-        const spark = document.createElement('span');
-        spark.className = 'sf-gain-spark s' + i;
-        bob.appendChild(spark);
-      }
       pop.appendChild(bob); card.appendChild(pop); wrap.appendChild(card);
       host.appendChild(wrap);
       layer = wrap;

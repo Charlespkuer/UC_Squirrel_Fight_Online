@@ -865,6 +865,16 @@ ul.settle-calc li.total b { font-size: 22px; }
 .replace-pick.r2 { border-left: 7px solid #a77bd0; }
 .replace-pick.r3 { border-left: 7px solid #e0a72e; }
 
+/* 渴血之剑献祭窗里的武技祭品：同款整行按钮，换一条冷色边条与增益区分。 */
+.replace-pick.blade-skill-pick { border-left: 7px solid #7ec4b5; background: linear-gradient(#f7fbff, #eef5fb); }
+/* 献祭窗要同时装下增益和武技两排选项：允许比通用小弹窗高，避免选项落进滚动区。
+   `modal()` 返回的 element 是遮罩层，所以类名挂在 overlay 上；选择器要和
+   classic-refine.css 里 `small-modal{max-height:466px}` 同链同权重以上才压得过。 */
+.classic-page~.classic-modal-overlay.blade-sacrifice-modal>.classic-modal.small-modal { max-height: 672px; }
+.classic-page~.classic-modal-overlay.blade-sacrifice-modal>.classic-modal.small-modal>.modal-body { max-height: 500px; }
+/* 说明文字比正文小一档：三排祭品 + 两行说明在 393 高的横屏里也能塞进可视区。 */
+.blade-sacrifice-modal .modal-body>.small-label { margin: 4px 8px 2px; font-size: 20px; line-height: 1.32; }
+
 .milestone-reward img{width:64px;height:64px;object-fit:contain;vertical-align:-18px;margin-right:8px}
 
 .tower-story { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 4px; }

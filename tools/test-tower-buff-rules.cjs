@@ -203,12 +203,12 @@ test('20 层只有隐藏永久增益时跳过放弃阶段，不会反复重画',
     '空候选时界面必须先调用 skipEmptySacrifice 再重画');
 });
 
-test('限次列表把渴血之剑置顶，王者之剑使用传奇金色外观', () => {
+test('限次列表先按开关分组（关闭沉底），同组内剑系置顶，王者之剑用传奇金色外观', () => {
   const ui = fs.readFileSync(path.join(ROOT, 'js/tower-ui.js'), 'utf8').replace(/\r\n/g, '\n');
   const css = fs.readFileSync(path.join(ROOT, 'css/tower.css'), 'utf8').replace(/\r\n/g, '\n');
   assert.ok(/const isBladeBuff = \(b\) => !!\(b && TowerData\.isBladeId/.test(ui)
-    && /sort\(\(a, b\) => Number\(isBladeBuff\(b\)\) - Number\(isBladeBuff\(a\)\)\)/.test(ui),
-    '限次增益列表要按 isBladeId 把剑及其变体排在最前');
+    && /const offA = a\.on === false \? 1 : 0;[\s\S]{0,120}?if \(offA !== offB\) return offA - offB;[\s\S]{0,160}?return Number\(isBladeBuff\(b\)\) - Number\(isBladeBuff\(a\)\);/.test(ui),
+    '限次增益列表要「已关闭的排到底部、同组内剑及其变体排在最前」');
   assert.ok(/b\.id === TowerData\.BLADE\.finalId/.test(ui)
     && /limit-tag r' \+ b\.rarity \+\s*\n\s*\(king \? ' legendary' : ''\)/.test(ui),
     'HB04 王者之剑要加 legendary 卡面类');

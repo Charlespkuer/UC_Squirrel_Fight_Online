@@ -912,8 +912,15 @@
     const perm = orderPermanent(list.filter((b) => b.kind === 'permanent'));
 
     const isBladeBuff = (b) => !!(b && TowerData.isBladeId && TowerData.isBladeId(b.id));
+    // 限次增益排布：关闭的沉到最底部、打开的全部在上；同组内剑系（渴血之剑）置顶。
+    // 数组顺序就是 `.buff-tags` 的排布顺序，所以关掉一条后下一次重画它自己就落到下面。
     const lim = list.filter((b) => b.kind === 'limited')
-      .sort((a, b) => Number(isBladeBuff(b)) - Number(isBladeBuff(a)));
+      .sort((a, b) => {
+        const offA = a.on === false ? 1 : 0;
+        const offB = b.on === false ? 1 : 0;
+        if (offA !== offB) return offA - offB;
+        return Number(isBladeBuff(b)) - Number(isBladeBuff(a));
+      });
     const cap = Number(run.permCap) || ((TowerData.PERMANENT_SLOTS || 5) + Math.max(0, Number(run.permSlots || 0)));   // 槽位上限含扩容类加成
     const permHtml = perm.length
       ? perm.map((b, i) => {
@@ -3581,6 +3588,17 @@
     bladeOfferEl = null;
   }
 
+  // 挨饿：剑吞掉 1 次使用次数（没有祭品或玩家选择不给时的老口径）。
+  function bladeStarveToast(r, info) {
+    const name = (r && r.name) || (info && info.name) || '渴血之剑';
+    const msg = r && r.ok
+      ? ('没有献祭：' + name + ' 吞噬 ' + Math.max(1, Number(r.consumed) || 1) + ' 次使用次数' +
+        (r.evolved ? ('，进化为「' + r.evolved.name + '」')
+          : (r.uses > 0 ? ('（剩余 ' + r.uses + ' 场）') : '')) + '。')
+      : ((r && r.msg) || '献祭失败。');
+    notice(msg, [{ label: '继续', cls: 'gold', run: openEndless }]);
+  }
+
   function openBladeSacrifice() {
     if (bladeOfferVisible()) return;
     // 先占坑再建弹层：`modal()` 挂到 #ui 之后，若是重画触发的第二轮 openEndless
@@ -3588,17 +3606,12 @@
     const got = Tower.bladeSacrificeCandidates();
     const list = (got && got.list) || [];
     const info = (got && got.blade) || (Tower.bladeInfoOf ? Tower.bladeInfoOf() : null) || {};
-    if (!list.length) {
-      const r = Tower.sacrificeBlade(null);
+    // 献祭武技：10 级以上、且不是最后一招；只在这里当「额外选项」。
+    const skills = (got && got.skills) || [];
+    if (!list.length && !skills.length) {
+      bladeStarveToast(Tower.sacrificeBlade(null), info);
       bladeOfferOpen = false;
       bladeOfferEl = null;
-      const msg = r && r.ok
-        ? ('没有可献祭的增益：' + (r.name || info.name || '渴血之剑') + ' 自动吞噬 ' +
-          Math.max(1, Number(r.consumed) || 1) + ' 次使用次数' +
-          (r.evolved ? ('，进化为「' + r.evolved.name + '」')
-            : (r.uses > 0 ? ('（剩余 ' + r.uses + ' 场）') : '')) + '。')
-        : ((r && r.msg) || '献祭失败。');
-      notice(msg, [{ label: '继续', cls: 'gold', run: openEndless }]);
       return;
     }
     const rows = list.map((c, i) => {
@@ -3611,16 +3624,40 @@
         (c.inscription ? '<span class="rp-desc">优先消耗铭文，增益本身保留</span>' : '') +
         '</button>';
     }).join('');
+    // 武技行与增益行同列：一块列表比两个分区省高度，也不会把某一类选项整块推到视区外。
+    const skillRows = skills.map((c, i) =>
+      '<button type="button" class="replace-pick blade-skill-pick" data-action="bs' + i + '"' +
+      ' title="' + esc(c.name + '：' + (c.meta || '')) + '">' +
+      '<span class="rp-name">' + esc(c.name) + '</span>' +
+      '<span class="rp-meta">' + esc(c.meta || '') + '</span>' +
+      '<span class="rp-desc">献祭武技：这一招从本局消失，且永远不会再被领悟</span>' +
+      '</button>').join('');
+    const offers = rows + skillRows;
+    const runHero = ((Tower.endlessInfo() || {}).run || {}).hero;
+    const bannedNames = (got && got.heroMode && runHero && window.TowerHero && TowerHero.bannedSkills
+      ? TowerHero.bannedSkills(runHero) : [])
+      .map((id) => { try { const inst = State.skillInst ? State.skillInst(Number(id)) : null; return inst && inst.name; } catch (e) { return null; } })
+      .filter(Boolean);
+    const tips = ['当前成长 ×' + Math.max(1, Number(info.stacks) || 1) + ' 层 · 剩余 ' +
+      (info.unlimited ? '永续' : (info.uses + ' 场')) + '。'];
+    if (list.length) tips.push('叠层只吃一件；带铭文的永久增益先吃铭文。');
+    if (skills.length) tips.push('武技献祭后本局永久移除。');
+    if (!list.length) tips.push('不想给就让它挨饿（吞 1 次使用次数）。');
+    if (bannedNames.length) tips.push('已献祭：' + bannedNames.join('、') + '。');
     const m = modal('渴血之剑 · 献祭',
       '<div class="result-box"><div class="result-title lose">它饿了</div>' +
-      '<p>战斗结束，剑脊上的暗红仍未褪去。它要一件祭品 —— ' +
-      '一件<b>史诗及以上的限次增益</b>，或一件<b>永久增益</b>。</p>' +
-      '<p class="gold-text">当前成长：×' + Math.max(1, Number(info.stacks) || 1) +
-      ' 层 · 剩余 ' + (info.unlimited ? '永续' : (info.uses + ' 场')) + '</p></div>' +
-      '<div class="replace-pick-list">' + rows + '</div>' +
-      '<p class="small-label">可叠加的只消耗一件；永久增益若带铭文，优先消耗水晶铭文，其次虚空铭文，增益本身不会消失。</p>',
-      [], { small: true, locked: true });
+      '<p>剑脊上的暗红仍未褪去，它要一件祭品。</p></div>' +
+      '<div class="replace-pick-list">' + offers + '</div>' +
+      '<p class="small-label">' + esc(tips.join(' ')) + '</p>',
+      (!list.length ? [{ label: '让它挨饿', cls: 'muted', run: () => {
+        const r = Tower.sacrificeBlade(null);
+        m.close();
+        closeBladeOffer();
+        bladeStarveToast(r, info);
+      } }] : []), { small: true, locked: true });
     if (m && m.element) {
+      // 这个弹窗要同时装下增益 + 武技两排选项：给足高度，别让选项落在滚动区外面。
+      m.element.classList.add('blade-sacrifice-modal');
       const actions = {};
       list.forEach((c, i) => {
         actions['bl' + i] = () => {
@@ -3631,6 +3668,17 @@
           notice('【' + c.name + '】已献祭 · 渴血之剑成长至 ×' + r.stacks + ' 层' +
             (r.used && r.used.partial ? '（消耗 ' + r.used.consumed + ' 场，剩余 ' + r.used.uses + ' 场）' : '') +
             (r.used && r.used.kind === 'inscription' ? '（铭文被吞掉，增益保留）' : '') + '。',
+            [{ label: '继续', cls: 'gold', run: openEndless }]);
+        };
+      });
+      skills.forEach((c, i) => {
+        actions['bs' + i] = () => {
+          const r = Tower.sacrificeBlade(c.ref);
+          if (!r.ok) { notice(r.msg || '献祭失败。'); return; }
+          m.close();
+          closeBladeOffer();
+          notice('武技【' + c.name + '】已献祭 · 渴血之剑成长至 ×' + r.stacks + ' 层' +
+            '。这一招已从本局移除，不会再被领悟。',
             [{ label: '继续', cls: 'gold', run: openEndless }]);
         };
       });

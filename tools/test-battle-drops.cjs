@@ -195,12 +195,12 @@ test('天梯战用专属掉落表：飘出来的是属性碎片与恶魔果实�
   assert.equal(g.c.BattleDrops.poolFor('rank').some(p=>p.id===46),true,'天梯也掉恶魔果实种子');
 });
 
-test('天使/恶魔果实种子权重 ×3：普通池 1→3 / 0.5→1.5，天梯池 5→15',()=>{
+test('天使/恶魔果实种子权重减半：普通池 3→1.5 / 1.5→0.75，天梯池 15→7.5',()=>{
   const g=setup();
-  assert.equal(g.c.BattleDrops.pool.find(p=>p.id===45).weight,3,'普通战斗天使果实种子 1 → 3');
-  assert.equal(g.c.BattleDrops.pool.find(p=>p.id===46).weight,1.5,'普通战斗恶魔果实种子 0.5 → 1.5');
-  assert.equal(g.c.BattleDrops.ladderPool.find(p=>p.id===46).weight,15,'天梯赛恶魔果实种子 5 → 15');
-  assert.equal(g.c.BattleDrops.ladderPool.some(p=>p.id===45),false,'天梯池原本没有天使果实种子，本次不新增');
+  assert.equal(g.c.BattleDrops.pool.find(p=>p.id===45).weight,1.5,'普通战斗天使果实种子 3 → 1.5');
+  assert.equal(g.c.BattleDrops.pool.find(p=>p.id===46).weight,0.75,'普通战斗恶魔果实种子 1.5 → 0.75');
+  assert.equal(g.c.BattleDrops.ladderPool.find(p=>p.id===46).weight,7.5,'天梯赛恶魔果实种子 15 → 7.5');
+  assert.equal(g.c.BattleDrops.ladderPool.some(p=>p.id===45),false,'天梯池没有天使果实种子');
 });
 
 test('10 个属性碎片 + 50 金松果随机合成一个转化丸',()=>{

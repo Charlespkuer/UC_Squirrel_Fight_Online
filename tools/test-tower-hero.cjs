@@ -351,6 +351,52 @@ test('勇者新规则：开局无 60 币、习得 5 级、铸币修炼 +3~5、�
   assert.equal(run.layer, 101);
 });
 
+test('渴血之剑可以献祭 10 级以上武技：本局移除并永久拉黑', () => {
+  const { c } = setup();
+  const T = c.Tower, H = c.TowerHero;
+  const run = start(c);
+  assert.equal(T.debugGrantBuff('HB01').ok, true, '先拿到渴血之剑');
+  assert.equal(T.debugGrantBuff('C57').ok, true, '再准备一件普通祭品，保证献祭窗会打开');
+  /* 7 号练到真2（12 级），9 号仍是 5 级 —— 只有 10 级以上的才进候选。 */
+  run.hero.skills = run.hero.skills.map((s) => (s.startsWith('7:') ? '7:12' : s));
+  run.bladeSacrificePending = true;
+  const got = T.bladeSacrificeCandidates();
+  assert.ok(got.list.some((it) => it.id === 'C57'), '增益候选照旧');
+  const skill = (got.skills || []).find((it) => it.id === 7);
+  assert.ok(skill, '10 级以上武技要进献祭候选：' + JSON.stringify(got.skills));
+  assert.ok(!(got.skills || []).some((it) => it.id === 9), '5 级武技不能献祭');
+  const sac = T.sacrificeBlade(skill.ref);
+  assert.equal(sac.ok, true, sac.msg);
+  assert.ok(!run.hero.skills.some((s) => s.startsWith('7:')), '武技要从勇者身上移除');
+  assert.equal(H.isBannedSkill(run.hero, 7), true, '本局永久拉黑');
+  assert.equal(run.limited.find((it) => it.id === 'HB01').stacks, 2, '剑照常成长一层');
+  assert.ok(!H.learnPool(run.hero).some((it) => it.kind === 'skill' && it.id === 7), '可学习池不再包含它');
+  assert.equal(H.learn(run.hero, { learnRef: 's:7' }).ok, false, '不能再点名领悟');
+  assert.equal(H.replace(run.hero, 's:9', { learnRef: 's:7' }).ok, false, '换招也不能把它换回来');
+  assert.ok(H.normalize(plain(run.hero)).bannedSkills.includes(7), '存读档后拉黑名单还在');
+  /* 只剩武技可献祭时，剑也会讨食（以前直接自动挨饿）；玩家可以选「让它挨饿」走老路。 */
+  run.limited = run.limited.filter((it) => it.id === 'HB01');
+  run.hero.weapons = ['1:5'];
+  run.hero.skills = ['9:12'];
+  run.plan = [{ kind: 'hero', anim: 'tl' }]; run.idx = 0; run.choices = null; run.phase = null;
+  delete run.attempt; run.finished = null;
+  const nx = T.nextBattle('endless');
+  assert.equal(nx.ok, true, nx.msg);
+  const won = T.reportBattle('endless', nx.token, true, 800, 800);
+  assert.equal(won.ok, true, won.msg);
+  assert.equal(run.bladeSacrificePending, true, '只有武技可喂时也要挂献祭标记');
+  const onlySkill = T.bladeSacrificeCandidates();
+  assert.equal(onlySkill.list.length, 0, '没有增益祭品');
+  assert.ok(onlySkill.skills.some((it) => it.id === 9), '9 号武技可献祭');
+  const starved = T.sacrificeBlade(null);
+  assert.equal(starved.ok, true, starved.msg);
+  assert.equal(starved.starved, true, '选择不给 → 走挨饿');
+  /* 最后一招不能献祭：normalize 会把 0 件武技的勇者判成无效档。 */
+  run.hero.weapons = [];
+  run.hero.skills = ['9:12'];
+  assert.equal(H.forgetSkill(run.hero, 9).ok, false, '至少要留下一件武器或武技');
+});
+
 test('血牙·狂噬带装死技能（濒死保留 1 点生命）', () => {
   const { c } = setup();
   const def = c.TowerData.TRIAL_BY_ID.bloodfang;

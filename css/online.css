@@ -140,6 +140,10 @@
 @media (max-height: 520px) { .online-login { align-items: flex-start; } .online-login-card { margin: auto 0; padding: 10px 18px 8px; } .online-login-title { font-size: 18px; } .online-login-sub { margin-bottom: 4px; font-size: 11px; } .online-login-card label { margin-top: 6px; font-size: 12px; } .online-login-card input { min-height: 36px; padding: 6px 8px; font-size: 14px; } .online-login-note { min-height: 14px; margin-top: 4px; font-size: 11px; } .online-login-hint { min-height: 12px; margin-top: 2px; font-size: 10px; } .online-login-actions { margin-top: 6px; } .online-btn { min-height: 36px; padding: 6px 8px; font-size: 13px; } .online-login-foot { margin-top: 6px; font-size: 10px; } .online-login-card .online-recover-link { display: inline-block; margin: 4px 10px 0 0; padding: 2px; font-size: 10px; } }
 
 .online-settings-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+/* 系统页那一格还同时命中 `.settings-grid.system-grid{repeat(4,1fr)}`：1fr 的下限是按钮内容的
+   最小宽（「分辨率 自动」带徽章 ~300px），四列合计会撑出板外、最右一列被裁。这里用更高权重
+   改成等宽三列，三个按钮的固有宽都能放下。 */
+.settings-grid.system-grid.online-settings-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .online-account-panel { margin-top: 22px; padding-top: 14px; border-top: 2px solid #ceb47b; }
 .online-account-panel p { margin: 8px 0 12px; }
 p.online-update-hint {
