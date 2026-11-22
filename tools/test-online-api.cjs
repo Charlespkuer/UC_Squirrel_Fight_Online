@@ -16,6 +16,7 @@ process.env.OWNER_IPS = '127.0.0.1,::1'; // 本机请求应被识别为服务器
 process.env.OWNER_IP_ONLY = 'true'; // 本套件用普通 QA 设备验主人 IP；创作设备门槛在 test-online-creator 里验。
 process.env.FIGHT_INTERVAL_MS = '0'; // 套件连续打很多场；连点器闸门在单独用例里临时打开。
 process.env.ACTION_INTERVAL_MS = '0'; // 套件连续领奖/升级；动作连点闸门在单独用例里临时打开。
+process.env.OPPONENTS_RATE_PER_MIN = '240'; // 最后一项会连续拉 60 次候选找真人快照，放宽以免撞上限。
 
 const { start } = require('../server/index.js');
 const db = require('../server/db');

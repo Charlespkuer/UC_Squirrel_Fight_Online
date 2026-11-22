@@ -158,6 +158,9 @@ const config = {
   // 与 240 次/分叠加（只算真正执行成功的动作，失败请求不占间隔，见 http.pace）。
   actionIntervalMs: int(process.env.ACTION_INTERVAL_MS, 80, 0, 60000),
   fightRatePerMin: int(process.env.FIGHT_RATE_PER_MIN, 60, 1, 10000),
+  // 同一账号每分钟拉取对手候选的上限：客户端「换一批」远低于这个值；
+  // 测试套件会用连续拉取找真人快照，可用环境变量放宽。
+  opponentsRatePerMin: int(process.env.OPPONENTS_RATE_PER_MIN, 60, 1, 100000),
   // 同一账号两次开战的最小间隔：连点器/脚本不能把战斗入口当连发按钮。
   // 正常客户端一场战斗的播放远长于这个值；同一 idemKey 的断线重试不拦（见 http.pace）。
   fightIntervalMs: int(process.env.FIGHT_INTERVAL_MS, 2000, 0, 600000),

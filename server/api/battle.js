@@ -95,7 +95,7 @@ module.exports = {
     const q = ctx.query;
     const kind = String(q.kind || 'rank');
     if (kind !== 'random' && kind !== 'rank') throw fail('BAD_REQUEST', '未知的对手用途');
-    rateLimit('opponents:' + accountId, 60, 60 * 1000);
+    rateLimit('opponents:' + accountId, config.opponentsRatePerMin, 60 * 1000);
     const week = settlement.weekKey();
     const myScore = settlement.ratingOf(accountId, week);
     const save = store.peek(accountId);
