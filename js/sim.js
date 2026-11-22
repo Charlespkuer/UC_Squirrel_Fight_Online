@@ -41,6 +41,9 @@
     dodgeCap: 55,
     // 暴击率最终上限（百分点，隐藏规则）：溢出的暴击率按 1:1 加进暴击伤害。
     critCap: 70,
+    // 平减防御后至少保留原始伤害的比例：低等级双方 power/agility 接近时，
+    // 徒手/低倍率技能会被「敏捷×1.5」整段吃掉，只剩 dmgReduce 的 1 点保底。
+    defenseFloor: 0.25,
   });
 
   const ACTIVE_SKILLS = [8, 12, 14, 15, 17, 18, 23];
@@ -793,7 +796,11 @@
       // 说明暴击乘的是「扣防后的伤害」。吸铁大法（18）实测不扣防，走 pierceDefense。
       // NPC 的攻击不吃平减防御：抓包里 3 星熊猫（力 45）对路飞（防 66）只打 7，
       // 若同口径扣防会恒为 1，与抓包和关卡难度都不符。
-      if (!opts.pierceDefense && !att.npcType) rawDmg = Math.max(0, Math.round(rawDmg - effDefense(def)));
+      if (!opts.pierceDefense && !att.npcType) {
+        const afterArmor = Math.round(rawDmg - effDefense(def));
+        const floor = rawDmg > 0 ? Math.max(1, Math.round(rawDmg * RULES.defenseFloor)) : 0;
+        rawDmg = Math.max(floor, afterArmor);
+      }
       if (opts.critMul) rawDmg = Math.round(rawDmg * opts.critMul);
 
       if (att.heroTrueBase && action === 'skill' && !HERO_TRUE_BASE_SKIP_SKILLS.has(Number(r.id))) {
