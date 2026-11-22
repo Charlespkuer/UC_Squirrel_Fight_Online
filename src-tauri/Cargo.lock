@@ -3143,7 +3143,7 @@ dependencies = [
 
 [[package]]
 name = "ssdz-online"
-version = "1.0.83"
+version = "1.0.84"
 dependencies = [
  "serde",
  "serde_json",

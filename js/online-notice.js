@@ -73,6 +73,10 @@
   // · 客户端更新后第一次打开游戏：本地版本号比上次记录的新、且这里存在更新的条目 →
   const releases = [
     {
+      version: '1.0.84', date: '2026-11-23',
+      notes: '热修：更新公告标题的版本号与日期改为跟随当前客户端 / 网页构建和最新条目，不再固定显示 1.0.81 / 11-22。其余内容与 1.0.83 相同。',
+    },
+    {
       version: '1.0.83', date: '2026-11-23',
       notes: '无尽塔勇者：渴血之剑现在可以吞 10 级以上的武技（这一招本局永久移除、不会再被领悟），献祭窗把增益与武技排在一起；限次增益按开关分组，已关闭的沉到最下面。战斗漂浮奖励卡去掉环绕粒子。天使 / 恶魔果实种子掉落权重减半。安卓整块绿屏自愈：原生每 2 秒取色，连续纯绿先重挂栅格、仍不恢复就自动切软件图层；设置页新增「画面兼容」开关（仅安卓客户端显示）。系统页改为三列，最右按钮不再被裁。空手伤害改为虚拟拳套白值 (3+0.55×等级)×(1+力量/120)。Windows / Android / iOS 与网页端统一到 1.0.83。',
     },
@@ -202,10 +206,18 @@
     },
   ];
 
+  const newest = releases[0] || {};
+  // 网页端没有 `__SSDZ_VERSION`，只有服务端注入的 `<版本>-<构建号>`；两处都取不到才退回最新条目。
+  function noticeVersion() {
+    const raw = window.__SSDZ_VERSION || window.__SSDZ_WEB_VERSION__ || '';
+    const clean = String(raw).replace(/^v/i, '').split('-')[0];
+    return clean || String(newest.version || '');
+  }
+
   window.OnlineNotice = Object.freeze({
     title: '系统公告',
-    version: window.__SSDZ_VERSION || '1.0.81',
-    updatedAt: '2026-11-22',
+    version: noticeVersion(),
+    updatedAt: String(newest.date || ''),
     pages,
     releases,
   });
