@@ -470,9 +470,10 @@ async function main() {
         db.run('UPDATE combats SET winner = 0, settlement = ? WHERE id = ?', JSON.stringify(saved), rank.combatId);
         store.runOnSave(victimId, ({ save }) => {
           save.goldPoint = 1000; save.goldCup = 100;
-          /* 让被抢方稳定赢下复仇，便于核对金杯公式；正常对局不需要这段。 */
-          save.power = 600; save.agility = 1; save.speed = 1;
-          save.maxHp = 5; save.hp = 5;
+          /* 让被抢方稳定赢下复仇，便于核对金杯公式；正常对局不需要这段。
+           * 先手 + 100 血：徒手至少 7 点，5 点血会被对手一击带走（谁先手看随机）。 */
+          save.power = 600; save.agility = 1; save.speed = 100;
+          save.maxHp = 100; save.hp = 100;
         }, { snapshotSource: 'test-revenge' });
         store.runOnSave(foeId, ({ save }) => {
           save.goldPoint = 1000; save.goldCup = 100;
@@ -1533,6 +1534,8 @@ async function main() {
   }
 
   /* 汇总 */
+  const failed = results.filter((r) => !r.pass).map((r) => r.name);
+  if (failed.length) console.log('FAILED: ' + failed.join(' | '));
   const pass = results.filter((r) => r.pass).length;
   console.log('\n' + pass + '/' + results.length + ' passed');
   cleanup();
