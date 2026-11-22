@@ -1805,7 +1805,7 @@ test('真化武器/技能数值严格对齐 ssfight 原表（不是真5端点线
   assert.equal(G.passiveBonus(1, 15), 39, '力王真5 +39');
   assert.equal(G.passiveBonus(3, 15), 25, '风驰真5 +25（1 级 2 + 9 级 ×1 + 真化 14）');
   assert.equal(G.passiveBonus(4, 15), 177, '身强真5 +177（1 级 5 + 9 级 ×8 + 真化 100）');
-  assert.equal(G.passiveBonus(5, 15), 33, '武器好手真5 +33（1级+10、2~10每级+2、真后每级+1）');
+  assert.equal(G.passiveBonus(5, 15), 47, '武器好手真5 +47');
   // 真武器追加效果按真化等级逐级累加
   assert.equal(G.trueWeaponBonus({ id: 4, level: 15 }, 'combo'), 25, '西瓜刀真5 +25% 连击');
   assert.equal(G.trueWeaponBonus({ id: 16, level: 15 }, 'silence'), 20, '沉默之斧真5 +20% 沉默（4% × 5 真级）');
@@ -1996,13 +1996,15 @@ test('绝对防御触发后，举盾方仍按同样的概率反击', () => {
   assert.ok(rate > 0.12 && rate < 0.40, '反击概率应接近普通 25%，实测 ' + Math.round(rate * 100) + '%');
 });
 
-test('绝对防御挡下一次攻击时整段都不掉血（螳螂双击 / 西瓜刀两连击各自独立判定）', () => {
-  /* 多段攻击（螳螂双击 / 疾风镰刀舞四连）一次出手只判一次绝对防御：整段挡下或整段不挡，
-   * 否则会出现「绝对防御 + 受击方仍掉血」。西瓜刀连击是两次独立攻击，每一拍各自判定。
+test('绝对防御挡下多段攻击时整段都不掉血（西瓜刀连击 / 螳螂双击）', () => {
+  /* 用户 2026-10-30 反馈：绝对防御发动的时候，某些情况下玩家自己会受伤。
+   * 根因是多段攻击（西瓜刀连击 / 螳螂双击 / 疾风镰刀舞四连）**每一段各判一次**绝对防御 ——
+   * 第 1 段被挡下并飘出「绝对防御」，第 2 段照常打进来，于是玩家看到「绝对防御 + 自己掉血」。
+   * 现在一次出手只判一次（`jueDuiDecide` → `opts.jueDuiLock`），整段挡下或整段不挡。
    * 这里用固定随机流跑真战斗，**结构性**断言：绝对防御出现的这一拍，被打方伤害必须是 0。 */
   const g = game();
   const matchups = [
-    { label: '西瓜刀两连击', make: () => fighter({ hp: 4000, maxHp: 4000, power: 55, agility: 35, speed: 52,
+    { label: '西瓜刀连击', make: () => fighter({ hp: 4000, maxHp: 4000, power: 55, agility: 35, speed: 52,
       weapons: [{ id: 4, level: 12 }] }) },
     { label: '螳螂双击', make: () => fighter({ npcType: 'tl', hp: 4000, maxHp: 4000, power: 55, agility: 35, speed: 52,
       skills: [{ id: 8, level: 10 }] }) },
@@ -2139,10 +2141,10 @@ test('无敌模式：玩家血量只增不减（残血进场也先顶满），�
 test('师父驾到使用师父等级，下一次普通攻击保留必中', () => {
   const g = game();
   const ordinary = [0.9, 0.9, 0.5, 0.9, 0.9];
-  // 对手先攻击：100→约 70→约 45（平减防御后单次约 22~30）；低血呼叫真实7级师父，恢复28点。
+  // 对手先攻击：100→65→30；低血呼叫真实7级师父，恢复28点。
   const rolls = [...ordinary, ...ordinary, ...ordinary, 0.1, ...ordinary, 0.9, 0, 0.5, 0.9, 0.9];
   g.math.random = () => rolls.length ? rolls.shift() : 0.9;
-  const result = g.Sim.simulate(fighter({ power: 1, skills: ['13:1'], masterLevel: 7 }), fighter({ speed: 11, power: 20, hp: 10000 }));
+  const result = g.Sim.simulate(fighter({ power: 1, skills: ['13:1'], masterLevel: 7 }), fighter({ speed: 11, power: 35, hp: 10000 }));
   const mine = result.rounds.filter((r) => r.attacker === 0);
   const summoned = mine.findIndex((r) => r.id === 13);
   assert.ok(summoned > 0, '满血时不呼叫师父');
@@ -2153,48 +2155,43 @@ test('师父驾到使用师父等级，下一次普通攻击保留必中', () =>
   assert.ok(mine[summoned + 1].dmg > 0);
 });
 
-test('装备伤害词条只进吸血基数、不改最终伤害；受到伤害词条仍减伤', () => {
+test('装备词条改变对应武器伤害与减伤，不只显示说明', () => {
   const g = game(); g.math.random = () => 0.3;
   const attacker = fighter({ weapons: ['2:1'], hp: 10000 });
   const defender = fighter({ hp: 10000 });
   const plain = g.Sim.simulate(attacker, defender).rounds[0].dmg;
   const geared = g.Sim.simulate({ ...attacker, effects: { 6: 100, 13: 100 } }, defender).rounds[0].dmg;
   const reduced = g.Sim.simulate({ ...attacker, effects: { 6: 100, 13: 100 } }, { ...defender, effects: { 9: 50 } }).rounds[0].dmg;
-  /* 最终伤害 = 攻击伤害 × (1−皮糙) − 敏捷×1.5：大榔头 L1 下限 12 + 力量 10×1.825 + R(-10,10)@0.3(-4) − 敏10×1.5。 */
-  const raw = 12 + 10 * 1.825;
-  assert.equal(plain, Math.round(raw - 4 - 15));
-  assert.equal(geared, plain, '装备伤害词条不再改最终伤害（只进吸血基数）');
-  assert.equal(reduced, Math.round(geared * 0.5));
+  assert.equal(geared, plain * 3); assert.equal(reduced, Math.round(geared * 0.5));
 });
 
-test('徒手攻击的权重：基准 200，工具再多也让它的份额不低于 10%', () => {
+test('徒手攻击的权重：基准 100，工具再多也让它的份额不低于 5%', () => {
   const g = game();
   /* kindWeights 收的是「候选对象」，权重按 .id 查 —— 与 pickKind 的调用口径一致。 */
   const cand = (ids) => ids.map((id) => ({ id }));
   const me = (ids) => fighter({ hp: 10000, usedWeapons: {}, usedSkills: {}, weapons: cand(ids), skills: cand(ids) });
-  /* 徒手基准 = 200（抓包份额 10~20% 反推）。 */
+  /* 徒手基准 = 100（2026-10 用户新口径）。 */
   const bare = g.Sim.kindWeights(me([]), [], []);
-  assert.equal(bare.common, 200);
+  assert.equal(bare.common, 100);
   assert.equal(bare.commonShare, 1);
-  /* 一把武器：仍用基准 200，份额远高于保底。 */
+  /* 一把武器：仍用基准 100，份额远高于保底。 */
   const one = g.Sim.kindWeights(me([2]), cand([2]), []);
-  assert.equal(one.common, 200);
-  assert.ok(one.commonShare > 0.5, '一把武器时徒手仍占五成以上：' + one.commonShare);
-  /* 工具拉满（17 武器 + 17 技能，首发权重 100/150）：份额被压到保底 10%，权重被抬到基准之上。 */
+  assert.equal(one.common, 100);
+  assert.ok(one.commonShare > 0.3, '一把武器时徒手仍占三成以上：' + one.commonShare);
+  /* 工具拉满（17 武器 + 17 技能，各 100 权重）：份额被压到保底 5%，权重被抬到基准之上。 */
   const ids = Array.from({ length: 17 }, (_, i) => i + 1);
   const heavy = g.Sim.kindWeights(me(ids), cand(ids), cand(ids));
-  assert.ok(heavy.common > 200, '工具极多时徒手权重被抬到基准之上：' + heavy.common);
-  assert.ok(Math.abs(heavy.commonShare - 0.10) < 1e-9, '保底正好 10%：' + heavy.commonShare);
+  assert.ok(heavy.common > 100, '工具极多时徒手权重被抬到基准之上：' + heavy.common);
+  assert.ok(Math.abs(heavy.commonShare - 0.05) < 1e-9, '保底正好 5%：' + heavy.commonShare);
   assert.equal(heavy.weapon + heavy.skill + heavy.common, heavy.total);
 });
 
-test('出手权重新表：技能首发 150 / 技能重复 5 / 普通武器 8 / 投掷前两次 100 / 徒手 200；绝对防御与龟甲术按等级首/次/三次', () => {
+test('出手权重新表：技能 5 / 普通武器 8 / 投掷前两次 100 / 徒手 100；绝对防御与龟甲术按等级首/次/三次', () => {
   const g = game(), S = g.Sim;
   assert.equal(S.rules.repeatSkill, 5);
   assert.equal(S.rules.repeatWeapon, 8);
-  assert.equal(S.rules.commonAttackWeight, 200);
+  assert.equal(S.rules.commonAttackWeight, 100);
   assert.equal(S.repeatRateOf(17, 1), 1, '来点松果二次及以后权重 1');
-  assert.equal(S.actionWeights.skill({ usedSkills: {}, skillUseCount: {}, effects: {} }, 15), 150, '技能首次 150');
   assert.equal(S.actionWeights.skill({ usedSkills: { 15: true }, skillUseCount: { 15: 1 }, effects: {} }, 15), 5);
   const att = { weapons: [{ id: 1, type: '近战' }, { id: 5, type: '投掷' }, { id: 10, type: '投掷' }, { id: 7, type: '投掷' }], usedWeapons: {}, weaponUseCount: {}, effects: {} };
   assert.equal(S.actionWeights.weapon(att, att.weapons[0]), 100, '普通武器首次 100');

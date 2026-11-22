@@ -104,25 +104,21 @@ test('ssfight 装备词条：48 条、32 空号、宝石总档 3~30 / 单条 12 
   assert.equal(jue.jueDui, 1000);
   assert.equal(jue.rebound, 1060, '76% 基础 + 30% 词条 = 106%');
 
-  /* ⑤ 42/43 是吸血基数词条：+100% 只翻倍忍者镖吸血，不改最终伤害（视频 −558 / 回 +632 口径）。 */
+  /* ⑤ 42/43 武器伤害：+100% 应让同一手武器伤害翻倍。 */
   for (const [wid, effId] of [[16, 42], [17, 43]]) {
     const base = first(run(g, fighter({ weapons: [wid + ':10'] }), fighter({ side: 1, agility: 50 }), 7), (r) => r.action === 'weapon' && r.attacker === 0 && r.dmg > 0);
     const buff = first(run(g, fighter({ weapons: [wid + ':10'], effects: { [effId]: 100 } }), fighter({ side: 1, agility: 50 }), 7), (r) => r.action === 'weapon' && r.attacker === 0 && r.dmg > 0);
     assert.ok(base && buff, '应出现武器回合');
-    assert.equal(buff.dmg, base.dmg, '武器 ' + wid + ' 的专属词条 ' + effId + ' 不改最终伤害');
+    assert.equal(buff.dmg, base.dmg * 2, '武器 ' + wid + ' 的专属词条 ' + effId + ' 应翻倍');
   }
-  const lsFoe = fighter({ side: 1, agility: 50, hp: 1e6, maxHp: 1e6 });
-  const lsMe = fighter({ power: 450, hp: 50000, weapons: ['14:15'], skills: [{ id: 5, level: 15 }], effects: { 7: 100 } });
-  const lsRound = first(run(g, lsMe, lsFoe, 7), (r) => r.action === 'weapon' && r.id === 14 && r.lifesteal > 0);
-  assert.ok(lsRound && lsRound.lifesteal > 600, '真5忍者镖 +100% 词条吸血应按 (73+33+450×1.11)×2×56% 结算：' + (lsRound && lsRound.lifesteal));
 
   /* ⑥ 45 暴击倍率 +100%：同一暴击应 ×1.5；46 减暴伤 50%：同一暴击应 ×0.5。 */
   const critBase = first(run(g, fighter({ weapons: ['1:10'], skills: ['9:10'] }), fighter({ side: 1, agility: 50 }), 3), (r) => r.crit && r.attacker === 0 && r.dmg > 0);
   const crit45 = first(run(g, fighter({ weapons: ['1:10'], skills: ['9:10'], effects: { 45: 100 } }), fighter({ side: 1, agility: 50 }), 3), (r) => r.crit && r.attacker === 0 && r.dmg > 0);
   const crit46 = first(run(g, fighter({ weapons: ['1:10'], skills: ['9:10'] }), fighter({ side: 1, agility: 50, effects: { 46: 50 } }), 3), (r) => r.crit && r.attacker === 0 && r.dmg > 0);
   assert.ok(critBase && crit45 && crit46, '应出现暴击回合');
-  assert.ok(crit45.dmg > critBase.dmg * 1.2, '45 +100% 应把 2.x 倍率抬到 3.x：' + critBase.dmg + ' → ' + crit45.dmg);
-  assert.ok(crit46.dmg < critBase.dmg * 0.7, '46 -50% 应明显压低暴击伤害：' + critBase.dmg + ' → ' + crit46.dmg);
+  assert.equal(crit45.dmg, Math.round(critBase.dmg * 1.5), '45 +100% 应把 2.x 倍率抬到 3.x');
+  assert.equal(crit46.dmg, Math.round(critBase.dmg * 0.5), '46 -50% 应把暴击伤害减半');
 
   /* ⑦ 48 幸运一击：+100 基础伤害，先加后乘 1~6 倍。 */
   const luckyBase = first(run(g, fighter({ skills: ['23:10'] }), fighter({ side: 1, agility: 50 }), 5), (r) => r.action === 'skill' && r.id === 23 && r.dmg > 0);

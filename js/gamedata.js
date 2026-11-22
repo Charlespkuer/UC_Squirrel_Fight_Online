@@ -72,8 +72,7 @@
     if (id === 1 || id === 2) return 2 * baseLv + extra;
     if (id === 3) return 2 + 1 * (baseLv - 1) + extra;
     if (id === 4) return 5 + 8 * (baseLv - 1) + extra;
-    // 武器好手：1 级 +10，2~10 每级 +2；真化后每级 +1（真5 = 10+18+5 = 33，玩家 2026-11-22 口径）。
-    if (id === 5) return 10 + 2 * (baseLv - 1) + Math.max(0, lv - 10);
+    if (id === 5) return 10 + 2 * (baseLv - 1) + extra;
     return 0;
   }
   function initialStats() {
