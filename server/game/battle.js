@@ -25,9 +25,9 @@ function withSeed(seed, fn) {
   try { return fn(); } finally { Math.random = old; }
 }
 
-function simulate(seed, me, foe) {
+function simulate(seed, me, foe, opts) {
   const Sim = globalThis.Sim;
-  return withSeed(seed, () => Sim.simulate(me, foe));
+  return withSeed(seed, () => Sim.simulate(me, foe, opts));
 }
 
 function hashResult(result) {
