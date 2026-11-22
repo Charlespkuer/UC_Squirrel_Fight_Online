@@ -19,15 +19,16 @@
     try { return fn(); } finally { Math.random = old; }
   }
 
-  // 征战首领：武器/技能/固定循环沿用原版 bossConfig + campaignNpcs 的形态，
-  // ⚠ `bias` 不是原版数值：原版只有等级/技能/宠物帧，没有属性表，服务端
+  // 征战首领：武器/技能/固定循环沿用原版 bossConfig + campaignNpcs 的形态。
+  // ⚠ `bias` 不是原版数值（原版只有等级/技能/宠物帧，没有属性表）：它按当前伤害公式标定，
+  // 同等级单人胜率 ≤15%、四人队 ≥30%；改战斗公式后必须重跑 `test-online-campaign` 再调。
   const BOSSES = [
     {
       id: 'campaign_hare', bossId: 1, mcFrame: 1, name: '暗御狡兔', bigName: '狡兔',
       level: 35, unlockLevel: 35, rewardExpRatio: 1,
 
       pet: { level: [6, 10], grades: [55, 28, 13, 4] },
-      bias: { power: 1.21, agility: 1.375, speed: 1.43, hp: 3.96 },
+      bias: { power: 2.0, agility: 1.3, speed: 1.43, hp: 3.2 },
       weapons: [{ id: 8, level: 10 }],
       skills: [{ id: 2, level: 10 }, { id: 11, level: 10 }, { id: 23, level: 10 }],
       castable: [23], pattern: ['weapon', 'skill', 'weapon', 'common'], mech: ['freeze'],
@@ -40,7 +41,7 @@
       level: 40, unlockLevel: 40, rewardExpRatio: 1.1,
 
       pet: { level: [8, 13], grades: [45, 30, 18, 7] },
-      bias: { power: 1.705, agility: 1.21, speed: 1.155, hp: 4.56 },
+      bias: { power: 2.4, agility: 0.9, speed: 1.155, hp: 3.2 },
       weapons: [{ id: 12, level: 11 }],
       skills: [{ id: 9, level: 11 }, { id: 10, level: 11 }, { id: 24, level: 11 }, { id: 14, level: 10 }],
       castable: [14], pattern: ['weapon', 'skill', 'weapon', 'common'], mech: ['freeze'],
@@ -53,7 +54,7 @@
       level: 50, unlockLevel: 50, rewardExpRatio: 1.15,
 
       pet: { level: [12, 18], grades: [30, 32, 25, 13] },
-      bias: { power: 1.54, agility: 1.43, speed: 1.265, hp: 6.72 },
+      bias: { power: 1.2, agility: 1.5, speed: 1.265, hp: 5.6 },
       weapons: [{ id: 7, level: 12 }],
       skills: [{ id: 8, level: 12 }, { id: 15, level: 12 }, { id: 6, level: 10 }, { id: 16, level: 10 }],
       castable: [8, 15], pattern: ['skill', 'weapon', 'skill', 'common'], mech: [],
@@ -67,7 +68,7 @@
       // 幻兽等级期望 ≈19.0（16~24；1★ 封顶 10、2★ 封顶 20）。
       // 高星权重也随首领提高，否则低星幻兽会被自己的等级上限压回 10 级。
       pet: { level: [16, 24], grades: [8, 24, 40, 28] },
-      bias: { power: 1.705, agility: 1.21, speed: 1.10, hp: 6.48 },
+      bias: { power: 2.4, agility: 1.1, speed: 1.10, hp: 4.0 },
       weapons: [{ id: 2, level: 12 }],
       skills: [{ id: 14, level: 12 }, { id: 16, level: 10 }, { id: 5, level: 10 }, { id: 10, level: 10 }],
       castable: [14], pattern: ['weapon', 'skill', 'common', 'skill'], mech: [],

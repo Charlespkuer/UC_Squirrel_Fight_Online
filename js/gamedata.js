@@ -72,7 +72,8 @@
     if (id === 1 || id === 2) return 2 * baseLv + extra;
     if (id === 3) return 2 + 1 * (baseLv - 1) + extra;
     if (id === 4) return 5 + 8 * (baseLv - 1) + extra;
-    if (id === 5) return 10 + 2 * (baseLv - 1) + extra;
+    // 武器好手：1 级 +10，2~10 每级 +2；真化后每级 +1（真5 = 10+18+5 = 33，玩家 2026-11-22 口径）。
+    if (id === 5) return 10 + 2 * (baseLv - 1) + Math.max(0, lv - 10);
     return 0;
   }
   function initialStats() {
@@ -126,6 +127,17 @@
   const STAGE_LEVEL_BAND = Object.freeze([[10, 15], [15, 20], [20, 25], [30, 35], [35, 40], [40, 45]]);
   const STAGE_ROLE_STAT = Object.freeze([0.70, 0.78, 0.72]);
   const STAGE_ROLE_HP = Object.freeze([0.90, 1.05, 1.20]);
+  // 每关一个标定系数（力/敏/速/血同乘）。按 `test-stage-balance` 的模型（推荐等级随机玩家、
+  // 连战三场、每场后回 25% 血）标到约 0.6 通关率；改战斗伤害/闪避公式后必须重跑该套件再调。
+  const STAGE_CAL = Object.freeze([
+    0.931, 0.899, 0.948, 0.882, 0.907, 0.890, 1.005, 1.005, 1.013, 1.071, 1.046, 1.096,
+    0.997, 1.013, 0.940, 0.923, 0.907, 0.989, 1.054, 1.046, 1.079, 1.046, 1.063, 1.087,
+    1.309, 1.260, 1.219, 1.227, 1.202, 1.276, 1.219, 1.186, 1.169, 1.137, 1.194, 1.210,
+  ]);
+  const stageCal = (stageId) => {
+    const v = STAGE_CAL[Number(stageId) - 1];
+    return Number.isFinite(v) && v > 0 ? v : 1;
+  };
   const STAGE_TYPE_SCALE = Object.freeze({ tl: 1.15, xh: 0.92, xm: 1.02 });
   // 超级大关单敌人：三侠的普通类型系数（tl 1.15 / xh 0.92 / xm 1.02）是按三连战调出来的，
   // ⚠ 原版 viewer 里的 `Mantis_boss.swf` / `Crane_boss.swf` / `Panda_boss.swf` 与 `Panda3.swf`
@@ -257,10 +269,11 @@
   function stageNpcHp(stageId, npcIndex) {
     const role = stageRoleOf(stageId, npcIndex);
     const regular = stageRegularMul(stageId);
+    const cal = stageCal(stageId);
     if (STAGE_USE_LEVEL_MODEL) {
 
       const bossMul = isSuperStage(stageId) ? (SUPER_HP_MUL[stageTypeOf(stageId).anim] || 1.6) : 1;
-      return Math.max(1, Math.round(stagePlayerHp(stageTargetLevel(stageId)) * STAGE_ROLE_HP[role] * STAGE_HP_MUL * bossMul * regular));
+      return Math.max(1, Math.round(stagePlayerHp(stageTargetLevel(stageId)) * STAGE_ROLE_HP[role] * STAGE_HP_MUL * bossMul * regular * cal));
     }
     const row = STAGE_NPC_HP[stageStar(stageId) - 1];
     return row ? stageScale(row[role] || 0, STAGE_DIFFICULTY.hp * STAGE_HP_MUL * regular) : 0;
@@ -281,7 +294,8 @@
       const stageId = Number(raw.stageId) || 1;
       const role = stageRoleOf(stageId, raw.npcIndex);
       const typeScale = isSuperStage(stageId) ? (SUPER_TYPE_SCALE[stageTypeOf(stageId).anim] || 1) : stageTypeScale(stageId);
-      const power = Math.max(1, Math.round(stagePlayerStat(stageTargetLevel(stageId)) * STAGE_ROLE_STAT[role] * typeScale * stageRegularMul(stageId)));
+      const cal = stageCal(stageId);
+      const power = Math.max(1, Math.round(stagePlayerStat(stageTargetLevel(stageId)) * STAGE_ROLE_STAT[role] * typeScale * stageRegularMul(stageId) * cal));
       const shape = (key) => { const v = Number(raw[key]), p = Number(raw.power); return v > 0 && p > 0 ? v / p : 1; };
       return { power, agility: Math.max(1, Math.round(power * shape('agility'))), speed: Math.max(1, Math.round(power * shape('speed'))) };
     }
@@ -1083,7 +1097,7 @@
 
 
   window.GData = { EXP_TABLE, nextExp, formatBigNumber, WS_LEVELS, ATTRIBUTE_BOOK_LEVELS, wsLimit, canLearn, passiveBonus, initialStats, STAGE_TYPES, stageTypeOf, stageStar, stageEnemyCount, isSuperStage, STAGE_NPC_HP, STAGE_NPC_EXP, STAGE_DIFFICULTY, STAGE_HP_MUL, STAGE_NPC_STAT_FIX, STAGE_REWARD_MULT, STAGE_GOLD_MULT,
-    STAGE_USE_LEVEL_MODEL, STAGE_LEVEL_BAND, STAGE_ROLE_STAT, STAGE_ROLE_HP, STAGE_REGULAR_MUL, SUPER_HP_MUL, SUPER_TYPE_SCALE, STAGE_TYPE_SCALE, STAGE_PLAYER_CURVE,
+    STAGE_USE_LEVEL_MODEL, STAGE_LEVEL_BAND, STAGE_ROLE_STAT, STAGE_ROLE_HP, STAGE_CAL, stageCal, STAGE_REGULAR_MUL, SUPER_HP_MUL, SUPER_TYPE_SCALE, STAGE_TYPE_SCALE, STAGE_PLAYER_CURVE,
     trueLevel, trueSkillValue, trueSkillStep, trueSkillRow, TRUE_SKILL_TABLE, TRUE_SKILL_5, TRUE_SKILL_MAX, TRUE_WEAPON_BONUS, trueWeaponBonus, TRUE_WEAPON_GLOW, trueWeaponGlow,
     stageTargetLevel, stagePlayerStat, stagePlayerHp, stageTypeScale, CHALLENGE_DAILY_STAT_STEP, challengeDailyMul, challengeDailyScale, stageFoe, STAGE_FRAGMENT, STAGE_FRAGMENT_MUL, stageFragmentChance, stageChallengeFragmentChance, stageFragmentCount, BLUE_SHARD_DROP_MUL, stageNpcHp, stageNpcExp, stageNpcStats, AI_NAMES, NEW_PLAYER, APPRENTICE_TRIBUTE_EXP_CAP, APPRENTICE_TRIBUTE_GOLD_CAP, ARENA_TITLES, NORMAL_PILLS, SUPER_PILLS, LOTTERY_SUPER_PILL_CHANCE, LOTTERY_PRICE, LOTTERY_PRIZES, GEAR_BASE, GEAR_BASE_ATTR, BLACK_GEAR_SETS, BLACK_SHARD_SET, BLACK_CARD_ID, BLACK_BOX_ID, registerBlackGear, applyPropRemarkFixes, CONVERT_SHARD_ID, CONVERT_SHARD_NAME, CONVERT_SHARD_COST, CONVERT_FRUIT_ID, CONVERT_PILLS, registerLadderShard, EXTRA_RANK_GOODS, registerRankGoods, LEVEL_GIFT_SMALL, LEVEL_GIFT_BIG, LEVEL_GIFT_RARE, levelGift, GIFT_PACK_BOOST, giftPackPrize,
     PETS, PET_SKILLS, PET_SKILL_RULES, petSkillValue, petSkillTrigger, petSkillInfo, PET_GRADE_EXP, PET_GRADE_COST,

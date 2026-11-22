@@ -16,8 +16,10 @@
     repeatSkill: 5,
     repeatSpecialFirst: 5, repeatSpecialAgain: 5,
 
-    commonAttackWeight: 100,
-    minCommonShare: 0.05,
+    // 原版抓包 45 场长局（玩家出手 ≥6 次）份额：武器 50~74%、技能 16~30%、普攻 10~20%。
+    // 首发权重按 武器 100 / 技能 150 / 普攻 200 时，山治与乔巴的份额误差 ≤1.2 个百分点。
+    commonAttackWeight: 200,
+    minCommonShare: 0.10,
 
     npcSkillChance: 30,
 
@@ -369,6 +371,14 @@
     if (m > 0 && lowHpActive(c)) v *= 1 + m;
     return Math.max(1, Math.round(v));
   }
+  // 原版平减防御 = 当前敏捷 × 1.5（玩家口径 2026-11-22；视频 450 力 忍者镖：605.5 − 32×1.5 = 558，
+  // 与实拍 −558 一致）。木桩敏捷 15 → 22.5，贴吧「木头防 20」是四舍五入后的口述值。
+  // 皮糙肉厚按百分比先乘在攻击伤害上，再减这一项。
+  function effDefense(c) {
+    let d = effAgility(c) * 1.5;
+    if (c.mods) d += Number(c.mods.defenseBonus) || 0;
+    return Math.max(0, Math.round(d));
+  }
   function effect(c, id) { return stripped(c) ? 0 : Math.max(0, Number(c.effects[id]) || 0); }
   const trueVal = (id, level) => (window.GData && GData.trueSkillValue ? GData.trueSkillValue(id, level) : 0);
   const trueW = (w, key) => (window.GData && GData.trueWeaponBonus ? GData.trueWeaponBonus(w, key) : 0);
@@ -411,6 +421,7 @@
 
 
   const UNUSED_WEIGHT = 100;
+  const SKILL_FIRST_WEIGHT = 150;
 
   function pickWeighted(list, weightOf) {
     let total = 0;
@@ -437,7 +448,7 @@
   function skillWeight(att, id) {
 
     if (ONLINE_COMBAT && skillUseCountOf(att, id) >= 1) return 0;
-    let w = att.usedSkills[id] ? repeatRateOf(id, skillUseCountOf(att, id)) : UNUSED_WEIGHT;
+    let w = att.usedSkills[id] ? repeatRateOf(id, skillUseCountOf(att, id)) : SKILL_FIRST_WEIGHT;
 
     const boost = Number(att.skillBoost && att.skillBoost[id]) || 0;
     if (boost > 0) w *= 1 + boost;
@@ -530,7 +541,8 @@
     if (att.mods && (att.mods.mustHitAll || att.mods.firstStrikeAll)) return 0;
     const wMust = att.mustHitNext;
     if (wMust) return 0;
-    let d = 6 + 26 * effAgility(def) / (effAgility(def) + effAgility(att) * 1.2 + 40);
+    // 抓包同敏捷段实测 20~27%（路飞 61 被打 12/54、山治 36 被打 59/271），原公式约低 7 个点。
+    let d = 12 + 32 * effAgility(def) / (effAgility(def) + effAgility(att) * 1.1 + 35);
     const shift = skill(def, 11)
       ? (5 + 2 * (Math.min(skill(def, 11), 10) - 1) + trueVal(11, skill(def, 11))) * (1 + effect(def, 35) / 100)
       : 0;
@@ -600,8 +612,7 @@
     return Math.max(base, Math.min(out, n === 0 ? BOOSTED_FIRST_CAP : BOOSTED_AGAIN_CAP));
   }
 
-  // 绝对防御这一次出手是否发动 —— 一次出手只判一次（多段攻击整段挡下 / 整段不挡）。
-  // 为什么必须「一次」：西瓜刀连击（2 段）、螳螂双击（2 段）、疾风镰刀舞（4 段）原先每一段
+  // 绝对防御每次攻击只判一次：多段攻击（螳螂双击 / 疾风镰刀舞）整段挡下或整段不挡。
   function jueDuiDecide(def, weaponType) {
     if (!def || !def.skills || !def.skills[16]) return null;
     if (Number(def.silence) > 0) return null;
@@ -639,10 +650,6 @@
         out.guiJia = Math.round(out.dmg * pct / 100);
         out.dmg -= out.guiJia;
       }
-    }
-    if (skill(def, 10)) {
-      const pct = clamp((5 + (Math.min(skill(def, 10), 10) - 1)) * (1 + effect(def, 34) / 100), 0, 80);
-      out.dmg = Math.round(out.dmg * (100 - pct) / 100);
     }
     if (def.mods && def.mods.takenMul) out.dmg = Math.round(out.dmg * (1 + Number(def.mods.takenMul)));
     if (def.mods && Number(def.mods.lowHpTakenMul)) {
@@ -776,6 +783,18 @@
         if (cut > 0) { rawDmg = Math.round(rawDmg * (1 - cut / 100)); r.critCut = cut; }
       }
       const action = opts.action || r.action;
+      // 皮糙肉厚（技能 10）：百分比先乘在攻击伤害上，再减平减防御。
+      // 公式：最终 = 攻击伤害 × (1 − 皮糙%) − 敏捷 × 1.5。
+      const tough = skill(def, 10)
+        ? clamp((5 + (Math.min(skill(def, 10), 10) - 1)) * (1 + effect(def, 34) / 100), 0, 80)
+        : 0;
+      if (tough > 0) { rawDmg = Math.round(rawDmg * (100 - tough) / 100); r.toughCut = tough; }
+      // 平减防御先扣，再乘暴击：原版抓包 方天 194 → 暴击 389（正好 2 倍），
+      // 说明暴击乘的是「扣防后的伤害」。吸铁大法（18）实测不扣防，走 pierceDefense。
+      // NPC 的攻击不吃平减防御：抓包里 3 星熊猫（力 45）对路飞（防 66）只打 7，
+      // 若同口径扣防会恒为 1，与抓包和关卡难度都不符。
+      if (!opts.pierceDefense && !att.npcType) rawDmg = Math.max(0, Math.round(rawDmg - effDefense(def)));
+      if (opts.critMul) rawDmg = Math.round(rawDmg * opts.critMul);
 
       if (att.heroTrueBase && action === 'skill' && !HERO_TRUE_BASE_SKIP_SKILLS.has(Number(r.id))) {
         rawDmg = Math.round(rawDmg * heroBaseMul(att, att.skills[Number(r.id)]));
@@ -1367,6 +1386,8 @@
     function playerLikeAction(att, def, followup) {
       const r = { attacker: att.side };
       const forcedThrow = ONLINE_COMBAT && followup && followup.reason === 'doubleThrow' ? followup.weapon : null;
+      // 连击追加的那一拍：同一把武器再打一次，不再掷连击（连锁最多两下）。
+      const forcedCombo = followup && followup.reason === 'combo' ? followup.weapon : null;
       // 真·野球拳「有N%几率可多使用一次」= 同一手再打一次野球拳，不是追加一次任意行动。
       const forcedSkill = followup && followup.reason === 'skillAgain' ? Number(followup.skill) : 0;
 // 师父只在濒危时尝试救场，每场至多一次；无师父时不能凭空治疗。
@@ -1381,7 +1402,8 @@
       }
       // 幻兽·整蛊专家：被封住的武器/技能整场不能再用。这里先过滤，
       const usableWeapons = att.weapons.filter((w) => w && !att.petSealWeapons[w.id] &&
-        (!ONLINE_COMBAT || weaponWeight(att, w) > 0 || (att.pendingWeapon && att.pendingWeapon.id === w.id) || (forcedThrow && forcedThrow.id === w.id)));
+        (!ONLINE_COMBAT || weaponWeight(att, w) > 0 || (att.pendingWeapon && att.pendingWeapon.id === w.id) ||
+          (forcedThrow && forcedThrow.id === w.id) || (forcedCombo && forcedCombo.id === w.id)));
       const canWeapon = usableWeapons.length > 0 && att.disarm <= 0;
 
       // 可用技能从「这个 fighter 实际拥有的技能」里筛（att.skillOrder），
@@ -1408,17 +1430,19 @@
         kind = pickKind(att, canWeapon ? usableWeapons : [], canSkill ? actives : []);
       }
       if (att.pendingWeapon && canWeapon && !att.petSealWeapons[att.pendingWeapon.id]) kind = 'weapon';
-      if (forcedThrow) kind = 'weapon';
+      if (forcedThrow || forcedCombo) kind = 'weapon';
       if (forcedSkill && att.silence <= 0) kind = 'skill';
 
       if (kind === 'weapon') {
         const prepared = att.pendingWeapon && !att.petSealWeapons[att.pendingWeapon.id] ? att.pendingWeapon : null;
         let w;
         if (forcedThrow) w = forcedThrow;
+        else if (forcedCombo) w = forcedCombo;
         else if (prepared) w = prepared;
         else if (usableWeapons.length > 1 && !att.pattern) w = pickWeapon(att, usableWeapons);
         else w = usableWeapons[0];
         if (forcedThrow) r.secondThrow = true;
+        if (forcedCombo) r.comboFollow = true;
         att.lastWeaponId = w.id;
         att.pendingWeapon = null;
         if (w.id === 1 && !prepared) {
@@ -1457,12 +1481,18 @@
           r.noteText = (r.noteText ? r.noteText + '·' : '') + '不消耗回合';
           r.noteSide = att.side;
         };
-        let raw = R(w.lo, w.hi);
-        raw = Math.round(raw * (1 + effPower(att) / 120));
+        // 原版：武器白值下限 + 力量×固定系数（投掷 1.11 / 近战 1.825）+ 武器好手，再乘 (1−皮糙) 减 敏捷×1.5。
+        // 抓包 路飞(力 61) 可乐 L8：35 + 67.7 + 24 − 26×1.5 = 87.7（该场实例敏捷约 26，实测 102）。
+        // 「武器伤害」取面板下限（真5 忍者镖 = 73，与玩家口径的示例一致），波动统一由 ±10 承担。
+        let raw = w.lo;
+        raw += effPower(att) * (w.type === '投掷' ? 1.11 : 1.825);
         if (skill(att, 5)) raw += (GData.passiveBonus(5, skill(att, 5)) * heroBaseMul(att, skill(att, 5))) * (1 + effect(att, 31) / 100);
 
         const specificId = w.id <= 15 ? w.id + 11 : (w.id === 16 ? 42 : w.id === 17 ? 43 : 0);
-        raw = Math.round(raw * (1 + (effect(att, w.type === '投掷' ? 7 : 6) + (specificId ? effect(att, specificId) : 0)) / 100));
+        // 装备词条 / 宝石加成只进吸血基数，不进最终伤害：
+        // 视频 450 力 真5忍者镖 打 −558（605.5 − 32×1.5），回 +632（605.5 × 2 × 52%）。
+        const gearPct = effect(att, w.type === '投掷' ? 7 : 6) + (specificId ? effect(att, specificId) : 0);
+        const lsBase = raw * (1 + gearPct / 100);
         if (boosted) {
           raw = Math.round(raw * (1 + (Number(att.mods.weaponBoostPowerMul) || 0)));
 
@@ -1485,27 +1515,32 @@
         let cc = critChanceAgainst(att, def);
         if (w.id === 11) cc += weaponEffect(w, 20, 2, 3) + trueW(w, 'crit');
         cc = clamp(cc, 0, RULES.critCap);
+        let critMul = 0;
         if (att.petNextCrit) {
           att.petNextCrit = false;
-          let mult = 2 + (Math.random() < 0.5 ? 0 : 1) + effect(att, 45) / 100 + effect(att, w.type === '投掷' ? 3 : 2) / 100 + critDmgBonus(att);
-          raw = Math.round(raw * mult); r.crit = true; r.petCrit = true;
+          critMul = 2 + (Math.random() < 0.5 ? 0 : 1) + effect(att, 45) / 100 + effect(att, w.type === '投掷' ? 3 : 2) / 100 + critDmgBonus(att);
+          r.crit = true; r.petCrit = true;
         } else if (chance(cc)) {
 
-          let mult = 2 + (Math.random() < 0.5 ? 0 : 1) + effect(att, 45) / 100 + effect(att, w.type === '投掷' ? 3 : 2) / 100 + critDmgBonus(att);
+          critMul = 2 + (Math.random() < 0.5 ? 0 : 1) + effect(att, 45) / 100 + effect(att, w.type === '投掷' ? 3 : 2) / 100 + critDmgBonus(att);
           const quad = trueVal(9, att.skills[9]);
-          if (quad > 0 && chance(quad)) { mult = 4 + effect(att, 45) / 100 + effect(att, w.type === '投掷' ? 3 : 2) / 100 + critDmgBonus(att); r.crit4 = true; }
-          raw = Math.round(raw * mult); r.crit = true;
+          if (quad > 0 && chance(quad)) { critMul = 4 + effect(att, 45) / 100 + effect(att, w.type === '投掷' ? 3 : 2) / 100 + critDmgBonus(att); r.crit4 = true; }
+          r.crit = true;
         }
+        raw += R(-10, 10);
         let hits = 1;
-        if (w.id === 4 && chance(weaponEffect(w, 10, 2, 5) + trueW(w, 'combo'))) hits = 2;
+        // 连击 = 这一拍打完后不消耗回合、再用同一把武器完整打一次（下方 reason 'combo' 的追加行动）；
+        // 不再把两段伤害并进同一拍。追加那一拍本身不掷连击，连锁最多两下。
+        const combo = w.id === 4 && !forcedCombo && chance(weaponEffect(w, 10, 2, 5) + trueW(w, 'combo'));
         if (w.id === 10 && chance(weaponEffect(w, 2, 2) + trueW(w, 'triple'))) hits = 3;
         r.hits = hits;
+        if (combo) r.combo = true;
 
         const jueDuiLock = jueDuiDecide(def, w.type);
         let total = 0, landedHits = 0, dodgedHits = 0;
         for (let i = 0; i < hits; i++) {
           const rr = { dmg: 0, crit: r.crit, crit4: r.crit4 };
-          applyDamage(att, def, raw, rr, { ignoreFakeDie: w.id === 7 || trueW(w, 'ignoreFakeDie') > 0, action: 'weapon', weaponType: w.type, jueDuiLock: jueDuiLock });
+          applyDamage(att, def, raw, rr, { ignoreFakeDie: w.id === 7 || trueW(w, 'ignoreFakeDie') > 0, action: 'weapon', weaponType: w.type, jueDuiLock: jueDuiLock, critMul: critMul });
           total += rr.dmg;
           if (rr.dmg > 0) landedHits++;
           if (rr.dodge) dodgedHits++;
@@ -1547,8 +1582,9 @@
         }
 
         if (w.id === 14 && att.hp > 0 && total > 0) {
+          // 真化每级 +2% 吸血（remark1「增加2%吸血量」按真级累加）：真5 = 46 + 10 = 56%。
           const pct = weaponEffect(w, 10, 4) + trueW(w, 'lifesteal');
-          const heal = Math.min(att.maxHp - att.hp, healOf(att, raw * pct / 100));
+          const heal = Math.min(att.maxHp - att.hp, healOf(att, lsBase * pct / 100));
           att.hp += heal;
           r.lifesteal = (r.lifesteal || 0) + heal;
         }
@@ -1559,6 +1595,11 @@
         grantFreeTurn();
         pushRound(r);
         att.weaponBoostImmune = false;
+        if (r.combo) {
+          // 装死抢到下一手时不再补这一下（与双投同口径），否则装死等于白触发。
+          if (followupBlocked || att.hp <= 0 || def.hp <= 0) r.comboCancelled = true;
+          else queueImmediate({ actor: att, reason: 'combo', weapon: w });
+        }
         if (r.actAgain && att.hp > 0 && def.hp > 0 && !followupBlocked && !pendingImmediate.some((x) => x.actor === att)) queueImmediate({ actor: att, reason: 'freeAction' });
         queueSecondThrow();
         return;
@@ -1600,7 +1641,7 @@
             break;
           }
           case 12: {
-            const raw = Math.round((effPower(att) + effSpeed(att)) * (1.2 + 0.15 * (Math.min(lv, 10) - 1)));
+            const raw = Math.round((effPower(att) + effSpeed(att)) * (1.2 + 0.15 * (Math.min(lv, 10) - 1))) + 7;
             // 真阶只加「多使用一次」的几率，不加伤害；第二下是再一次野球拳（forcedSkill 那一拍不再掷）。
             const doublePct = forcedSkill ? 0 : trueVal(12, lv);
             // 命中判定必须先于真化判定：非真化野球拳不额外消耗随机数；第一下被闪避也要补第二下。
@@ -1640,7 +1681,7 @@
             const raw = Math.round((R(5, 20) + 4 * (Math.min(lv, 10) - 1)) * (1 + effect(att, 41) / 100));
             if (chance(dodgeChance(att, def))) { att.mustHitNext = false; markDodge(r, def); break; }
 
-            applyDamage(att, def, raw, r, { ignoreFakeDie: true });
+            applyDamage(att, def, raw, r, { ignoreFakeDie: true, pierceDefense: true });
             const disarmPct = 10 + 4 * (Math.min(lv, 10) - 1) + trueVal(18, lv);
             if (chance(disarmPct)) {
               def.disarm = Math.max(def.disarm, petDotRounds(def, 4));
@@ -1679,15 +1720,17 @@
       const dodge = chance(dodgeChance(att, def));
       att.mustHitNext = false;
       if (dodge) { markDodge(r, def); pushRound(r); return; }
-      let raw = Math.round(effPower(att) * (0.8 + Math.random() * 0.4) * (1 + effect(att, 5) / 100));
+      // 原版空手：力量 × 1.9 × (0.75~1.0) + 7 − 防御。抓包 路飞(力 61)：62~91。
+      let raw = effPower(att) * 1.9 * (0.75 + Math.random() * 0.25) * (1 + effect(att, 5) / 100) + 7;
+      let critMul = 0;
       if (att.petNextCrit) {
         att.petNextCrit = false;
-        raw = Math.round(raw * (2 + Math.random() + effect(att, 45) / 100 + effect(att, 1) / 100 + critDmgBonus(att)));
+        critMul = 2 + Math.random() + effect(att, 45) / 100 + effect(att, 1) / 100 + critDmgBonus(att);
         r.crit = true; r.petCrit = true;
       } else if (chance(critChance(att))) {
-        raw = Math.round(raw * (2 + effect(att, 45) / 100 + effect(att, 1) / 100 + critDmgBonus(att))); r.crit = true;
+        critMul = 2 + effect(att, 45) / 100 + effect(att, 1) / 100 + critDmgBonus(att); r.crit = true;
       }
-      applyDamage(att, def, raw, r, {});
+      applyDamage(att, def, raw, r, { critMul: critMul });
       maybeCounter(att, def, r, 'common');
       pushRound(r);
     }
@@ -1752,12 +1795,12 @@
       return true;
     }
     // 装死 / 补完的主行动不占 60 手窗口：正好卡在第 60 手的装死不能被超时判负吞掉。
-    // 双投 / 魅惑保持原口径：只在联机（非木桩）里越过上限。
+    // 双投 / 连击 / 魅惑保持原口径：只在联机（非木桩）里越过上限。
     const capExemptAction = () => {
       const front = pendingImmediate[0];
       if (!front) return false;
       if (front.reason === 'fakeDie' || front.reason === 'resumeTurn') return true;
-      return !!(ONLINE_COMBAT && !practice && front.reason === 'doubleThrow');
+      return !!(ONLINE_COMBAT && !practice && (front.reason === 'doubleThrow' || front.reason === 'combo'));
     };
     while (A.hp > 0 && B.hp > 0) {
       while (pendingImmediate.length && pendingImmediate[0].actor.hp <= 0) pendingImmediate.shift();

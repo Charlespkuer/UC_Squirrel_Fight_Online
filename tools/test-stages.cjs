@@ -167,8 +167,9 @@ test('常驻三侠在徒弟先上阵机制后再增强 6%', () => {
     for (let role = 0; role < 3; role++) {
       const raw = base * GData.STAGE_ROLE_HP[role];
       const lift = GData.stageNpcHp(id, role + 1) / raw;
-      assert.ok(lift >= expect - 0.01 && lift <= expect + 0.01,
-        id + ' 关第 ' + (role + 1) + ' 个敌人倍率 ' + lift.toFixed(3) + '，应为 ' + expect.toFixed(3));
+      const want = expect * GData.STAGE_CAL[id - 1];
+      assert.ok(lift >= want - 0.01 && lift <= want + 0.01,
+        id + ' 关第 ' + (role + 1) + ' 个敌人倍率 ' + lift.toFixed(3) + '，应为 ' + want.toFixed(3));
       seen.push(lift);
     }
   }
@@ -177,8 +178,9 @@ test('常驻三侠在徒弟先上阵机制后再增强 6%', () => {
   const bossRole = GData.stageEnemyCount(19) === 1 ? 2 : 0;
   const bossBase = GData.stagePlayerHp(GData.stageTargetLevel(19)) * GData.STAGE_ROLE_HP[bossRole];
   const boss = GData.stageNpcHp(19, 1) / bossBase;
-  assert.ok(Math.abs(boss - GData.STAGE_HP_MUL * (GData.SUPER_HP_MUL[GData.stageTypeOf(19).anim] || 1.6)) < 0.01,
-    '超级大关不应叠加常驻三侠的 12%：' + boss.toFixed(3));
+  const eliteCal = GData.STAGE_CAL[18];
+  assert.ok(Math.abs(boss - GData.STAGE_HP_MUL * (GData.SUPER_HP_MUL[GData.stageTypeOf(19).anim] || 1.6) * eliteCal) < 0.01,
+    '精锐大关按 SUPER_HP_MUL × 精锐标定：' + boss.toFixed(3));
 });
 
 test('常驻挑战关卡的碎片期望比基准略低，挑战塔仍按基准', () => {
@@ -197,10 +199,10 @@ test('常驻挑战关卡的碎片期望比基准略低，挑战塔仍按基准',
   assert.equal(GData.stageFragmentChance(6), GData.STAGE_FRAGMENT.base + 6 * GData.STAGE_FRAGMENT.perStar);
 });
 
-test('10级门槛、36关逐星解锁、跨高手边界全部生效', () => {
-  const g = setup(); g.s().level = 9;
+test('5级门槛、36关逐星解锁、跨高手边界全部生效', () => {
+  const g = setup(); g.s().level = 4;
   assert.equal(g.c.State.stageAccess(1).ok, false); assert.equal(g.c.State.beginStageBattle(1).ok, false);
-  g.s().level = 10;
+  g.s().level = 5;
   assert.equal(g.c.State.stageAccess(1).ok, true);
   for (let id = 2; id <= 36; id++) assert.equal(g.c.State.stageAccess(id).ok, false);
   for (const id of [0, 1.5, 37, NaN]) assert.equal(g.c.State.beginStageBattle(id).ok, false);
@@ -314,9 +316,9 @@ test('旧版未完NPC、原版keep/revive和异常越级旧进度都能兼容迁
 });
 
 test('UI锁定高手和灰星不会进入战斗或扣书', () => {
-  const g = setup(); g.s().level = 9;
-  g.c.openStages(); g.click('type0'); assert.match(g.modals.at(-1).html, /10级/);
-  g.s().level = 10; g.c.openStages(); g.click('type1'); assert.match(g.modals.at(-1).html, /前面关卡/);
+  const g = setup(); g.s().level = 4;
+  g.c.openStages(); g.click('type0'); assert.match(g.modals.at(-1).html, /5级/);
+  g.s().level = 5; g.c.openStages(); g.click('type1'); assert.match(g.modals.at(-1).html, /前面关卡/);
   g.click('type0'); g.click('star6'); assert.match(g.modals.at(-1).html, /前面关卡/);
   assert.equal(g.battles.length, 0); assert.equal(g.s().props[23], 10);
   assert.match(g.pages.at(-1).html, /class="small muted" data-action="star6"/);

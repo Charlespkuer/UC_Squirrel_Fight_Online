@@ -1,6 +1,6 @@
 [package]
 name = "ssdz-online"
-version = "1.0.80"
+version = "1.0.81"
 description = "松鼠大战 Online 客户端"
 authors = ["ssdz-online"]
 edition = "2021"

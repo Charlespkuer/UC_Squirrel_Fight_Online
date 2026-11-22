@@ -5414,7 +5414,7 @@
   function stageAccess(stageId) {
     stageId = Number(stageId);
     if (!Number.isInteger(stageId) || !npcOf(stageId, 1)) return { ok: false, msg: '没有这个关卡。' };
-    if (S.level < 10) return { ok: false, msg: '没有10级，不能挑战我们盖世五侠哦，加油哦！' };
+    if (S.level < 5) return { ok: false, msg: '5级才有资格挑战我们盖世五侠哦！加油吧!' };
     if (stageId > highestStageId() && !stageRun(stageId)) return { ok: false, msg: '请先通过前面关卡。' };
     return { ok: true };
   }

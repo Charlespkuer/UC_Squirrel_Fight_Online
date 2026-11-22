@@ -1548,7 +1548,7 @@
       const idx = from + i;
       return (i ? '<span class="npc-arrow">➜</span>' : '') + '<div class="npc-card">' + npcImage(t, !!t.super) + btn('挑战他', 'type' + idx, stageTypeAvailable(idx) ? 'gold small' : 'muted small') + '</div>';
     }).join('') + '</div>';
-    const content = row(0) + row(3) + '<div class="npc-description">10级可挑战盖世五侠。依次通过六种难度，才能挑战下一位高手。每轮连续击败3名敌人，收集装备碎片！<br>后三扇门是超级大关：每关只有 1 个敌人，推荐 30 级以上。</div>' + towerEntryHtml();
+    const content = row(0) + row(3) + '<div class="npc-description">5级可挑战盖世五侠。依次通过六种难度，才能挑战下一位高手。每轮连续击败3名敌人，收集装备碎片！<br>后三扇门是超级大关：每关只有 1 个敌人，推荐 30 级以上。</div>' + towerEntryHtml();
     const p=page('challenge','stages',content,{cls:'stages-scroll-board'});
     GData.STAGE_TYPES.forEach((_,i)=>{ const b=$('[data-action="type'+i+'"]',p); if(b) b.onclick=()=>openDifficulty(i); });
     $('[data-action="tower-entry"]',p)?.addEventListener('click',()=>openTowerEntry('tower'));
@@ -3407,7 +3407,7 @@
     { key: 'attributes', title: '属性', text: '力量影响伤害，敏捷影响闪避，速度影响出手次数。战斗中随机使用已获得的武器与技能。' },
     { key: 'growth', title: '成长', text: '战斗获得经验，升级有机会领悟武器与技能；71 级起每升 1 级还会获得 1 个金宝箱。' },
     { key: 'stamina', title: '体力', text: '每5分钟恢复1点，也可以在道具中使用体力药剂。消耗体力进行战斗以获取各种奖励。' },
-    { key: 'stages', title: '关卡', text: '10 级开启。消耗挑战书进行挑战，是获取金松果与装备碎片的途径。' },
+    { key: 'stages', title: '关卡', text: '5 级开启。消耗挑战书进行挑战，是获取金松果与装备碎片的途径。' },
     { key: 'arena', title: '竞技场', text: '10级开启经验竞技场，15级开启碎片竞技场与幻兽竞技场。竞技场通过竞技获取各种道具。' },
     { key: 'beast', title: '幻兽', text: '村庄「幻兽牧场」孵化、编队、喂养、进化；孵化消耗 200 孵化点。幻兽竞技场用召唤证报名。' },
     { key: 'ladder', title: '天梯赛', text: '30 级开启，战斗中可拾取属性碎片；通过在天梯战斗来证明自己吧！' },

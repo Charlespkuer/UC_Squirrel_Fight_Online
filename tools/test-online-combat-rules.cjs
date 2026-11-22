@@ -18,7 +18,9 @@ for (const lv of [1,15]) {
   for (const id of [1,2,3,4,7,10,11,12,15,16,17]) {
     for(let seed=0;seed<30;seed++) {
       const r=run(seed,fighter({weapons:[{id,level:lv}]}),fighter({speed:20})).rounds;
-      assert(r.filter(x=>x.attacker===0&&x.action==='weapon'&&x.id===id).length <= 1);
+      /* 西瓜刀连击是同一把武器的追加攻击（再打一次，不消耗回合），见下方专项。 */
+      const cap = id===4 ? 2 : 1;
+      assert(r.filter(x=>x.attacker===0&&x.action==='weapon'&&x.id===id).length <= cap);
     }
   }
   for (const id of [8,12,15,18,23]) for(let seed=0;seed<30;seed++) {
@@ -51,6 +53,32 @@ for(let seed=0;seed<60;seed++) {
   assert.equal(rounds.filter(r=>r.attacker===0&&r.action==='skill'&&r.id===12).length,1,'10 级野球拳没有第二下');
 }
 console.log(`PASS true fist: same skill twice (${fistPairs} doubles, ${fistFirstDodged} first-punch dodges)`);
+/* 西瓜刀（4）连击：判定成功后不消耗回合、立刻用同一把刀再打一次完整攻击，不再把两段伤害并进同一拍。
+ * 固定 Math.random = 0.2：闪避 12% 不中、连击 38% 必中、暴击 5% 不触发，两拍伤害可逐值比较。
+ * 对手速度 999：若第二下走正常出手权，中间必然插进对手的行动。 */
+{
+  const oldRandom = Math.random;
+  Math.random = () => 0.2;
+  let rounds;
+  try {
+    rounds = S.simulate(fighter({ power: 100, agility: 100, speed: 100, hp: 4000, maxHp: 4000,
+      weapons: [{ id: 4, level: 12 }], pattern: ['weapon'] }),
+      fighter({ power: 1, agility: 1, speed: 999, hp: 4000, maxHp: 4000 })).rounds;
+  } finally { Math.random = oldRandom; }
+  const i = rounds.findIndex((r) => r.attacker === 0 && r.action === 'weapon' && r.id === 4);
+  assert.ok(i >= 0, '样本里要出现西瓜刀出手');
+  assert.equal(rounds[i].combo, true, '连击判定成功要记账');
+  assert.equal(rounds[i].hits, 1, '连击不再把两段并进同一拍');
+  const second = rounds[i + 1];
+  assert.ok(second, '连击判定成功后必须补第二下');
+  assert.equal(second.attacker, 0, '第二下必须是我方立即出手');
+  assert.equal(second.action, 'weapon'); assert.equal(second.id, 4);
+  assert.equal(second.comboFollow, true, '第二下要标记为连击追加');
+  assert.equal(second.hits, 1);
+  assert.ok(second.dmg > 0 && second.dmg === rounds[i].dmg, '两拍各打一次完整伤害，不能合并成一拍');
+  assert.equal(rounds[i + 2] && rounds[i + 2].attacker, 1, '追加只补一次：第二下之后轮到对手，不能连环');
+  console.log(`PASS watermelon combo: immediate extra attack without a turn (${rounds[i].dmg} x2)`);
+}
 for(const id of [5,6,8,9,13,14]) {
   let observed=0, dodged=0;
   for(let seed=0;seed<60;seed++) {

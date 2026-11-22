@@ -27,7 +27,9 @@ function findRoot(start) {
 
 
 const root = findRoot(__dirname);
-const CHAINS = 60;
+// 每档 200 轮：60 轮时三连战通关率的标准误约 7 个百分点，贴着 35% 下限的档会随
+// 随机流微抖动红；加大样本让这条门禁测难度而不是测运气。
+const CHAINS = 200;
 const SAMPLE = [1, 6, 7, 12, 13, 18];
 
 function setup() {
