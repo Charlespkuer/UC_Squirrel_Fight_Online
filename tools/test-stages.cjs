@@ -199,6 +199,25 @@ test('常驻挑战关卡的碎片期望比基准略低，挑战塔仍按基准',
   assert.equal(GData.stageFragmentChance(6), GData.STAGE_FRAGMENT.base + 6 * GData.STAGE_FRAGMENT.perStar);
 });
 
+test('每日成长只记在被通关的那一关，别的关卡与次日都不受影响', () => {
+  const g = setup(), { State, GData } = g.c;
+  const base1 = GData.stageFoe(State.npcOf(1, 1), 1, 'tl', 0);
+  const base7 = GData.stageFoe(State.npcOf(7, 1), 7, 'xh', 0);
+  for (let i = 0; i < 3; i++) g.win(1);
+  assert.equal(State.challengeDailyCount(1), 1, '一整轮通关才记 1 次');
+  assert.equal(State.challengeDailyCount(7), 0, '同一天没打的关卡不涨');
+  const grown = GData.stageFoe(State.npcOf(1, 1), 1, 'tl', State.challengeDailyCount(1));
+  assert.equal(grown.power, Math.round(base1.power * 1.10), '只有这一关的敌人 +10%');
+  const other = GData.stageFoe(State.npcOf(7, 1), 7, 'xh', State.challengeDailyCount(7));
+  assert.equal(other.power, base7.power); assert.equal(other.hp, base7.hp);
+  State.save(); State.load();
+  assert.equal(State.challengeDailyCount(1), 1, '读档后按关卡分开的次数仍在');
+  g.s().challengeDaily = { date: '2000-01-01', counts: { 1: 3 } };
+  g.s().dailyStatsDate = '2000-01-01';
+  State.refreshDaily();
+  assert.equal(State.challengeDailyCount(1), 0, '换天清零');
+});
+
 test('5级门槛、36关逐星解锁、跨高手边界全部生效', () => {
   const g = setup(); g.s().level = 4;
   assert.equal(g.c.State.stageAccess(1).ok, false); assert.equal(g.c.State.beginStageBattle(1).ok, false);

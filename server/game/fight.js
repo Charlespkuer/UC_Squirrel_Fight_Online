@@ -906,7 +906,7 @@ function runStage({ accountId, stageId, rev, idemKey }) {
       const prevRun = S.stageRun(stageId);
       const carryHp = prevRun && Number.isFinite(prevRun.carryHp)
         ? Math.min(1, prevRun.carryHp + 0.25) : undefined;
-      const dailyCount = S.challengeDailyCount ? S.challengeDailyCount() : 0;
+      const dailyCount = S.challengeDailyCount ? S.challengeDailyCount(stageId) : 0;
       const foe = G.stageFoe(npc, stageId, type.anim, dailyCount);
       // 徒弟战败后师父接手同一名对手：按徒弟打完时对手的剩余血量入场。
       if (started.role === 'master' && prevRun && Number.isFinite(prevRun.foeCarryHp)) {

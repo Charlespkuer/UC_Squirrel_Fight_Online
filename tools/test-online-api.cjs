@@ -214,6 +214,22 @@ async function main() {
   try { await call('POST', '/api/account/password', { password: 'pass-a1', newPassword: 'abcdef' }, A.token); } catch (e) { letterOnly = e; }
   ok('昵称全服唯一（check-name + 注册双重拦截）',
     dupName && dupName.code === 'CONFLICT' && takenName.available === false && freeName.available === true);
+  /* 纯数字昵称与账号编号互斥：新号 id 要跳过同号昵称，纯数字登录键不会被编号抢走。
+     注册按 IP 限流 6 次/小时，这里和容量测试一样临时信任 X-Forwarded-For 换个 IP。 */
+  const idSeq = db.get("SELECT seq FROM sqlite_sequence WHERE name = 'accounts'");
+  const idMax = db.get('SELECT MAX(id) AS m FROM accounts');
+  const numericName = String(Math.max(Number(idSeq && idSeq.seq) || 0, Number(idMax && idMax.m) || 0) + 1);
+  const numCfg = require('../server/config').config, oldNumTrust = numCfg.trustProxy;
+  const numericHeaders = { ...qaDevice('qa-numeric'), 'x-forwarded-for': '192.0.2.31' };
+  let numericReg, numericLogin;
+  numCfg.trustProxy = true;
+  try {
+    numericReg = await call('POST', '/api/register', { name: numericName, password: 'pass-n1' }, undefined, numericHeaders);
+    numericLogin = await call('POST', '/api/login', { name: numericName, password: 'pass-n1' }, undefined, numericHeaders);
+  } finally { numCfg.trustProxy = oldNumTrust; }
+  ok('纯数字昵称与账号编号互斥', Number(numericReg.profile.account.accountId) === Number(numericName) + 1
+    && Number(numericLogin.profile.account.accountId) === Number(numericReg.profile.account.accountId),
+    { numericName, reg: numericReg.profile.account, login: numericLogin.profile.account });
   ok('昵称最多 7 个汉字（英文/数字按 1/3 个汉字计）',
     name7.available === true && name8.available === false && /7 个汉字/.test(String(name8.reason || ''))
     && latin21.available === true && latin22.available === false && tooLongName && tooLongName.status === 400

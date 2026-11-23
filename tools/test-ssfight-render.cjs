@@ -205,8 +205,8 @@ const { buildFrames } = SfRender;
   // 每颗药丸只能挂自己的矢量文件：主界面/背包/使用窗都按 id 取图，串到别的 id 就会出现
   // 「超级大力丸显示成经验丸」这种贴图错；同时药丸 URL 必须带版本号，避免 WebView 继续用旧图。
   const mainSrc = src.slice(src.indexOf('const STATE_PILL_BY_ID'), src.indexOf('function stateIconSrc('));
-  assert.ok(/STATE_ICON_BASE \+ Number\(id\) \+ '\.svg\?v=3'/.test(mainSrc),
-    '主界面药丸图标要按自己的 id 取 prop-<id>.svg?v=3，不能再落到通用 PNG 兜底');
+  assert.ok(/STATE_ICON_BASE \+ Number\(id\) \+ '\.svg\?v=4'/.test(mainSrc),
+    '主界面药丸图标要按自己的 id 取 prop-<id>.svg?v=4，不能再落到通用 PNG 兜底');
   const classicSrc = fs.readFileSync(path.join(ROOT, 'js/classic-ui.js'), 'utf8').replace(/\r\n/g, '\n');
   const revSrc = classicSrc.slice(classicSrc.indexOf('const PROP_SVG_REV'),
     classicSrc.indexOf(']);', classicSrc.indexOf('const PROP_SVG_REV')));
@@ -1770,8 +1770,8 @@ async function checkClassicFight() {
    *   "战斗结束后开启宝箱时，开出来的东西显示时，总会有一两个物品显示不出来"。
    *   那一格是原版的 `mc.c1.attachMovie(<道具名>, "mc", 100)`（MainMovie.as:18691/18804）——
    *   **库元件名就是道具名**，所以掉落池里每一件都得在 SWF 里有同名导出，否则那一格永远是空的。
-   *   实拍：天梯赛的主产出「属性碎片」原版没有同名导出（同一场掉两份就两格空），
-   *   现在按 `LOOT_ALIAS` 借「金杯」画（天梯赛在原版里的图标就是金杯）。 */
+   *   天梯赛的主产出「属性碎片」在原版就是 **2974**（卡面 2015 + 本体 2973），
+   *   不能借货币「金杯」3061。 */
   const lootMap = JSON.parse(fs.readFileSync(path.join(ROOT, 'images/ssfight/ui/loot-icons.json'), 'utf8'));
   const dropSrc = fs.readFileSync(path.join(ROOT, 'js/battle-drops.js'), 'utf8').replace(/\r\n/g, '\n');
   const poolIds = [...dropSrc.matchAll(/\{\s*id:\s*(\d+)\s*,\s*name:\s*'([^']+)'/g)].map((mm) => ({ id: Number(mm[1]), name: mm[2] }));
@@ -1781,8 +1781,8 @@ async function checkClassicFight() {
   const noIcon = poolIds.filter((p) => !lootMap.byId[p.id]);
   assert.equal(noIcon.length, 0, '这些掉落没有图标：' + noIcon.map((p) => p.id + ':' + p.name).join('、'));
   const ladder = lootMap.byId[51];
-  assert.ok(ladder && ladder.aliasOf === '金杯' && byId.has(ladder.id),
-    '属性碎片借「金杯」的元件 3061，且该元件要在 tags-fight.json 里');
+  assert.ok(ladder && ladder.id === '2974' && ladder.aliasOf === undefined && byId.has(ladder.id),
+    '属性碎片要用原版导出 2974，且该元件要在 tags-fight.json 里；不能借「金杯」3061');
   /* ②b⁶ 「没有出手动画」的那几拍不能一眨眼就过去（2026-11 第一百七十五批，用户口径
    *   "在一些情况下两次攻击之间的间隔还是有问题"）：节拍照现代播放器
    *   （`battle.js`：dot 400 / buff 320 / regen 420），眩晕那一拍换原版「晕击」图标 + 700ms。 */
@@ -3647,7 +3647,7 @@ function checkCampaignUnlockGate() {
 /* ---------- 帮助页：黑装长段落换成装备融合机制介绍（现在是 HELP_TERMS 里的一条词条） ---------- */
 {
   const cu = fs.readFileSync(path.join(ROOT, 'js/classic-ui.js'), 'utf8').replace(/\r\n/g, '\n');
-  assert.match(cu, /\{ key: 'fusion', title: '装备融合', text: '3 件同品质、未穿戴的装备可融合成 1 件更高品质装备/,
+  assert.match(cu, /\{ key: 'fusion', title: '装备融合', text: (?:window\.__SSDZ_ONLINE__\s*\?\s*)?'3 件同品质、未穿戴的装备可融合成 1 件更高品质装备/,
     '帮助页要有装备融合机制介绍');
   assert.ok(!/<b>黑装<\/b>：3 件橙装在「装备融合」里可合成/.test(cu),
     '帮助页不再保留旧的「黑装」长段落');

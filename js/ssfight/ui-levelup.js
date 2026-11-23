@@ -339,6 +339,14 @@
       return !!(window.State && typeof State.pendingWS === 'function' && State.pendingWS() > 0);
     } catch (e) { return false; }
   }
+  // 升级响应先到、wsPicks 补丁后到时会短暂读到空候选：先拉一次权威存档，别把玩家还没看到的组随机掉。
+  function resyncPendingChoices() {
+    try {
+      const O = window.Online;
+      if (O && O.ready && typeof O.syncState === 'function') return Promise.resolve(O.syncState()).catch(() => {});
+    } catch (e) {}
+    return Promise.resolve();
+  }
 
   // 奖励页收掉后仍留在同一个 root 里的 CG 背景；三选一/完成页盖在它上面。
   function holdBackground() {
@@ -483,7 +491,20 @@
           return;
         }
         state.wsAutoPending = true;
-        setTimeout(() => { if (state && state.phase === 'choice' && !state.wsBusy) chooseRandom(); }, 80);
+        // 升级响应里的 wsPicks 可能比升级页晚一拍：先等镜像对齐，别把玩家还没看到的组直接随机掉。
+        setTimeout(() => {
+          if (!state) return;
+          state.wsAutoPending = false;
+          if (state.phase !== 'choice' || state.wsBusy) return;
+          resyncPendingChoices().then(() => {
+            if (!state || state.phase !== 'choice' || state.wsBusy) return;
+            if (!pendingWs()) { renderChoice(); return; }
+            let now = [];
+            try { now = State.currentWSChoices() || []; } catch (e) { now = []; }
+            if (now.length) { renderChoice(); return; }
+            chooseRandom();
+          });
+        }, 1200);
       }
       return;
     }
@@ -827,7 +848,19 @@
         }
         if (!list.length && !st.wsAutoPending && !st.wsError && st.wsAutoTries < 3) {
           st.wsAutoPending = true;
-          setTimeout(() => { if (state === st && st.phase === 'choice' && !st.wsBusy) chooseRandom(); }, 300);
+          setTimeout(() => {
+            if (state !== st) return;
+            st.wsAutoPending = false;
+            if (st.phase !== 'choice' || st.wsBusy) return;
+            resyncPendingChoices().then(() => {
+              if (state !== st || st.phase !== 'choice' || st.wsBusy) return;
+              if (!pendingWs()) { renderChoice(); return; }
+              let now = [];
+              try { now = State.currentWSChoices() || []; } catch (e) { now = []; }
+              if (now.length) { renderChoice(); return; }
+              chooseRandom();
+            });
+          }, 1200);
         }
       }
     }

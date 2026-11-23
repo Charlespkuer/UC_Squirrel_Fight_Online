@@ -2,6 +2,8 @@
 .stages-scroll-board { overflow-y: auto; max-height: 100%; }
 .gold-text { color: #c87f0a; }
 .classic-page{top:-11.087px;bottom:-11.087px}.classic-page~.classic-modal-overlay{top:-11.087px;bottom:-11.087px}
+/* 4886 道具使用层是 z-index:40，确认框必须盖在它上面（转生果第二次使用）。 */
+#ui>.classic-modal-overlay.confirm-unfreeze-overlay{z-index:45}
 
 .classic-page~.classic-modal-overlay>.classic-modal.small-modal{max-height:466px}
 .classic-page~.classic-modal-overlay>.classic-modal.small-modal>.modal-body{max-height:326px}

@@ -112,6 +112,26 @@ test('绿屏兜底链路：原生软件图层开关 + 纯绿取样 + 页面开�
   assert.match(settingsJs, /render-compat/, '设置页要有「画面兼容」开关');
 });
 
+test('静态 SVG 的渐变 id 不能带冒号（WebView 83 的 <img> 解析不到 url(#f2015:2)，填色整块丢失）', () => {
+  const files = [];
+  const walk = (dir) => {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) walk(full);
+      else if (/\.svg$/i.test(ent.name)) files.push(full);
+    }
+  };
+  walk(path.join(ROOT, 'images'));
+  const bad = [];
+  for (const file of files) {
+    const text = fs.readFileSync(file, 'utf8');
+    const refs = [...text.matchAll(/(?:url\(|href=")#([^)"']+)/g)].map((m) => m[1]);
+    if (refs.some((id) => id.includes(':'))) bad.push(path.relative(ROOT, file));
+  }
+  assert.deepEqual(bad, [], '这些 SVG 的渐变/裁剪 id 还带冒号，旧 WebView 会丢掉整层填色：' + bad.join('、'));
+  assert.ok(files.length > 100, '静态 SVG 扫描数量异常：' + files.length);
+});
+
 console.log('');
 if (failed) { console.log(`${passed} passed, ${failed} failed`); process.exit(1); }
 console.log(`全部通过：${passed}/${passed}`);

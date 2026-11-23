@@ -62,8 +62,8 @@
     return '<img class="' + (cls || 'icon') + '" src="' + url + '"' + (size ? ' style="width:' + size + 'px;height:' + size + 'px"' : '') +
       ' onerror="this.style.visibility=\'hidden\'">';
   }
-  function weaponIcon(id, size) { return imgTag('images/ui/icons/weapon/weapon-' + id + '.svg', 'icon', size || 56); }
-  function skillIcon(id, size) { return imgTag('images/ui/icons/skill/skill-' + id + '.svg', 'icon', size || 56); }
+  function weaponIcon(id, size) { return imgTag('images/ui/icons/weapon/weapon-' + id + '.svg?v=4', 'icon', size || 56); }
+  function skillIcon(id, size) { return imgTag('images/ui/icons/skill/skill-' + id + '.svg?v=4', 'icon', size || 56); }
   // 道具图标：经典界面会把原版无框矢量路径表挂在 `UI.classic.propIconSrc` 上；
   function propIcon(id, size) {
     const classic = window.UI && window.UI.classic;

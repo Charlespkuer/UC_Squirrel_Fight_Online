@@ -261,14 +261,10 @@ function swfSymbolIds() {
  * 原版 `showFightResult` / `showPrize` 都是 `mc.c1.attachMovie(<道具名>, "mc", 100)` ——
  * **库元件名就是道具名**（MainMovie.as:18804 / 18691），所以这里按名字取 SWF 的导出符号 id。
  * 名字来源是**掉落池本身**（`js/battle-drops.js` 里的 `{ id, name, count, weight }` 行），
- * 不手抄一份 —— 池子改了这里自动跟着走。 */
+ * 不手抄一份 —— 池子改了这里自动跟着走。
+ * 名字必须与 SWF 的 ExportAssets 同名：没有同名导出时 `missing` 会报出来，再单独补映射；
+ * 「属性碎片」= **2974**（卡面 2015 + 本体 2973），不要借「金杯」3061 —— 那是货币。 */
 const LOOT_BUNDLE = 'looticons';
-/** 掉落池里有、但原版 SWF 里**没有同名导出**的那几件 → 借一件原版美术顶上。
- *  2026-11 用户口径："开宝箱时开出来的东西总会有一两个物品显示不出来"：
- *  天梯赛（`LADDER_POOL`）的主产出「属性碎片」在复刻里沿用 id 51 的黄色三角图标，
- *  原版 SWF 的 2977「属性碎片」是奖章画稿，与三角掉落卡不是同一套；这里继续借「金杯」
- *  作为**经典战果页**的占位图标，避免那一格空白。 */
-const LOOT_ALIAS = { '属性碎片': '金杯' };
 function lootIconRoots() {
   const sym = swfSymbolIds();
   const src = fs.readFileSync(path.join(ROOT, 'js', 'battle-drops.js'), 'utf8').replace(/\r\n/g, '\n');
@@ -286,13 +282,9 @@ function lootIconRoots() {
   const map = { byId: {}, missing: [] };
   const roots = [];
   for (const r of rows) {
-    /* 先按掉落池里的名字找；找不到再看别名表（见 `LOOT_ALIAS`）。 */
-    const alias = LOOT_ALIAS[r.name] || r.name;
-    const sid = sym.get(alias);
+    const sid = sym.get(r.name);
     if (!sid || sid === 'None') { map.missing.push(r.id + ':' + r.name); continue; }
-    const rec = { name: r.name, id: String(sid) };
-    if (alias !== r.name) rec.aliasOf = alias;
-    map.byId[r.id] = rec;
+    map.byId[r.id] = { name: r.name, id: String(sid) };
     roots.push(String(sid));
   }
   fs.writeFileSync(path.join(OUT, 'loot-icons.json'), JSON.stringify(Object.assign({
@@ -308,10 +300,8 @@ function lootIconRoots() {
  * `showUsePropWin` / `showBuyPropWin` 的图标位都是**按道具名 attach**，
  * 静态页面闭包走不到这些库元件；这里按 `propMap` 的名字取 SWF 导出符号，
  * 再把它们并进 `tags-daoju.json`（背包/商店详情共用）。原版没有导出的几件
- * 用同风格的库元件借位（抽奖卷→礼包、属性碎片→金杯、礼包页→礼包…），
- * 与 `loot-icons.json` 的别名口径一致。 */
+ * 用同风格的库元件借位（抽奖卷→幸运卡片、礼包页→礼包…）。 */
 const PROP_ICON_ALIAS = {
-  '属性碎片': '金杯',
   '抽奖卷': '幸运卡片',
   '推荐大礼包': '礼包',
   '1级礼包': '礼包', '5级礼包': '礼包', '10级礼包': '礼包', '15级礼包': '礼包', '20级礼包': '礼包',

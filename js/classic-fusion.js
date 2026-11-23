@@ -110,12 +110,19 @@
       }).join('');
       const pips = [0, 1, 2].map((i) => '<i class="' + (i < selected.length ? 'on' : '') + '"></i>').join('');
       const nextQuality = first ? (first.quality >= 5 ? 5 : first.quality + 1) : 0;
-      const previewLabel = first ? (first.quality >= 5 ? '黑装洗练' : (qualities[nextQuality] || '') + partLabel(first)) : '更高品质';
+      const previewLabel = first
+        ? (first.quality >= 5 ? '黑装洗练' : (window.__SSDZ_ONLINE__
+          ? (qualities[nextQuality] || '') + '装备（部位随机）'
+          : (qualities[nextQuality] || '') + partLabel(first)))
+        : '更高品质';
 
       const pickedGears = selected.map((key) => gears.find((g) => g.key === key)).filter(Boolean);
       const sameSet = pickedGears.length === 3 && State.fusionFamilyInfo ? State.fusionFamilyInfo(pickedGears) : null;
-      const previewHint = sameSet ? '同套必得：' + sameSet.family : (first ? '产物部位随首件材料' : '必得 1 件');
-      const guaranteeText = sameSet ? '同套必得该套 · 品质提升一级'
+      const online = !!window.__SSDZ_ONLINE__;
+      const previewHint = sameSet
+        ? (online ? '同套优先（2% 变异）：' : '同套必得：') + sameSet.family
+        : (first ? (online ? '产物部位从三件材料随机' : '产物部位随首件材料') : '必得 1 件');
+      const guaranteeText = sameSet ? (online ? '同套优先 · 品质提升一级' : '同套必得该套 · 品质提升一级')
         : first && first.quality >= 5 ? '同部位黑装洗练 · 材料会被消耗' : '品质提升一级 · 材料会被消耗';
 
       const pickedTags = new Set();
@@ -133,7 +140,9 @@
         '<div class="fusion-operation"><span class="fusion-cost">' + (first ? '消耗 <b>' + costOf(first) + '</b> 金松果' : '按品质 ' + [0, 1, 2, 3, 4, 5].map((q) => State.fusionCostOf(q)).join(' / ')) + '</span><button type="button" class="uc-button gold" data-fusion-action="fuse"' + (reason || busy ? ' disabled' : '') + '>开始融合</button><span class="fusion-guarantee">' + guaranteeText + '</span>' + pickedHtml + '</div></div>' +
 
         '<p class="fusion-rules"><b>规则</b>' +
-        '<span class="fusion-rules-text">3 件<em>同品质</em>装备（部位/名字可不同）→ 品质高一级；3 件同套且有下一品质档 → 必得该套；重合词条必继承。</span>' +
+        '<span class="fusion-rules-text">' + (online
+          ? '3 件<em>同品质</em>装备（部位/名字可不同）→ 品质高一级；同套优先、2% 变异；词条按星级继承。'
+          : '3 件<em>同品质</em>装备（部位/名字可不同）→ 品质高一级；3 件同套且有下一品质档 → 必得该套；重合词条必继承。') + '</span>' +
         '<button type="button" class="uc-button tiny muted" data-fusion-action="rules">详细规则</button></p>' +
         '<div class="fusion-inventory-panel"><div class="fusion-inventory-heading"><h3>选择装备<span class="fusion-pips" aria-label="已放入 ' + selected.length + ' / 3">' + pips + '</span><span class="fusion-count">已放入 ' + selected.length + '/3</span></h3><button type="button" class="uc-button tiny muted" data-fusion-action="clear"' + (selected.length ? '' : ' disabled') + '>清空材料</button><div class="fusion-pagination"><button type="button" class="uc-button tiny" data-fusion-action="previous" aria-label="上一页装备"' + (pageIndex === 0 ? ' disabled' : '') + '><i class="chev chev-l" aria-hidden="true"></i></button><span>' + (pageIndex + 1) + ' / ' + pages + '</span><button type="button" class="uc-button tiny" data-fusion-action="next" aria-label="下一页装备"' + (pageIndex + 1 >= pages ? ' disabled' : '') + '><i class="chev chev-r" aria-hidden="true"></i></button></div></div>' +
         '<div class="fusion-inventory">' + (cards || '<div class="fusion-empty">还没有可以选择的装备。<br><span>收集装备碎片，可在道具中合成装备。</span></div>') + '</div></div>' +
@@ -175,8 +184,27 @@
       const pct = (v) => Math.round(v * 100) + '%';
       const mut = (k) => pct(Math.max(0, Number(State.FUSION_MUTANT_RATE[k]) || 0));
       const same = (k) => pct(Math.max(0, Number(State.FUSION_SAME_NAME_RATE[k]) || 0));
-
       const other = (k) => pct(Math.max(0, 1 - (Number(State.FUSION_MUTANT_RATE[k]) || 0) - (Number(State.FUSION_SAME_NAME_RATE[k]) || 0)));
+
+      /* 联机版融合走 `State.mergeGears` 的 ONLINE_RULES 分支：部位从三件材料里随机取一件、
+         同套优先但 2% 变异、词条按星级排序后继承。弹窗必须按这条链写，不能沿用单机的
+         「首件材料 / 同名保名 / 50% 继承」旧文案。 */
+      if (window.__SSDZ_ONLINE__) {
+        classic.modal('融合规则', '<div class="fusion-help">' +
+          '<p><b>材料</b>3 件同品质、未穿戴、未加星标的装备，会被消耗；部位和名字可以完全不同。</p>' +
+          '<p><b>费用</b>' + fusionCostLine() + '</p>' +
+          '<p><b>产物</b>品质高一级的 1 件，部位从三件材料中随机；3 紫 → 传说橙（可镶嵌宝石）；' +
+          '3 橙 → 黑色装备；3 黑 → 同部位黑装洗练（词条重掷）。</p>' +
+          '<p><b>套装与变异</b>产物优先取随机材料所属套装的下一档；三件同套且该套有下一档时最多 2% 变异（其余 98% 仍是同套）；' +
+          '变异套为橙装「狂战」、黑装「深海 / 机器猫 / 怒战 / 狂战」。该套没有下一档时从其它套装随机。</p>' +
+          '<p><b>名称</b>产物名称由目标套装的对应部位决定，没有保名规则；变异时换成变异套的对应装备。</p>' +
+          '<p><b>词条</b>先按星级从高到低排序，前两条必继承（橙 / 黑共 3 槽）；两件以上材料共有的词条在超过槽位时随机保留槽位数条；' +
+          '剩余槽位从其余材料词条里随机继承，材料词条不够时随机补一条；每条继承后有 ' +
+          pct(State.FUSION_EXT_UPGRADE_RATE) + ' 升 1 星（上限 3 星），同名词条只保留最高星。</p>' +
+          '</div>', [{ label: '知道了', cls: 'gold' }]);
+        return;
+      }
+
       classic.modal('融合规则', '<div class="fusion-help">' +
         '<p><b>材料</b>3 件同品质、未穿戴的装备，会被消耗；部位和名字可以完全不同。</p>' +
         '<p><b>费用</b>' + fusionCostLine() + '</p>' +

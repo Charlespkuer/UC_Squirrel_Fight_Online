@@ -401,10 +401,10 @@
 
   const STATE_ICON_BASE = 'images/ui/icons/prop/prop-';
   // 主界面药丸只认自己 id 的矢量文件，并换一代 URL：WebView 对 /images/ 是 7 天 immutable，
-  // 旧地址可能还留着重导前的错贴图（经验丸/大力丸串图就是这么出来的）。
+  // 旧地址可能还留着重导前的错贴图（经验丸/大力丸串图、渐变 id 带冒号丢填色）。
   const STATE_PILL_BY_ID = new Map(STATE_PILLS.map((p) => [Number(p.id), p]));
   function pillIconSrc(id) {
-    return STATE_ICON_BASE + Number(id) + '.svg?v=3';
+    return STATE_ICON_BASE + Number(id) + '.svg?v=4';
   }
   function stateIconSrc(id) {
     if (STATE_PILL_BY_ID.has(Number(id))) return pillIconSrc(id);

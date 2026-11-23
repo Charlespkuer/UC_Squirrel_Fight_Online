@@ -606,6 +606,18 @@
     return Math.max(base, Math.min(out, n === 0 ? BOOSTED_FIRST_CAP : BOOSTED_AGAIN_CAP));
   }
 
+  // 龟甲术一次出手只判一次：多段攻击（流星锤 / 螳螂大招 / 双击）沿用同一结果，
+  // 否则每一段各掷一次会把首触 22.5% 抬到 50% 以上，并让 shellCount 一拍加多次。
+  function shellDecide(def) {
+    if (!def || !def.skills || !def.skills[7]) return null;
+    if (Number(def.silence) > 0) return null;
+    const n = Math.max(0, Math.floor(Number(def.shellCount) || 0));
+    if (!(def.shellCharges > 0) && !chance(shellChanceOf(def, n))) return 'miss';
+    if (def.shellCharges > 0) def.shellCharges--;
+    else def.shellCount = n + 1;
+    return 'block';
+  }
+
   // 绝对防御这一次出手是否发动 —— 一次出手只判一次（多段攻击整段挡下 / 整段不挡）。
   // 为什么必须「一次」：西瓜刀连击（2 段）、螳螂双击（2 段）、疾风镰刀舞（4 段）原先每一段
   function jueDuiDecide(def, weaponType) {
@@ -634,17 +646,11 @@
 
     const jueDui = opts.counter ? 'miss' : (opts.jueDuiLock === undefined ? jueDuiDecide(def, opts.weaponType) : opts.jueDuiLock);
     if (jueDui === 'block') return jueDuiBlock(def, out.dmg, out);
-    if (def.skills[7] && def.silence <= 0) {
-      const shellCount = Math.max(0, Math.floor(Number(def.shellCount) || 0));
-      const canTrigger = def.shellCharges > 0
-        || chance(shellChanceOf(def, shellCount));
-      if (canTrigger) {
-        if (def.shellCharges > 0) def.shellCharges--;
-        else def.shellCount = shellCount + 1;
-        const pct = clamp(20 + 5 * (Math.min(def.skills[7], 10) - 1), 0, 100);
-        out.guiJia = Math.round(out.dmg * pct / 100);
-        out.dmg -= out.guiJia;
-      }
+    const shell = opts.shellLock === undefined ? shellDecide(def) : opts.shellLock;
+    if (shell === 'block') {
+      const pct = clamp(20 + 5 * (Math.min(def.skills[7], 10) - 1), 0, 100);
+      out.guiJia = Math.round(out.dmg * pct / 100);
+      out.dmg -= out.guiJia;
     }
     if (skill(def, 10)) {
       const pct = clamp((5 + (Math.min(skill(def, 10), 10) - 1)) * (1 + effect(def, 34) / 100), 0, 80);
@@ -814,7 +820,7 @@
           r.crit = true;
         }
       }
-      const red = dmgReduce(def, rawDmg, { action, weaponType: opts.weaponType, jueDuiLock: opts.jueDuiLock, counter: !!opts.counter });
+      const red = dmgReduce(def, rawDmg, { action, weaponType: opts.weaponType, jueDuiLock: opts.jueDuiLock, shellLock: opts.shellLock, counter: !!opts.counter });
       let dmg = red.dmg;
 
       if (dmg > 0 && att.mods && Number(att.mods.lowHpFinalMul) > 0 && lowHpActive(att)) {
@@ -1156,13 +1162,18 @@
         if (chance(dodgeChance(att, def))) { markDodge(r, def); pushRound(r); return; }
 
         const jueDuiLock = jueDuiDecide(def, undefined);
+        const shellLock = jueDuiLock === 'block' ? 'miss' : shellDecide(def);
         let total = 0;
         for (let i = 0; i < 4; i++) {
           const rr = { dmg: 0 };
-          applyDamage(att, def, Math.round(effPower(att) * 0.36), rr, { action: 'skill', jueDuiLock: jueDuiLock });
+          applyDamage(att, def, Math.round(effPower(att) * 0.36), rr, { action: 'skill', jueDuiLock: jueDuiLock, shellLock: shellLock });
           total += rr.dmg;
           if (rr.jueDui) r.jueDui = true;
           if (rr.reboundHurt) { r.reboundHurt = (r.reboundHurt || 0) + rr.reboundHurt; r.jueDui = true; }
+          if (rr.thornsDmg) r.thornsDmg = (r.thornsDmg || 0) + rr.thornsDmg;
+          if (rr.shellAbsorb) r.shellAbsorb = (r.shellAbsorb || 0) + rr.shellAbsorb;
+          if (rr.lifesteal) r.lifesteal = (r.lifesteal || 0) + rr.lifesteal;
+          if (rr.guiJia) r.guiJia = rr.guiJia;
           if (rr.fakeDie) inheritFakeDie(r, rr);
           if (rr.fakeDie || def.hp <= 0 || att.hp <= 0) break;
         }
@@ -1289,11 +1300,12 @@
         if (chance(dodgeChance(att, def))) { markDodge(r, def); pushRound(r); return; }
 
         const jueDuiLock = jueDuiDecide(def, undefined);
+        const shellLock = jueDuiLock === 'block' ? 'miss' : shellDecide(def);
         let total = 0;
         const hits = r.multiHit || 1;
         for (let i = 0; i < hits; i++) {
           const rr = { dmg: 0 };
-          applyDamage(att, def, raw, rr, { action: 'skill', jueDuiLock: jueDuiLock });
+          applyDamage(att, def, raw, rr, { action: 'skill', jueDuiLock: jueDuiLock, shellLock: shellLock });
           total += rr.dmg;
           if (rr.jueDui) r.jueDui = true;
           if (rr.reboundHurt) { r.reboundHurt = (r.reboundHurt || 0) + rr.reboundHurt; r.jueDui = true; }
@@ -1520,10 +1532,11 @@
         if (combo) r.combo = true;
 
         const jueDuiLock = jueDuiDecide(def, w.type);
+        const shellLock = jueDuiLock === 'block' ? 'miss' : shellDecide(def);
         let total = 0, landedHits = 0, dodgedHits = 0;
         for (let i = 0; i < hits; i++) {
           const rr = { dmg: 0, crit: r.crit, crit4: r.crit4 };
-          applyDamage(att, def, raw, rr, { ignoreFakeDie: w.id === 7 || trueW(w, 'ignoreFakeDie') > 0, action: 'weapon', weaponType: w.type, jueDuiLock: jueDuiLock });
+          applyDamage(att, def, raw, rr, { ignoreFakeDie: w.id === 7 || trueW(w, 'ignoreFakeDie') > 0, action: 'weapon', weaponType: w.type, jueDuiLock: jueDuiLock, shellLock: shellLock });
           total += rr.dmg;
           if (rr.dmg > 0) landedHits++;
           if (rr.dodge) dodgedHits++;

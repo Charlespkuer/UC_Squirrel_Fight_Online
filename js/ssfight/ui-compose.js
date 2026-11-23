@@ -168,7 +168,7 @@
   function iconSrc(kind, id) {
     if (kind === 'gear') {
       if ([201, 202, 203, 204, 205, 206, 207, 208].includes(Number(id))) {
-        return 'images/ui/icons/gear/gear-' + Number(id) + '-classic.svg' + ([205, 206, 207, 208].includes(Number(id)) ? '?v=3' : '');
+        return 'images/ui/icons/gear/gear-' + Number(id) + '-classic.svg?v=4';
       }
       return 'images/ui/icons/gear/gear-' + Number(id) + '.png' + ([205, 206, 207, 208].includes(Number(id)) ? '?v=3' : '');
     }

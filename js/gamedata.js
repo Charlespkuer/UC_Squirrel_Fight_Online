@@ -231,8 +231,9 @@
 
   const stageRoleOf = (stageId, npcIndex) => isSuperStage(stageId) ? 2 : stageRoleIndex(npcIndex);
 
-  // 敌人全属性（力/敏/速/血）再 +5%，叠加无上限 —— 抑制一天之内无限刷。
-  const CHALLENGE_DAILY_STAT_STEP = 0.05;
+  // 同一关当天每通关一整次，该关敌人全属性（力/敏/速/血）再 +10%，叠加无上限；
+  // 只作用于这一关，其它关卡不受影响（次数按关卡各记一份，见 State.challengeDailyCount）。
+  const CHALLENGE_DAILY_STAT_STEP = 0.10;
   function challengeDailyMul(count) {
     const n = Math.max(0, Math.floor(Number(count) || 0));
     return 1 + CHALLENGE_DAILY_STAT_STEP * n;
@@ -242,6 +243,7 @@
     return Math.max(1, Math.round((Number(value) || 0) * challengeDailyMul(count)));
   }
 
+  // dailyCount = 本关当天已通关整轮的次数（不是全服/全关卡累计）。
   function stageFoe(npc, stageId, anim, dailyCount) {
     const st = stageNpcStats(npc);
     const n = Math.max(0, Math.floor(Number(dailyCount) || 0));
@@ -614,6 +616,14 @@
          '可随机获得1个新武器或技能,若获得已有的武器/技能则使用失败。'],
     [48, '可随机遗忘1个旧武器或技能（若无法使用天使果实就先使用它吧）。',
          '可随机遗忘1个旧武器或技能。'],
+    [77, '10个碎片可以合成1件黑色凤凰装备（顶级黑色套装）。挑战塔、无尽塔的黑色卡片、魔法袋、金宝箱与黑装融合都有几率获得。',
+         '10个碎片可以合成1件黑色凤凰装备（顶级黑色套装）。黑色卡片、魔法袋、金宝箱与黑装融合都有几率获得。'],
+    [78, '10个碎片可以合成1件黑色圣熊装备（顶级黑色套装）。挑战塔、无尽塔的黑色卡片、魔法袋、金宝箱与黑装融合都有几率获得。',
+         '10个碎片可以合成1件黑色圣熊装备（顶级黑色套装）。黑色卡片、魔法袋、金宝箱与黑装融合都有几率获得。'],
+    [79, '打开后随机获得一种：6级宝石3%、5级宝石15%、蓝色碎片15%（5~10个）、召唤证17%（1~2个）、金松果25%（300~500）、孵化点25%（100）；并额外获得黑色卡片×1。原版另有黑凤凰/黑圣熊碎片，离线版由黑色卡片承接。',
+         '打开后随机获得一种：6级宝石3%、5级宝石15%、蓝色碎片15%（5~10个）、召唤证17%（1~2个）、金松果25%（300~500）、孵化点25%（100）；并额外获得黑色卡片×1。'],
+    [80, '打开后选择凤凰或圣熊：获得对应碎片1~2个，并额外获得100/200/400金松果。挑战塔（每20/50层1张）、无尽塔（每累计50层1张，周限10）、魔法袋、金宝箱与黑装融合都有几率获得。',
+         '打开后选择凤凰或圣熊：碎片 1 个 70% / 2 个 30%，金松果 100（50%）/ 200（35%）/ 400（15%）。魔法袋必得 1 张，金宝箱与黑装融合有几率获得。'],
   ];
   function applyPropRemarkFixes() {
     const map = window.propMap;
@@ -628,6 +638,24 @@
       if (at >= 0 && row.source[at] === to) continue;
       if (at < 0 || row.source[at] !== from) { console.warn('[gamedata] 道具说明未按预期匹配，跳过：' + id); continue; }
       row.source[at] = to;
+      done++;
+    }
+    return done;
+  }
+  // 宝石说明是 7 行同模板：原版只写「橙装」，联机黑装也能镶；数值也说成「装备属性点」，
+  // 实际加的是装备主属性。逐行改 `source`，与上面的道具说明修正同一出口。
+  function applyGemRemarkFixes() {
+    const map = window.propMap;
+    if (!map || typeof map.getValue !== 'function') return 0;
+    const remarkAt = Array.isArray(map.fields) ? map.fields.indexOf('remark') : -1;
+    if (remarkAt < 0) return 0;
+    let done = 0;
+    for (let id = 101; id <= 107; id++) {
+      const row = map.getValue(id);
+      if (!row || !Array.isArray(row.source)) continue;
+      const cur = String(row.source[remarkAt] || '');
+      if (!cur.startsWith('镶嵌到橙装后')) continue;
+      row.source[remarkAt] = cur.replace('镶嵌到橙装后', '镶嵌到橙色或黑色装备后').replace('提升装备属性点X%', '提升主属性X%');
       done++;
     }
     return done;
@@ -653,6 +681,7 @@
     return done;
   }
   applyPropRemarkFixes();
+  applyGemRemarkFixes();
   syncPillRankGoodsRemarks();
 
   // 武器/技能说明的唯一出口：升级三选一、详情页、图鉴、塔内货品都读 map 的 remark。

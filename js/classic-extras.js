@@ -1348,7 +1348,7 @@
           masterProfile(m) + '</div>' +
           '<p class="extra-master-tip">已学会「师父驾到」：发动时恢复师父等级 ×4 的生命，且下一次攻击必中。<br>出师需要 20 金松果，出师后可以重新拜师。</p>',
           [{ label: '出师', cls: 'gold', run: () => {
-            O.post('/api/apprentice/leave', { rev: O.rev })
+            O.post('/api/apprentice/leave', { rev: O.rev }, { preserveMirror: true })
               .then((r) => {
                 if (!r || !r.ok) { if (c.toast) c.toast((r && r.msg) || '出师失败'); return; }
                 onlineMasterData = null;

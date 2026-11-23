@@ -603,13 +603,67 @@
     });
   }
 
+  // 上次大退/杀进程时没结算完的果实与升级三选一：登录后替玩家默认落定。
+  // 必须在 showHome 之前跑：此时 #ui 里还没有 classic-home/classic-page，补弹看门狗不会抢状态。
+  let bootChoiceSettle = null;
+  function pendingFruitChoices() {
+    try {
+      return (window.State && typeof State.pendingFruitChoices === 'function') ? State.pendingFruitChoices() : [];
+    } catch (e) { return []; }
+  }
+  function pendingWsCount() {
+    try {
+      return (window.State && typeof State.pendingWS === 'function') ? Number(State.pendingWS()) || 0 : 0;
+    } catch (e) { return 0; }
+  }
+  function settlePendingChoicesOnBoot() {
+    if (bootChoiceSettle) return bootChoiceSettle;
+    bootChoiceSettle = (async () => {
+      const notes = [];
+      if (!O.ready) return notes;
+      for (const item of pendingFruitChoices()) {
+        const c = item && Array.isArray(item.options) ? item.options[0] : null;
+        if (!item || !c) continue;
+        const label = item.fruit === 48 ? '恶魔果实' : '天使果实';
+        try {
+          const r = await O.call('applyFruitChoice', item.fruit, c.kind, c.id);
+          if (r && r.ok) notes.push('上次未完成的' + label + '已自动使用：' + (r.msg || '结算完成'));
+          else {
+            // 候选失效（例如大退期间通过别的途径拿到了同一招）时按取消消耗，别让它永远挂着。
+            try {
+              const c2 = await O.call('cancelFruitChoice', item.fruit);
+              if (c2 && c2.ok) notes.push('上次未完成的' + label + '：' + (c2.msg || '已结算'));
+            } catch (e2) {}
+          }
+        } catch (e) {
+          // 网络失败：保留待选，下次登录再结算。
+        }
+      }
+      if (pendingWsCount() > 0) {
+        try {
+          const r = await O.call('chooseWSRandom');
+          if (r && r.ok && Array.isArray(r.got) && r.got.length) {
+            notes.push('上次未选择的升级武技已自动随机：' + r.got.join('、'));
+          }
+        } catch (e) {}
+      }
+      return notes;
+    })().finally(() => { bootChoiceSettle = null; });
+    return bootChoiceSettle;
+  }
+
   const OnlineUI = {
     showLogin,
     enterGame: async function enterGame() {
       firstRunRegister = false;
       closeLogin();
+      let settleNotes = [];
+      const hasPending = pendingFruitChoices().length > 0 || pendingWsCount() > 0;
+      if (hasPending) toast('正在结算上次未完成的选择…');
+      try { settleNotes = await settlePendingChoicesOnBoot(); } catch (e) {}
       try { if (window.Main && Main.showHome) Main.showHome();
         else if (window.UI && UI.runAction) UI.runAction('home'); } catch (e) {}
+      if (settleNotes.length) setTimeout(() => toast(settleNotes.join('；')), 600);
       // 安全提醒优先于宝箱提示：让玩家先看到“新设备登录”，再继续日常流程。
       try { await showSecurityAlerts(); } catch (e) { /* 提醒失败不能挡进游戏 */ }
       // 客户端更新后的第一次启动：叠一张「更新公告」（是否弹由本地版本号决定）。
@@ -642,6 +696,7 @@
     },
   };
 
-  OnlineUI._ = { O, esc, toast, C, uiRoot, confirmBox, showLogin, passwordProblem, nameProblem, versionCompare };
+  OnlineUI._ = { O, esc, toast, C, uiRoot, confirmBox, showLogin, passwordProblem, nameProblem, versionCompare,
+    settlePendingChoicesOnBoot };
   window.OnlineUI = OnlineUI;
 })();

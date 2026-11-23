@@ -197,10 +197,10 @@
   const PROP_SVG_IDS = new Set([
     1, 2, 3, 4, 5, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23,
     24, 25, 26, 28, 29, 30, 31, 32, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46,
-    47, 48, 49, 50, 79, 82, 87, 90, 101, 102, 103, 104, 105, 106, 107,
+    47, 48, 49, 50, 51, 79, 82, 87, 90, 101, 102, 103, 104, 105, 106, 107,
   ]);
-  // 去掉内嵌白底后换一次 URL：服务端对 /images/ 发 7 天 immutable，WebView 会继续用旧图。
-  // 药丸/药剂也一起换：旧 URL 可能在 WebView 里还是重导前的错贴图（主界面/背包/使用窗共用这张表）。
+  // 带版本号的那批：静态 SVG 的渐变 id 已去掉冒号（WebView 83 的 <img> 解析不到
+  // `url(#f2015:2)`，整个渐变层按黑/透明落色），换 URL 让 1 年 immutable 的旧图失效。
   const PROP_SVG_REV = new Set([
     1, 2, 3, 4, 5, 7, 10, 11, 12, 13, 16, 17, 18, 19, 38, 41, 42, 43, 44, 50,
   ]);
@@ -208,7 +208,7 @@
   function propIconSrc(id) {
     const n = Number(id);
     const file = 'images/ui/icons/prop/prop-' + n + (PROP_SVG_IDS.has(n) ? '.svg' : '.png');
-    return PROP_SVG_REV.has(n) ? file + '?v=3' : file;
+    return PROP_SVG_REV.has(n) ? file + '?v=4' : file;
   }
   /* 把 <img src="*.svg"> 换成内联 <svg>，只给「需要按画面实际占位重设 viewBox」的地方用
    *（抽奖格子的道具图标：原版矢量各家留白差很多，同尺寸格子会一大一小）。
@@ -276,13 +276,13 @@
     if (kind === 'weapon' && trueForm) return 'images/ui/icons/weapon/weapon-true-' + id + (locked ? '-locked' : '') + '.png';
 
     if (kind === 'gear' && [201, 202, 203, 204, 205, 206, 207, 208].includes(+id)) {
-      // 205-208 换过画稿；/images/ 不带 ?v= 缓存 7 天、带 ?v= 是 1 年 immutable，必须换 URL 才能让旧缓存失效。
-      return 'images/ui/icons/gear/gear-' + (+id) + '-classic.svg' + ([205, 206, 207, 208].includes(+id) ? '?v=3' : '');
+      // 换过画稿并去掉渐变 id 的冒号；/images/ 不带 ?v= 缓存 7 天、带 ?v= 是 1 年 immutable。
+      return 'images/ui/icons/gear/gear-' + (+id) + '-classic.svg?v=4';
     }
 
     if (kind === 'prop') return propIconSrc(id);
     return 'images/ui/icons/' + dir + '/' + kind + '-' + id + (locked ? '-locked' : '') +
-      (kind === 'weapon' || kind === 'skill' ? '.svg' : '.png');
+      (kind === 'weapon' || kind === 'skill' ? '.svg?v=4' : '.png');
   }
 
   const levelLabel = (level, withPrefix) => {
@@ -756,6 +756,8 @@
           { label: '取消', cls: 'muted', run: () => done(false) },
           { label: '确认使用', cls: 'gold', run: () => done(true) },
         ], { small: true });
+      // 道具详情（4886）是 z-index:40 的整屏层；不抬高这层确认框会被它盖住，第二次使用看起来没反应。
+      if (box && box.element) box.element.classList.add('confirm-unfreeze-overlay');
       const close = box && box.element && box.element.querySelector('.modal-close');
       if (close) close.addEventListener('click', () => done(false), { once: true });
     });
@@ -1627,10 +1629,10 @@
     const exhausted=run&&run.needsRevive&&run.revives>=2;
     const cost=exhausted?'复活机会已用完':run?(run.needsRevive?'复活需1个挑战书':'不消耗挑战书'):'每轮1个挑战书';
 
-    const dailyCount=State.challengeDailyCount?State.challengeDailyCount():0;
+    const dailyCount=State.challengeDailyCount?State.challengeDailyCount(stageId):0;
     const dailyPct=Math.round((GData.challengeDailyMul(dailyCount)-1)*100);
-    const dailyHint='<br><span class="small-label">今日已通关 '+dailyCount+' 次常驻挑战：敌人全属性（力/敏/速/血）+'+
-      (dailyPct>0?('+'+dailyPct+'%'):'+0%')+'（每通关一整次再 +5%，每日 0/12 点重置）</span>';
+    const dailyHint='<br><span class="small-label">今日已通关本关 '+dailyCount+' 次：敌人全属性（力/敏/速/血）+'+
+      (dailyPct>0?('+'+dailyPct+'%'):'+0%')+'（每通关一整次再 +10%，每日 0/12 点重置；只加这一关）</span>';
     const stagePrentice = !(run && (run.masterOnly || run.needsRevive)) ? State.stagePrentice() : null;
     const prenticeHint = stagePrentice
       ? '<br><span class="small-label">出战：徒弟「' + esc(stagePrentice.name) + '」先上阵；徒弟失败后师父再上阵（不消耗挑战书，也不占用复活次数）。</span>'
@@ -1685,7 +1687,7 @@
     // maxHp 必须一起给出，否则 Sim 会把当前血量当成上限、血条显示成满血。
     const foeCarryHp=started.role==='master'&&prevRun&&Number.isFinite(prevRun.foeCarryHp)?prevRun.foeCarryHp:null;
 
-    const dailyCount=State.challengeDailyCount?State.challengeDailyCount():0;
+    const dailyCount=State.challengeDailyCount?State.challengeDailyCount(stageId):0;
     const foe=GData.stageFoe(npc,stageId,type.anim,dailyCount);
     if(foeCarryHp!=null){
       const fullHp=Math.max(1,Math.round(Number(foe.maxHp||foe.hp)||1));
@@ -2818,12 +2820,23 @@
     if ($$('.classic-modal-overlay').some(o => o.querySelector('.ws-choice-box'))) return null;
     const list = State.currentWSChoices();
     if (!list.length) {
+      // 刚升级时服务端补丁可能还没落到镜像：先等一拍再随机，否则会把本该由玩家选的组吞掉。
       if (!wsRandomPending) {
         wsRandomPending = true;
-        StateCall('chooseWSRandom').then(() => {
-          wsRandomPending = false;
-          promptLevelUpChoices();
-        }, e => { wsRandomPending = false; toast(e && e.message || '选择失败，请重试'); });
+        setTimeout(() => {
+          const sync = (window.Online && Online.ready && typeof Online.syncState === 'function')
+            ? Promise.resolve(Online.syncState()).catch(() => {}) : Promise.resolve();
+          sync.then(() => {
+            wsRandomPending = false;
+            let now = [];
+            try { now = State.currentWSChoices() || []; } catch (e) { now = []; }
+            if (now.length) { promptLevelUpChoices(); return; }
+            if (!State.pendingWS || State.pendingWS() <= 0) return;
+            StateCall('chooseWSRandom').then(() => {
+              promptLevelUpChoices();
+            }, e => { toast(e && e.message || '选择失败，请重试'); });
+          });
+        }, 1200);
       }
       return null;
     }
@@ -2853,12 +2866,15 @@
       } },
     ], { small: true, locked: true });
     m.element.classList.add('ws-choice-dialog');
+    const sig = (rows) => (rows || []).map((c) => c && c.kind + ':' + c.id).join(',');
+    let currentSig = sig(list);
     const refresh = () => {
       if (State.pendingWS() > 0 && State.currentWSChoices().length) {
         const next = State.currentWSChoices();
         m.element.querySelector('.modal-body').innerHTML = '<div class="ws-choice-box"><p class="free-point-tip">升级奖励：从下面' + next.length + ' 个里选一个学会（' +
           (State.pendingWS() > 1 ? '还有 ' + (State.pendingWS() - 1) + ' 组在后面等着' : '最后一组') + '）。</p>' +
           '<div class="ws-choice-row' + (next.length < 3 ? ' few' : '') + '">' + next.map(card).join('') + '</div></div>';
+        currentSig = sig(next);
         bindPicks();
         return;
       }
@@ -2876,6 +2892,17 @@
       }));
     }
     bindPicks();
+    // 另一个窗口/补弹看门狗把待选组结算掉、或候选被服务端刷新时，别让旧弹窗留在屏幕上点不动。
+    const guard = setInterval(() => {
+      try {
+        if (!m.element || !m.element.isConnected) { clearInterval(guard); return; }
+        if (typeof State.pendingWS !== 'function') return;
+        if (State.pendingWS() <= 0) { clearInterval(guard); m.close(); promptLevelUpChoices(); return; }
+        const now = State.currentWSChoices();
+        if (!now.length || sig(now) !== currentSig) { clearInterval(guard); m.close(); promptLevelUpChoices(); }
+      } catch (e) {}
+    }, 1000);
+    if (guard && typeof guard.unref === 'function') guard.unref();
     return m;
   }
 
@@ -3065,7 +3092,7 @@
   function socketGemDialog(key) {
     const S=State.state();
     const gems=[101,102,103,104,105,106,107].filter(id=>(S.props[id]||0)>0);
-    if(!gems.length){notice('背包里没有宝石。45级后通关关卡或在竞技场获胜有几率获得。',[{label:'返回'}]);return;}
+    if(!gems.length){notice(window.__SSDZ_ONLINE__ ? '背包里没有宝石。45级后通关关卡（整轮）有几率获得。' : '背包里没有宝石。45级后通关关卡或在竞技场获胜有几率获得。',[{label:'返回'}]);return;}
     modal('选择宝石','<div class="gem-pick">'+gems.map(id=>'<button type="button" class="help-item" data-gem="'+id+'"><span class="item-icon">'+icon('prop',id)+'</span><span>'+esc(propMap.getValue(id).name)+' ×'+S.props[id]+'</span></button>').join('')+'</div><p class="small-label">镶嵌免费；卸下 5 金松果。附加属性总档随机分到各条词条（单条最多 12 档），可先卸下再镶嵌来重随。</p>',[{label:'返回',cls:'muted'}],{small:true});
     const overlays=$$('.classic-modal-overlay'),m=overlays[overlays.length-1];
     const callGem=(window.StateCall||((name,...args)=>Promise.resolve(State[name](...args))));
@@ -3323,16 +3350,64 @@
     }
     const prop = propMap.getValue(id);
     if (prop && prop.buy === 'true') lines.push('道具商店：' + parseInt(prop.price) + ' 金松果/个，每日限购 ' + State.shopLimit(id) + ' 个');
-    const prizes = (window.ClassicExtras && ClassicExtras.lotteryPrizes) || [];
-    const mine = prizes.filter((p) => p.id === id && p.count);
-    if (mine.length) {
-      const expect = mine.reduce((n, p) => n + p.count * 0.1, 0);
-      const lotteryPrice = (window.Online && Online.meta && Online.meta.limits && Online.meta.limits.lotteryPrice)
-        || (window.GData && GData.LOTTERY_PRICE) || 25;
-      lines.push('每日抽奖：' + mine.map((p) => p.label).join('、') + '，占 ' + mine.length + '/10 格，单次抽中概率 ' + mine.length * 10 + '%，期望 ' + expect.toFixed(1) + ' 个/次（每天免费 1 次，之后 ' + lotteryPrice + ' 金松果/次）');
+    const prizes = (window.GData && Array.isArray(GData.LOTTERY_PRIZES) && GData.LOTTERY_PRIZES.length)
+      ? GData.LOTTERY_PRIZES
+      : ((window.ClassicExtras && ClassicExtras.lotteryPrizes) || []);
+    const lotteryPrice = (window.Online && Online.meta && Online.meta.limits && Online.meta.limits.lotteryPrice)
+      || (window.GData && GData.LOTTERY_PRICE) || 25;
+    const lotteryTail = '（每天免费 1 次，之后 ' + lotteryPrice + ' 金松果/次）';
+    const pctText = (v) => (v * 100).toFixed(2).replace(/\.?0+$/, '') + '%';
+    const counted = prizes.filter((p) => Number(p.id) === id && Number(p.count) > 0);
+    if (counted.length) {
+      const expect = counted.reduce((n, p) => n + Number(p.count) * 0.1, 0);
+      lines.push('每日抽奖：' + counted.map((p) => p.label).join('、') + '，占 ' + counted.length + '/10 格，单次抽中概率 ' +
+        (counted.length * 10) + '%，期望 ' + expect.toFixed(2).replace(/\.?0+$/, '') + ' 个/次' + lotteryTail);
     }
-    if ([24, 25, 26].includes(id)) lines.push('关卡掉落：' + ({ 24: '螳螂关', 25: '仙鹤关', 26: '熊猫关' })[id] + '每场胜利 45%～60%（按星级）概率掉落 1～6 个，期望约 1.6～2.1 个/场；★3-4 有 28% 几率越 1 级、★5-6 越 2 级');
-    if (id === 23) lines.push('每日礼包：每天 1 个（连续登录第 1 天 100 金松果，每多一天 +10，200 封顶；另在挑战书、英雄帖、勇气徽章、召唤证、三种超级药丸之间按日期轮换 1 个）');
+    if (id === 8) {
+      const golds = prizes.filter((p) => Number(p.id) === 8 && Number(p.gold) > 0);
+      if (golds.length) {
+        const expect = golds.reduce((n, p) => n + Number(p.gold) * 0.1, 0);
+        lines.push('每日抽奖：金松果 +' + golds.map((p) => p.gold).join(' / ') + '（' + (golds.length * 10) + '% 格），期望 ' +
+          expect.toFixed(1) + ' 个/次' + lotteryTail);
+      }
+    }
+    if (id === 15) {
+      const exps = prizes.filter((p) => Number(p.id) === 15 && Number(p.exp) > 0);
+      if (exps.length) {
+        const expect = exps.reduce((n, p) => n + Number(p.exp) * 0.1, 0);
+        lines.push('每日抽奖：经验 +' + exps.map((p) => p.exp).join(' / ') + '（各 10% 格），期望 ' +
+          expect.toFixed(1) + ' 点/次' + lotteryTail);
+      }
+    }
+    const pillSlot = prizes.find((p) => Number(p.pills) > 0);
+    if (pillSlot) {
+      const superChance = Math.max(0, Math.min(1, Number(pillSlot.superChance) || 0.05));
+      const normalIds = (window.GData && GData.NORMAL_PILLS) || [3, 4, 5, 7];
+      const superIds = (window.GData && GData.SUPER_PILLS) || [41, 42, 43, 44];
+      if (normalIds.includes(Number(id))) {
+        const chance = 0.1 * (1 - superChance) / normalIds.length;
+        lines.push('每日抽奖：随机药丸格占 1/10，其中 ' + pctText(1 - superChance) + ' 为普通药丸（力量 / 敏捷 / 速度 / 经验丸各 ' +
+          pctText(1 / normalIds.length) + '）；本道具单次约 ' + pctText(chance) + lotteryTail);
+      } else if (superIds.includes(Number(id))) {
+        const chance = 0.1 * superChance / superIds.length;
+        lines.push('每日抽奖：随机药丸格占 1/10，其中 ' + pctText(superChance) + ' 为超级药丸（四种各 ' +
+          pctText(1 / superIds.length) + '）；本道具单次约 ' + pctText(chance) + lotteryTail);
+      }
+    }
+    if ([24, 25, 26].includes(id)) {
+      const frag = (window.GData && GData.STAGE_FRAGMENT) || { base: 0.42, perStar: 0.03, min: 2, max: 5, tierUp: 0.72 };
+      const fragMul = (window.GData && Number(GData.STAGE_FRAGMENT_MUL)) || 0.88;
+      const blueMul = (window.GData && Number(GData.BLUE_SHARD_DROP_MUL)) || 0.85;
+      const rates = [1, 2, 3, 4, 5, 6].map((star) => pctText(Math.min(1, frag.base + star * frag.perStar) * fragMul));
+      const tierPct = pctText(1 - frag.tierUp);
+      const stageName = { 24: '螳螂关（1~6 关）', 25: '仙鹤关（7~12 关）', 26: '熊猫关（13~18 关）' }[id];
+      const tail = id === 24 ? '未越级时才是白色碎片'
+        : id === 25 ? '仙鹤关基础掉落绿色；3~4 关的越级也会出绿色'
+          : '熊猫关基础掉落蓝色；确认掉落另有 ' + pctText(1 - blueMul) + ' 降档 / 不掉，低档越级也会出蓝色';
+      lines.push('关卡掉落：' + stageName + '每场胜利按 1~6★ 分别为 ' + rates.join(' / ') + '，每次 ' + frag.min + '~' + frag.max +
+        ' 个；★3-4 有 ' + tierPct + ' 越 1 级、★5-6 有 ' + tierPct + ' 越 2 级；' + tail);
+    }
+    if (id === 23) lines.push('每日礼包：连续登录第 1 天 100 金松果，每多一天 +10，200 封顶；附加道具在挑战书、英雄帖、勇气徽章、召唤证、三种超级药丸共 7 种里按日期轮换，轮到挑战书时 +1（约每 7 天 1 次）。');
     if (id === 28) lines.push('创建角色时获得 1 个');
     if (id === 29) lines.push('打开「1级礼包」获得');
     if (id === 30) lines.push('打开「5级礼包」获得');
@@ -3342,37 +3417,64 @@
       ? '联机版 53、59、65 级各静默发 1 本（直接进背包，不占升级奖励卡）；使用后 8 点自由分配到力/敏/速。'
       : '离线版不随等级发放；旧库存仍可使用（8 点自由分配）。');
     if ([41, 42, 43, 44].includes(id)) lines.push('金杯商店（每天开放）：20 金杯 + 20 金松果，积分需 800，不限兑换次数');
-    if ([16, 17, 18, 19].includes(id)) lines.push('金杯商店（每天开放）：500 金杯 + 100 金松果，积分需 1500，账号限兑 1 次（不随周重置）');
+    if ([16, 17, 18, 19].includes(id)) lines.push('金杯商店：500 金杯 + 200 金松果，积分需 200，' +
+      (window.__SSDZ_ONLINE__ ? '本月限兑 1 次（每月 1 号 0 点重置）' : '账号限兑 1 次'));
     if ([21, 22].includes(id)) lines.push('金杯商店（每天开放）：100 金杯 + 100 金松果兑换 100 个，积分需 1200，每周限兑 1 次（每周一重置）');
-    if (id === 40) lines.push('天梯赛：胜利 +3 杯、落败 +1 杯，获胜有 25% 概率额外夺得 3 杯');
+    if (id === 40) lines.push('天梯赛：胜利 +3 杯、落败 +1 杯，获胜有 25% 概率额外夺得 3 杯（对手至少持有 3 杯时）');
     if (id === 51) lines.push('合成：属性碎片 ×10 + 50 金松果 → 随机 1 个力量/敏捷/速度转化丸');
     if (id === 47) lines.push('合成：天使果实种子 ×10 + 50 金松果（背包中合成）');
     if (id === 48) lines.push('合成：恶魔果实种子 ×10 + 50 金松果（背包中合成）');
-    if (id === 8) lines.push('挑战胜利：3～7 个/场；通关关卡整轮：25 个；各级礼包中也有');
+    if (id === 50) {
+      if (window.__SSDZ_ONLINE__) {
+        lines.push('无尽塔：每累计通过 10 层 1 张；单局结算铸币超过 10 再 +1 张；每周最多 10 张（周一 0 点重置），通过 100 层每周额外 +2 张（不占周上限）');
+        lines.push('每日抽奖：免费次数用完后，每次优先消耗 1 张，再扣 ' + lotteryPrice + ' 金松果');
+      } else {
+        lines.push('挑战塔：每 20 层 1 张、每 50 层再 +1 张（一次性；100 层首通改为黑装自选箱，不发卡）');
+        lines.push('无尽塔：每累计 50 层 1 张，每周最多 10 张（周一重置）');
+      }
+    }
+    if (id === 8) lines.push('挑战胜利：3～7 个/场；通关关卡整轮：25 个（超级关 35 个）；各级礼包中也有');
     if (id === 77 || id === 78) {
       const setName = id === 77 ? '凤凰' : '圣熊';
       lines.push('合成：10 个' + (id === 77 ? '黑凤凰碎片' : '黑圣熊碎片') + ' + 1000 金松果 → 1 件黑色' + setName + '装备（随机部位；未集齐时重复会重摇，最多 2 次后给缺失部位）');
-      lines.push('碎片来源：黑色卡片、魔法袋（必得 1 卡）、金宝箱（8% 黑卡 / 首开 2% 完整黑装）、黑装融合（20% 返 1 卡）');
+      const chestOdds = State.chestOtherOdds ? State.chestOtherOdds() : [];
+      const cardOdd = chestOdds.find((o) => o.key === 'card');
+      const gearOdd = chestOdds.find((o) => o.key === 'blackGear');
+      if (window.__SSDZ_ONLINE__ && cardOdd && gearOdd) {
+        lines.push('碎片来源：黑色卡片、魔法袋（必得 1 黑卡）、金宝箱（黑卡 ' + pctText(cardOdd.chance) + ' / 完整黑装 ' +
+          pctText(gearOdd.chance) + '）、黑装融合（20% 返 1 黑卡）');
+      } else {
+        lines.push('碎片来源：黑色卡片、魔法袋（必得 1 卡）、金宝箱（8% 黑卡 / 2% 完整黑装）、黑装融合（20% 返 1 卡）');
+      }
     }
     if (id === 79) {
       lines.push('金杯商店：180 积分 + 2000 金杯 + 200 金松果，账号限兑 1 次（原版天梯商店的魔法袋）');
       lines.push('打开魔法袋（各档互斥）：6级宝石 3%、5级宝石 15%、蓝色碎片 15%（5~10）、召唤证 17%（1~2）、金松果 25%（300~500）、孵化点 25%（100）' + (State.blackGearEnabled() ? '；并额外获得黑色卡片 ×1' : ''));
     }
     if (id === 80) {
-      lines.push('挑战塔：每 20 层 1 张、每 50 层再 +1 张（一次性）；第 100 层首通改为黑装自选箱（不发卡）');
-      lines.push('无尽塔：每累计 50 层 1 张，每周最多 10 张（周一重置）');
-      lines.push(window.__SSDZ_ONLINE__
-        ? '金宝箱其它奖励：15.69% 开出 1 张；魔法袋：必得 1 张；黑装融合：20% 返 1 张'
-        : '金宝箱：8% 开出 1 张；魔法袋：必得 1 张；黑装融合：20% 返 1 张');
-      lines.push('打开：选择凤凰/圣熊，获得对应碎片 1~2 个 + 100/200/400 金松果');
+      if (!window.__SSDZ_ONLINE__) {
+        lines.push('挑战塔：每 20 层 1 张、每 50 层再 +1 张（一次性）；第 100 层首通改为黑装自选箱（不发卡）');
+        lines.push('无尽塔：每累计 50 层 1 张，每周最多 10 张（周一重置）');
+        lines.push('金宝箱：8% 开出 1 张；魔法袋：必得 1 张；黑装融合：20% 返 1 张');
+      } else {
+        const chestOdds = State.chestOtherOdds ? State.chestOtherOdds() : [];
+        const cardOdd = chestOdds.find((o) => o.key === 'card');
+        lines.push('金宝箱其它奖励：' + (cardOdd ? pctText(cardOdd.chance) : '15.69%') +
+          ' 开出 1 张；魔法袋：必得 1 张；黑装融合（3 件黑装）：20% 返 1 张');
+      }
+      lines.push('打开：选择凤凰/圣熊，碎片 1 个 70% / 2 个 30%；金松果 100（50%）/ 200（35%）/ 400（15%）');
     }
-    if (id === 82) lines.push('魔法袋：有几率开出 1～2 个');
+    if (id === 82) lines.push('魔法袋：17% 开出 1～2 个');
     if (id === 89) lines.push('挑战塔第 100 层首通获得 1 个；打开后任选 1 件黑色凤凰/圣熊装备');
     if (id === 90) {
       if (window.__SSDZ_ONLINE__) {
+        const chestOdds = State.chestOtherOdds ? State.chestOtherOdds() : [];
         lines.push('升级奖励：71～90 级每升 1 级获得 1 个，共 20 个');
-        lines.push('打开：固定获得 10 点基础属性点（自动随机分配）+ 1 件随机其它奖励；其它奖励池不含属性点');
-        lines.push('其它奖励：6级宝石 7.84%、5级宝石 43.14%、金松果 29.41%、黑色卡片 15.69%、完整黑装 3.92%');
+        lines.push('打开：固定获得 ' + (Number(State.CHEST_FIXED_POINTS) || 10) + ' 点基础属性点（自动随机分配）+ 1 件随机其它奖励；其它奖励池不含属性点');
+        lines.push('其它奖励：' + (chestOdds.length
+          ? chestOdds.map((o) => o.label + ' ' + pctText(o.chance)).join('、')
+          : '6级宝石 7.84%、5级宝石 43.14%、金松果 29.41%、黑色卡片 15.69%、完整黑装 3.92%'));
+        lines.push('完整黑装分布：凤凰 / 圣熊 10%、黑狂战 30%、黑怒战 60%');
       } else {
         lines.push('升级奖励：71～90 级每升 1 级获得 1 个，共 20 个（原版 70 级以上每级 1 个，最高 90 级）');
         lines.push(State.blackGearEnabled()
@@ -3382,13 +3484,14 @@
     }
     if (id >= 101 && id <= 107) {
       const lv = id - 100;
-      if (lv <= 2) lines.push('45 级起：通关关卡 20% 几率、竞技场（经验/碎片）获胜 15% 几率获得（一级 75% / 二级 25%）');
+      if (lv <= 2) lines.push(window.__SSDZ_ONLINE__
+        ? '45 级起：通关关卡（整轮）20% 几率获得（一级 75% / 二级 25%）'
+        : '45 级起：通关关卡 20%、竞技场（经验/碎片）获胜 15% 几率获得（一级 75% / 二级 25%）');
       if (lv < 7) lines.push('合成：3 个同级 + 10 金松果，成功率 ' + Math.round(State.gemMergeRate(lv) * 100) + '%（失败有 50% 几率一颗材料降 1 级，1级则碎裂）');
-      lines.push('镶嵌：镶入橙色（3 件相同紫装融合而来）或黑色装备，主属性 +' + State.gemPercent(lv) + '%（原版曲线 5×(n²−n+2)），附加属性总增幅 ' + State.gemAffixTotal(lv) + ' 档随机分到各条词条（单条最多 12 档，拆下重镶可重随）；每件限 1 颗，镶嵌免费、卸下 5 金松果');
+      lines.push('镶嵌：镶入橙色（3 件同品质紫装融合而来）或黑色装备，主属性 +' + State.gemPercent(lv) + '%（原版曲线 5×(n²−n+2)），附加属性总增幅 ' + State.gemAffixTotal(lv) + ' 档随机分到各条词条（单条最多 12 档，拆下重镶可重随）；每件限 1 颗，镶嵌免费、卸下 5 金松果');
     }
-    const visibleLines = window.__SSDZ_ONLINE__ ? lines.filter((line) => !/挑战塔|无尽塔/.test(line)) : lines;
-    if (!visibleLines.length) visibleLines.push('当前版本暂无产出途径（图鉴预留物品）');
-    return visibleLines;
+    if (!lines.length) lines.push('当前版本暂无产出途径（图鉴预留物品）');
+    return lines;
   }
   function openGuideItem(id) {
     const prop = propMap.getValue(id);
@@ -3409,12 +3512,17 @@
     { key: 'stamina', title: '体力', text: '每5分钟恢复1点，也可以在道具中使用体力药剂。消耗体力进行战斗以获取各种奖励。' },
     { key: 'stages', title: '关卡', text: '5 级开启。消耗挑战书进行挑战，是获取金松果与装备碎片的途径。' },
     { key: 'arena', title: '竞技场', text: '10级开启经验竞技场，15级开启碎片竞技场与幻兽竞技场。竞技场通过竞技获取各种道具。' },
-    { key: 'beast', title: '幻兽', text: '村庄「幻兽牧场」孵化、编队、喂养、进化；孵化消耗 200 孵化点。幻兽竞技场用召唤证报名。' },
+    { key: 'beast', title: '幻兽', text: '村庄「幻兽牧场」孵化、编队、喂养、进化；孵化消耗 200 孵化点。幻兽竞技场报名消耗 30 体力，体力不足时用召唤证。' },
     { key: 'ladder', title: '天梯赛', text: '30 级开启，战斗中可拾取属性碎片；通过在天梯战斗来证明自己吧！' },
     { key: 'replay', title: '录像', text: '最近50场战斗保存在消息页，可通过回放进行查看。' },
-    { key: 'gems', title: '宝石', text: '45 级后通关关卡或竞技场获胜有几率获得 1~2 级宝石；3 个同级宝石 + 10 金松果可合成高一级（可能失败）。宝石可镶入橙色或黑色装备，镶嵌免费、卸下 5 金松果。' },
+    { key: 'gems', title: '宝石', text: window.__SSDZ_ONLINE__
+      ? '45 级后通关关卡（整轮）有几率获得 1~2 级宝石（20% 掉落，一级 75% / 二级 25%）；3 个同级宝石 + 10 金松果可合成高一级（可能失败）。宝石可镶入橙色或黑色装备，镶嵌免费、卸下 5 金松果。'
+      : '45 级后通关关卡或竞技场获胜有几率获得 1~2 级宝石；3 个同级宝石 + 10 金松果可合成高一级（可能失败）。宝石可镶入橙色或黑色装备，镶嵌免费、卸下 5 金松果。' },
     { key: 'tower', title: '无尽塔', text: '村庄右上角的小径进入（20 级解锁）。免门票的 Roguelike 无尽模式，可从中获取抽奖卷道具。' },
-    { key: 'fusion', title: '装备融合', text: '3 件同品质、未穿戴的装备可融合成 1 件更高品质装备，黑装可继续融合洗词条。产物部位从三件材料中随机、优先同套；词条按星级从高到低继承前两条，第三条随机。',
+    { key: 'fusion', title: '装备融合', text: '3 件同品质、未穿戴的装备可融合成 1 件更高品质装备，黑装可继续融合洗词条。' +
+      (window.__SSDZ_ONLINE__
+        ? '产物部位从三件材料中随机；同套材料约 98% 仍是同套下一档（最多 2% 变异），词条按星级继承，详见融合页「融合规则」。'
+        : '产物部位随第一件材料、优先同套；词条按星级从高到低继承前两条，第三条随机。'),
       when: () => State.blackGearEnabled() },
   ];
   // 当前要显示的词条（顺序就是页面上的阅读顺序）。

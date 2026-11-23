@@ -152,6 +152,21 @@
     return { propId: 90, reward };
   }
 
+  // 每日成长按关卡各记一份：键 = 关卡号（1..36），值 = 当天通关整轮的次数。
+  // 旧存档的全局 `count` 不折算到每关 —— 它是惩罚项，宁可归零也不让 36 关一起变难。
+  function normalizeChallengeCounts(raw) {
+    const out = {};
+    if (!object(raw)) return out;
+    const max = GData.STAGE_TYPES.length * 6;
+    for (const key of Object.keys(raw)) {
+      const stageId = Math.floor(Number(key));
+      if (!(stageId >= 1 && stageId <= max)) continue;
+      const n = Math.max(0, integer(raw[key], 0));
+      if (n > 0) out[stageId] = n;
+    }
+    return out;
+  }
+
   function normalizeSave(raw) {
     const next = Object.assign(clone(GData.NEW_PLAYER), raw);
     const now = nowMs();
@@ -420,6 +435,10 @@
       tag: String(next.master.tag || '').slice(0, 12),
       bot: next.master.bot === true,
     } : null;
+    // 没有师父就不能保留「师父驾到」：无主技能在读档时统一清掉。
+    if (!next.master) {
+      next.skills = next.skills.filter((entry) => Number(String(entry).split(':')[0]) !== MASTER_SKILL_ID);
+    }
     next.prentices = (Array.isArray(next.prentices) ? next.prentices : [])
       .filter((p) => object(p) && typeof p.name === 'string')
       .slice(0, 3)
@@ -557,7 +576,7 @@
     next.dailyStatsDate = typeof next.dailyStatsDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(next.dailyStatsDate) ? next.dailyStatsDate : '';
 
     next.challengeDaily = object(raw.challengeDaily) && validLocalDate(raw.challengeDaily.date)
-      ? { date: raw.challengeDaily.date, count: Math.max(0, integer(raw.challengeDaily.count, 0, 0)) }
+      ? { date: raw.challengeDaily.date, counts: normalizeChallengeCounts(raw.challengeDaily.counts) }
       : null;
     next.shopPurchaseDate = typeof next.shopPurchaseDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(next.shopPurchaseDate) ? next.shopPurchaseDate : '';
     next.shopPurchases = {};
@@ -1046,7 +1065,14 @@
     return { ok: true, master: S.master, learned };
   }
 
-  function clearMaster() { S.master = null; save(); return true; }
+  // 师徒关系与「师父驾到」绑定：清师父必须同时移除技能；重新拜师会再学会。
+  function clearMaster() {
+    S.master = null;
+    const at = S.skills.findIndex((s) => Number(String(s).split(':')[0]) === MASTER_SKILL_ID);
+    if (at >= 0) S.skills.splice(at, 1);
+    save();
+    return true;
+  }
 
   function addPrentice(foe) {
     if (!foe || !foe.name) return { ok: false, msg: '徒弟信息无效' };
@@ -5529,7 +5555,7 @@
     if (complete) {
       delete S.stageRuns[stageId];
 
-      noteChallengeClear();
+      noteChallengeClear(stageId);
     }
     else {
       run.npcIndex = nextNpc;
@@ -5636,20 +5662,27 @@
     if (S.dailyCounters && S.dailyCounters.date !== date) S.dailyCounters = null;
     save();
   }
-  // 叠加无上限 —— 用来抑制「一天之内无限刷常驻挑战」。
+  // 叠加无上限 —— 只压当天被反复刷的那一关，别的关卡不受牵连。
   function challengeDaily() {
     const date = localDate();
     const cur = object(S.challengeDaily) ? S.challengeDaily : null;
-    if (!cur || cur.date !== date) return { date, count: 0 };
-    return { date, count: Math.max(0, Math.floor(Number(cur.count) || 0)) };
+    if (!cur || cur.date !== date) return { date, counts: {} };
+    return { date, counts: normalizeChallengeCounts(cur.counts) };
   }
-  function challengeDailyCount() { return challengeDaily().count; }
+  function challengeDailyCount(stageId) {
+    const id = Math.floor(Number(stageId));
+    if (!(id >= 1 && id <= GData.STAGE_TYPES.length * 6)) return 0;
+    return challengeDaily().counts[id] || 0;
+  }
 
-  function noteChallengeClear() {
+  function noteChallengeClear(stageId) {
+    const id = Math.floor(Number(stageId));
+    if (!(id >= 1 && id <= GData.STAGE_TYPES.length * 6)) return 0;
     const cur = challengeDaily();
-    S.challengeDaily = { date: cur.date, count: cur.count + 1 };
+    cur.counts[id] = (cur.counts[id] || 0) + 1;
+    S.challengeDaily = { date: cur.date, counts: cur.counts };
     save();
-    return S.challengeDaily.count;
+    return S.challengeDaily.counts[id];
   }
 
   const DAILY_GIFT_EXTRAS = Object.freeze([

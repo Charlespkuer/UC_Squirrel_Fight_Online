@@ -41,8 +41,22 @@ function normalizeName(raw) {
   return out.name;
 }
 
+// 登录键里的纯数字会先按账号编号 / 玩家号解析（见 findAccount），所以昵称与这两类编号必须互斥：
+// 纯数字昵称不能等于已有编号；新分配的编号也要跳过已有昵称。前导 0 也要拦，否则 "0682" 与 682 同键。
+function numericNameConflict(name) {
+  const text = String(name == null ? '' : name);
+  if (!/^\d+$/.test(text)) return '';
+  if (text.length > 1 && text.charAt(0) === '0') return '纯数字昵称不能以 0 开头';
+  const value = Number(text);
+  if (!Number.isSafeInteger(value)) return '';
+  if (db.get('SELECT 1 AS x FROM accounts WHERE id = ?', value)) return '这个昵称和账号编号重复了，换一个吧';
+  if (db.get('SELECT 1 AS x FROM player_ids WHERE player_id = ?', value)) return '这个昵称和玩家号重复了，换一个吧';
+  return '';
+}
+
 function nameTaken(name) {
-  return !!db.get('SELECT 1 AS x FROM accounts WHERE name = ? COLLATE NOCASE LIMIT 1', String(name));
+  return !!db.get('SELECT 1 AS x FROM accounts WHERE name = ? COLLATE NOCASE LIMIT 1', String(name))
+    || !!numericNameConflict(name);
 }
 
 function nameAvailable(raw) {
@@ -50,11 +64,27 @@ function nameAvailable(raw) {
   try { name = normalizeName(raw); }
   catch (e) { return { available: false, name: '', taken: [], reason: e.message }; }
   const rows = db.all('SELECT tag FROM accounts WHERE name = ? COLLATE NOCASE ORDER BY id LIMIT 5', name);
+  const conflict = rows.length ? '' : numericNameConflict(name);
   return {
-    available: rows.length === 0, name,
+    available: rows.length === 0 && !conflict, name,
     taken: rows.map((r) => String(r.tag)),
-    reason: rows.length ? '这个昵称已经被占用了' : '',
+    reason: rows.length ? '这个昵称已经被占用了' : conflict,
   };
+}
+
+// 新账号 id / 玩家号：从 sqlite_sequence 与 MAX 之后取，跳过任何与昵称同号的数字（含自己的昵称）。
+function nextNumber(table, column, floor, name) {
+  const seq = db.get('SELECT seq FROM sqlite_sequence WHERE name = ?', table);
+  const max = db.get('SELECT MAX(' + column + ') AS m FROM ' + table);
+  let next = Math.max(Number(seq && seq.seq) || 0, Number(max && max.m) || 0, Number(floor) - 1) + 1;
+  const wanted = String(name == null ? '' : name).toLowerCase();
+  for (let i = 0; i < 1000; i++, next++) {
+    const text = String(next);
+    if (text.toLowerCase() === wanted) continue;
+    if (db.get('SELECT 1 AS x FROM accounts WHERE name = ? COLLATE NOCASE', text)) continue;
+    return next;
+  }
+  throw Object.assign(new Error('编号分配失败，请稍后再试'), { code: 'SERVER' });
 }
 
 function normalizePassword(raw) {
@@ -147,8 +177,9 @@ function register({ name, password, ip, device }) {
   const recoveryHash = sha256(recovery);
   const ts = now();
   return db.tx(() => {
-    if (nameTaken(cleanName)) {
-      throw Object.assign(new Error('这个昵称已经被占用了，换一个吧'), { code: 'CONFLICT' });
+    const conflict = numericNameConflict(cleanName);
+    if (conflict || nameTaken(cleanName)) {
+      throw Object.assign(new Error(conflict || '这个昵称已经被占用了，换一个吧'), { code: 'CONFLICT' });
     }
     // tag 只在同名里唯一；最多试 40 次，避免 09xx 段被占满时死循环。
     let tag = null;
@@ -158,15 +189,19 @@ function register({ name, password, ip, device }) {
       if (!dup) { tag = candidate; break; }
     }
     if (!tag) tag = String(db.get('SELECT COUNT(*) AS c FROM accounts WHERE name = ?', cleanName).c + 1).padStart(4, '0');
+    // 显式分配 id / 玩家号（跳过多余数字），不再依赖 AUTOINCREMENT 的下一号。
+    const id = nextNumber('accounts', 'id', 1, cleanName);
+    // findAccount 只把 100000 以下的纯数字当账号 id；超出就会和玩家号抢键。
+    if (id >= 100000) throw Object.assign(new Error('账号编号已用尽'), { code: 'UNAVAILABLE' });
     db.run(
-      `INSERT INTO accounts (name, tag, pass_hash, pass_salt, recovery_hash, created_at, last_seen, device, ip,
+      `INSERT INTO accounts (id, name, tag, pass_hash, pass_salt, recovery_hash, created_at, last_seen, device, ip,
                              reg_ip, reg_device_hash, reg_platform, reg_provider, reg_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      cleanName, tag, hash, salt, recoveryHash, ts, ts, '', String(ip || ''),
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      id, cleanName, tag, hash, salt, recoveryHash, ts, ts, '', String(ip || ''),
       String(ip || ''), String((device && device.hash) || ''), String((device && device.platform) || ''), String((device && device.provider) || ''), ts
     );
-    const row = db.get('SELECT * FROM accounts WHERE name = ? AND tag = ?', cleanName, tag);
-    db.run('INSERT INTO player_ids(account_id) VALUES (?)', row.id);
+    const row = db.get('SELECT * FROM accounts WHERE id = ?', id);
+    db.run('INSERT INTO player_ids(account_id, player_id) VALUES (?, ?)', id, nextNumber('player_ids', 'player_id', 100000, cleanName));
     devices.bind(row.id, device, ip);
     return { account: row, recoveryCode: recovery };
   });
@@ -322,8 +357,9 @@ function changeName(accountId, rawName) {
   }
   return db.tx(() => {
     // 事务内再查一次：重名判定与写入之间不能插进另一个改名。
-    if (nameTaken(name)) {
-      throw Object.assign(new Error('这个昵称已经被占用了，换一个吧'), { code: 'CONFLICT' });
+    const conflict = numericNameConflict(name);
+    if (conflict || nameTaken(name)) {
+      throw Object.assign(new Error(conflict || '这个昵称已经被占用了，换一个吧'), { code: 'CONFLICT' });
     }
     db.run('UPDATE accounts SET name = ? WHERE id = ?', name, id);
     const save = require('./game/store').rename(id, name);

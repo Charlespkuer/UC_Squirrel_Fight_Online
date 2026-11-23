@@ -3255,7 +3255,9 @@
     const save = S() || {};
     const gems = [101, 102, 103, 104, 105, 106, 107].filter((id) => (save.props && save.props[id] > 0));
     if (!gems.length) {
-      if (window.UI && UI.toast) UI.toast('背包里没有宝石。45级后通关关卡或在竞技场获胜有几率获得。');
+      if (window.UI && UI.toast) UI.toast(window.__SSDZ_ONLINE__
+        ? '背包里没有宝石。45级后通关关卡（整轮）有几率获得。'
+        : '背包里没有宝石。45级后通关关卡或竞技场获胜有几率获得。');
       return;
     }
     if (!C || !C.modal) return;
@@ -3484,7 +3486,9 @@
     const picked = sel.map((k) => all.find((g) => g.key === k)).filter(Boolean);
 
     const sameSet = picked.length === 3 && State.fusionFamilyInfo ? State.fusionFamilyInfo(picked) : null;
-    rewriteFusionPrompt(view, sameSet ? '同套必得：' + sameSet.family : '');
+    rewriteFusionPrompt(view, sameSet
+      ? (window.__SSDZ_ONLINE__ ? '同套优先（2%变异）：' : '同套必得：') + sameSet.family
+      : '');
     for (let i = 0; i < 3; i++) {
       const cell = clipOf(view, 'c' + (i + 1));
       const back = clipOf(view, 'cBack' + (i + 1));
@@ -3578,12 +3582,12 @@
     const extInherit = Math.round((Number(State.FUSION_EXT_INHERIT_RATE) || 0) * 100);
     const extUpgrade = Math.round((Number(State.FUSION_EXT_UPGRADE_RATE) || 0) * 100);
     const words = window.__SSDZ_ONLINE__ ? [
-      '选 3 件同品质的未穿戴装备，融合费用按材料品质：白 ' + fusionCostOf(0) + ' / 绿 ' + fusionCostOf(1) +
+      '选 3 件同品质的未穿戴、未加星标装备，融合费用按材料品质：白 ' + fusionCostOf(0) + ' / 绿 ' + fusionCostOf(1) +
         ' / 蓝 ' + fusionCostOf(2) + ' / 紫 ' + fusionCostOf(3) + ' / 橙 ' + fusionCostOf(4) +
         ' / 黑 ' + fusionCostOf(5) + ' 金松果。',
-      '产物部位从三件材料中随机选取；有可用变异目标时，变异概率为 2%。',
+      '产物部位从三件材料中随机选取；同套材料优先同套下一档；有可用变异目标时，变异概率为 2%。',
       '按星级从高到低继承前两条，同星级按选取材料和词条的顺序排列。',
-      '第三条从其余材料词条中随机选取；词条有机会升一星，最高三星。低品质装备按已有词条槽位继承。',
+      '第三条从其余材料词条中随机选取；每条继承后有 ' + extUpgrade + '% 概率升 1 星，最高三星。低品质装备按已有词条槽位继承。',
       '黑色装备可继续融合；同名词条只保留一条（取最高星），不会出现两行同名。',
     ] : [
       '选 3 件同品质的未穿戴装备，融合成 1 件更高品质的装备。',

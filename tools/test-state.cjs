@@ -1377,6 +1377,19 @@ test('天使/恶魔果实永远不会选中「师父驾到」', () => {
   assert.equal(S.applyFruitChoice(47, 'skill', 13).ok, false, '伪造的师父驾到候选也要拒绝');
 });
 
+test('出师/被逐出后失去「师父驾到」，无师父的旧档读档时也会清掉', () => {
+  const g = game(), S = g.State, s = S.state();
+  assert.equal(S.setMaster({ name: '师父', level: 10 }).ok, true);
+  assert.ok(s.skills.some((x) => Number(String(x).split(':')[0]) === 13), '拜师后学会师父驾到');
+  S.clearMaster();
+  assert.equal(s.master, null, '出师后不再有师父');
+  assert.equal(s.skills.some((x) => Number(String(x).split(':')[0]) === 13), false, '出师后失去师父驾到');
+  // 旧版只清关系不清技能，读档时把这种无主技能一并清掉。
+  g.storage.set(S.saveKey, JSON.stringify({ name: '老徒弟', level: 10, skills: ['13:1', '1:1'] }));
+  assert.equal(S.load(), true);
+  assert.equal(S.state().skills.join(','), '1:1', '无师父的旧档不能保留师父驾到');
+});
+
 test('果实取消也消耗：取消过的武技不再重复，遍历完一轮才清零', () => {
   const g = game(), S = g.State, s = S.state();
   s.level = 60; s.weapons = []; s.skills = [];
@@ -2234,6 +2247,38 @@ test('出手权重新表：技能 5 / 普通武器 8 / 投掷前两次 100 / 徒
   g.math.random = () => 0;
   const wround = g.Sim.simulate(meteor, dummy).rounds.find((r) => r.attacker === 0 && r.action === 'weapon');
   assert.equal(wround && wround.hits, 3, '流星锤应当有连续扔 3 次的概率并且一次行动打出 3 段');
+});
+
+test('龟甲术一次出手只判一次：多段攻击共用 shellLock，不重复掷也不重复加 shellCount', () => {
+  const g = game(), S = g.Sim;
+  const def = { skills: { 7: 6 }, effects: {}, silence: 0, shellCount: 0, shellCharges: 0, mods: null, mech: [], side: 1 };
+  const hit = S.dmgReduce(def, 100, { shellLock: 'block' });
+  assert.equal(hit.guiJia, 45, '6 级龟甲术抵消 45%');
+  assert.equal(def.shellCount, 0, '调用方已锁定时，dmgReduce 不能再掷骰或递增');
+  const miss = S.dmgReduce(def, 100, { shellLock: 'miss' });
+  assert.equal(miss.guiJia, 0, '锁定失败时整段都不挡');
+  assert.equal(def.shellCount, 0);
+  g.math.random = () => 0;
+  const fallback = S.dmgReduce(def, 100, {});
+  assert.equal(fallback.guiJia, 45, '单段路径仍按原概率触发');
+  assert.equal(def.shellCount, 1);
+  /* 真实 3 连击：首掷失败后整段都不挡；旧代码会在第 2/3 段各重掷一次。 */
+  const attacker = { name: 'A', level: 50, power: 10, agility: 10, speed: 999, hp: 100000, maxHp: 100000,
+    weapons: [{ id: 10, level: 1 }], skills: [], effects: {}, mods: { mustHitFirst: 1 }, pattern: ['weapon'] };
+  const defender = { name: 'B', level: 50, power: 1, agility: 1, speed: 1, hp: 40, maxHp: 40,
+    weapons: [], skills: [{ id: 7, level: 6 }], effects: {} };
+  let rolls = 0;
+  const realRandom = g.math.random;
+  g.math.random = () => {
+    if (String(new Error().stack).includes('shellDecide')) { rolls++; return rolls === 1 ? 0.99 : 0; }
+    return 0;
+  };
+  let battle;
+  try { battle = S.simulate(attacker, defender); } finally { g.math.random = realRandom; }
+  const meteor = battle.rounds.find((r) => r.attacker === 0 && r.action === 'weapon' && Number(r.id) === 10);
+  assert.equal(rolls, 1, '流星锤三连只应掷一次龟甲');
+  assert.ok(meteor && meteor.hits === 3, '三连击应当真的打出 3 段');
+  assert.equal(meteor.shellAbsorb, undefined, '首掷失败后三整段都不挡');
 });
 
 test('全部原版武器、技能与 NPC 的事件流都能有限结束并维持合法血量', () => {
