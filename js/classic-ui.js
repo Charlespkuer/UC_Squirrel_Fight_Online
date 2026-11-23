@@ -122,61 +122,14 @@
   }
 // 尺寸下边缘都干净（纯 CSS 百分背景在 Chrome 上切不出正确的字）。
 
-  const NUM_SHEET = 'images/ui/numbers/num_28.png', NUM_W = 26, NUM_H = 23;
-  const NUM_KEYS = '0123456789%×';
-  const numImage = new Image(); numImage.src = NUM_SHEET;
   const numeral = (n) => String(n == null ? '' : n).replace(/[^0-9%×/.,:+-]/g, '');
-  const numStretch = () => (window.Debug && Debug.numberStretch ? Debug.numberStretch() : 1.25);
-// 字距：字形宽度保持不变（沿用上面的横向拉伸），只把推进距离收紧。
-  const NUM_ADVANCE = 0.86;
 
-  function renderNumbers(root) {
-    if (!numImage.complete || !numImage.naturalWidth) return;
-    const stretch = numStretch();
-    const blocks = root?.matches?.('.num[data-text]') ? [root] : $$('.num[data-text]', root || document);
-    for (const block of blocks) {
-      const canvas = $('canvas', block), height = block.clientHeight;
-      if (!canvas || !height) continue;
-      const text = block.dataset.text;
-// --uiscale 统一缩放。这里绝不能写 canvas 的显示尺寸，否则会二次缩放。
-      const k = height / NUM_H;
-      const glyph = NUM_W * k * stretch;
-      const adv = glyph * NUM_ADVANCE;
-      const width = Math.max(1, Math.round(Math.max(0, text.length - 1) * adv + glyph));
-      if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
-      const cx = canvas.getContext('2d');
-      cx.clearRect(0, 0, width, height);
-      cx.imageSmoothingEnabled = true;
-      cx.imageSmoothingQuality = 'high';
-      for (let i = 0; i < text.length; i++) {
-        const at = NUM_KEYS.indexOf(text[i]);
-        if (at >= 0) {
-          cx.drawImage(numImage, at * NUM_W, 0, NUM_W, NUM_H, i * adv, 0, glyph, height);
-        } else {
-          cx.font = 'bold ' + Math.round(height * 0.86) + 'px "Microsoft YaHei",sans-serif';
-          cx.textAlign = 'center';
-          cx.textBaseline = 'middle';
-          cx.lineWidth = Math.max(1.5, height * 0.09);
-          cx.strokeStyle = 'rgba(94,100,106,.95)';
-          cx.fillStyle = '#fdfdfa';
-          cx.strokeText(text[i], i * adv + glyph / 2, height * 0.55);
-          cx.fillText(text[i], i * adv + glyph / 2, height * 0.55);
-        }
-      }
-      const emWidth = ((Math.max(0, text.length - 1) * adv + glyph) / height).toFixed(4);
-      block.style.setProperty('--w', emWidth + 'em');
-    }
-  }
-  function bindNumImage() {
-    if (numImage.complete && numImage.naturalWidth) renderNumbers();
-    else numImage.addEventListener('load', () => renderNumbers(), { once: true });
-  }
-  bindNumImage();
+  // 数字直接用 CSS 文本（原版位图数字条已退役）；保留入口给缩放 / 切页后的统一重排。
+  function renderNumbers() {}
 
-  function num(value, plain) {
+  function num(value) {
     const text = numeral(value);
-    if (plain) return '<span class="num plain" data-text="' + esc(text) + '" style="--n:' + text.length + '" role="img" aria-label="' + esc(text) + '"><u>' + esc(text) + '</u></span>';
-    return '<span class="num" data-text="' + esc(text) + '" style="--n:' + text.length + '" role="img" aria-label="' + esc(text) + '"><canvas></canvas><u>' + esc(text) + '</u></span>';
+    return '<span class="num plain" data-text="' + esc(text) + '" style="--n:' + text.length + '" role="img" aria-label="' + esc(text) + '"><u>' + esc(text) + '</u></span>';
   }
 
   function setNum(host, value) {
@@ -185,12 +138,8 @@
     if (host.dataset.text === text) return;
     host.dataset.text = text;
     host.style.setProperty('--n', text.length);
-    if (host.classList.contains('plain')) {
-      const u = $('u', host);
-      if (u) u.textContent = text;
-      return;
-    }
-    renderNumbers(host);
+    const u = $('u', host);
+    if (u) u.textContent = text;
   }
 
   // 原版道具库元件导出的无框矢量（`images/ui/icons/prop/prop-<id>.svg`）。
@@ -269,16 +218,21 @@
       return svg;
     }).catch(() => { if (img.isConnected) img.style.visibility = prev; return null; });
   }
-  function atlasIcon(kind, id, locked, trueForm) {
+  // 1~124 + 201~208 有原版容器导出的 `-classic.svg`；其余 id 没有对应矢量，保留旧 PNG 路径。
+  const GEAR_CLASSIC_SVG_IDS = new Set(
+    Array.from({ length: 124 }, (_, i) => i + 1).concat([201, 202, 203, 204, 205, 206, 207, 208])
+  );
+  function gearIconSrc(id) {
+    const n = Number(id) || 0;
+    return GEAR_CLASSIC_SVG_IDS.has(n)
+      ? 'images/ui/icons/gear/gear-' + n + '-classic.svg?v=4'
+      : 'images/ui/icons/gear/gear-' + n + '.png';
+  }
+  function atlasIcon(kind, id, locked) {
     // 图标按类型分了目录（images/ui/icons/<类型>/<类型>-<id>.png），而 kind 是运行时变量，
     // 所以查 ICON_DIRS 表 —— 不能再拼死路径（漏改这里会让背包/融合的图标全裂）。
     const dir = ICON_DIRS[kind] || 'misc';
-    if (kind === 'weapon' && trueForm) return 'images/ui/icons/weapon/weapon-true-' + id + (locked ? '-locked' : '') + '.png';
-
-    if (kind === 'gear' && [201, 202, 203, 204, 205, 206, 207, 208].includes(+id)) {
-      // 换过画稿并去掉渐变 id 的冒号；/images/ 不带 ?v= 缓存 7 天、带 ?v= 是 1 年 immutable。
-      return 'images/ui/icons/gear/gear-' + (+id) + '-classic.svg?v=4';
-    }
+    if (kind === 'gear') return gearIconSrc(id);
 
     if (kind === 'prop') return propIconSrc(id);
     return 'images/ui/icons/' + dir + '/' + kind + '-' + id + (locked ? '-locked' : '') +
@@ -292,25 +246,9 @@
   };
   const isTrueGear = (item) => !!item && (window.GData && GData.trueLevel ? GData.trueLevel(item.level) > 0 : Number(item.level) > 10);
 
-  const TRUE_CARD_IDS = { weapon: [1, 5, 6, 8], skill: [1, 2, 4, 5, 6, 10, 11, 12, 13, 16, 17, 24] };
-  function icon(kind, id, locked, selected, trueForm) {
-    // 真形态优先走专属贴图 —— 必须放最前面：下面「参考卡」那几条会提前 return，
-    if (trueForm && TRUE_CARD_IDS[kind] && TRUE_CARD_IDS[kind].includes(+id)) {
-      return '<img alt="" class="reference-art" src="images/ui/cards/true/' + kind + '-' + id + '.png">';
-    }
-    if (kind === 'weapon' && trueForm) return '<img alt="" src="' + atlasIcon('weapon', id, locked, true) + '">';
-
-    const reference = {
-      weapon: { learned: [1,5,7,8,9,15], locked: [2,3,4,6,10,12,13,14] },
-      skill: { learned: [2,3,4,7,9,13,15,18], locked: [1,5,6,8,10,11,12,14,17] }
-    };
-    const state = locked ? 'locked' : 'learned';
-    if (reference[kind]?.[state].includes(+id) && !selected || kind==='skill' && +id===16 && !locked && selected) {
-      return '<img alt="" class="reference-art" src="images/ui/cards/state/'+kind+'-'+id+'-'+state+'.png">';
-    }
-    const grey={weapon:[2,3,4,7,9,10],skill:[3,7,8,9,14,15,18,23]};
-    const fromReference=(locked && grey[kind]?.includes(+id)) || (!locked && kind==='skill' && [6,13].includes(+id));
-    return '<img alt="" '+(fromReference?'class="reference-art" ':'')+'src="'+(fromReference?'images/ui/cards/true/'+kind+'-'+id+'.png':atlasIcon(kind,id,locked))+'">';
+  function icon(kind, id, locked) {
+    // 选中 / 真形态由目录格的 CSS 类表达；图标只用原版矢量，不再回退卡面截图。
+    return '<img alt="" src="' + atlasIcon(kind, id, locked) + '">';
   }
   function statsHtml(stats, cls, hero) {
     const allocation = hero && hero.mode === 'setup' && typeof hero.statState === 'function' ? hero.statState() : null;
@@ -886,7 +824,7 @@
       return;
     }
     forceDomHome = false;
-    $('#ui').innerHTML = '<section class="classic-home" aria-label="松鼠大战主页"><div class="home-status"><span class="home-name">' + vipBadge() + esc(S.name) + '</span><span class="home-level">' + num(S.level, true) + '</span><span class="energy-label cartoon">体力</span><div class="uc-meter home-energy"><i></i><span class="home-energy-val">' + num(S.energy + '/' + S.maxEnergy, true) + '</span></div></div><div class="home-subbar"><span class="home-exp-label" role="img" aria-label="经验" title="经验">' + '<img alt="" class="home-exp-art" src="images/ui/icons/prop/prop-15.svg">' + '</span><div class="exp-meter"><i></i><span class="home-exp-val">' + num(S.exp + '/' + GData.nextExp(S.level), true) + '</span></div><div class="home-money">' + icon('prop',1) + '<button data-action="shop" aria-label="金松果商店">' + num(S.goldPoint, true) + '</button></div></div><div class="home-buffs" aria-label="生效中的限时用品"></div><div class="home-side"><button class="picture-button' + (dailyAttention() ? ' attention' : '') + '" data-action="daily" aria-label="活动' + (dailyAttention() ? '，有可领取的奖励' : '') + '">' + '<img alt="活动" src="images/ui/home/activity.png">' + '</button></div><button class="village-door" data-action="village" aria-label="村庄"><img alt="" src="images/ui/home/village.png"></button><nav class="home-menu" aria-label="主菜单">' + btn('道具','bag') + btn('状态','status') + btn('开始挑战','challenge','gold') + btn('消息','messages') + btn('系统','system') + '</nav></section>';
+    $('#ui').innerHTML = '<section class="classic-home" aria-label="松鼠大战主页"><div class="home-status"><span class="home-name">' + vipBadge() + esc(S.name) + '</span><span class="home-level">' + num(S.level, true) + '</span><span class="energy-label cartoon">体力</span><div class="uc-meter home-energy"><i></i><span class="home-energy-val">' + num(S.energy + '/' + S.maxEnergy, true) + '</span></div></div><div class="home-subbar"><span class="home-exp-label" role="img" aria-label="经验" title="经验">' + '<img alt="" class="home-exp-art" src="images/ui/icons/prop/prop-15.svg">' + '</span><div class="exp-meter"><i></i><span class="home-exp-val">' + num(S.exp + '/' + GData.nextExp(S.level), true) + '</span></div><div class="home-money">' + icon('prop',1) + '<button data-action="shop" aria-label="金松果商店">' + num(S.goldPoint, true) + '</button></div></div><div class="home-buffs" aria-label="生效中的限时用品"></div><div class="home-side"><button class="picture-button' + (dailyAttention() ? ' attention' : '') + '" data-action="daily" aria-label="活动' + (dailyAttention() ? '，有可领取的奖励' : '') + '">' + icon('prop', 28) + '</button></div><button class="village-door" data-action="village" aria-label="村庄"><span>村庄</span></button><nav class="home-menu" aria-label="主菜单">' + btn('道具','bag') + btn('状态','status') + btn('开始挑战','challenge','gold') + btn('消息','messages') + btn('系统','system') + '</nav></section>';
     bind($('.classic-home'),actions);buffSignature='';
     refreshHome();
     renderNumbers();
@@ -1209,7 +1147,7 @@
   function heroGearPic(g) {
     const part = ['头', '拳', '衣', '鞋'][Number(g && g.type)] || '装';
     return '<i class="hero-gear-glyph" aria-hidden="true">' + part + '</i>' +
-      '<img alt="" src="images/ui/icons/gear/gear-' + Number(g && g.id) + '.png' + ([205, 206, 207, 208].includes(Number(g && g.id)) ? '?v=3' : '') + '" ' +
+      '<img alt="" src="' + gearIconSrc(g && g.id) + '" ' +
       'onerror="this.style.display=\'none\';this.parentNode.classList.add(\'missing\')">';
   }
 
@@ -2989,8 +2927,7 @@
   }
 
   function gearImg(g) {
-
-    return '<img alt="" src="images/ui/icons/gear/gear-'+g.id+'.png'+([205, 206, 207, 208].includes(Number(g.id)) ? '?v=3' : '')+'" onerror="this.style.visibility=\'hidden\'">';
+    return '<img alt="" src="' + gearIconSrc(g.id) + '" onerror="this.style.visibility=\'hidden\'">';
   }
 
   function openGears() {
@@ -3747,7 +3684,7 @@
 
   window.UI={...legacy,renderHome,drawHomeHud,drawActor,runAction,currentScreen:()=>screen,refreshHome,renderNumbers,refreshHeader,openHeroPage,
     currentUiMode,applyUiMode,UI_MODE_LSKEY,layoutHeight,smokeSelectors,
-    classic:{page,modal,notice,btn,bind,inlineSvgIcon,icon,goldIcon,propIconSrc,statsHtml,portrait,resultModal,stageResult,home,toast,num,setNum,upgradeReward,upsHtml,pickupResult,promptLevelUpChoices,showLevelUps,wsChoiceDialog,openSupportModal,maybeSupportPrompt,supportPanelHtml,copyText,supportMeta,wireSystemFeedback,
+    classic:{page,modal,notice,btn,bind,inlineSvgIcon,icon,goldIcon,propIconSrc,gearIconSrc,statsHtml,portrait,resultModal,stageResult,home,toast,num,setNum,upgradeReward,upsHtml,pickupResult,promptLevelUpChoices,showLevelUps,wsChoiceDialog,openSupportModal,maybeSupportPrompt,supportPanelHtml,copyText,supportMeta,wireSystemFeedback,
       // 帮助页的词条：`help('gems')` 直接开到那条并高亮；`helpTerm('gems')` 取文案/标题，
       // 别的地方要引用帮助内容时走这两个，不要再抄一份文字。
       help:openHelp,helpTerm,openHeroPage,

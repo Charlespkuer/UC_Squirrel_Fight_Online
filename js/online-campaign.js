@@ -205,7 +205,12 @@
       art = { prop: 45 };
     }
     let href = '';
-    if (art.gear) href = 'images/ui/icons/gear/gear-' + art.gear + '.png';
+    if (art.gear) {
+      const c = C();
+      href = (c && typeof c.gearIconSrc === 'function')
+        ? c.gearIconSrc(art.gear)
+        : ('images/ui/icons/gear/gear-' + art.gear + '.png');
+    }
     else if (art.prop) {
       const c = C();
       href = (c && typeof c.propIconSrc === 'function')

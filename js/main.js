@@ -675,8 +675,8 @@
     drawLoading(0.25, '正在加载角色素材…');
     setStatus('加载角色素材…');
 
-    const coreSheets = ['SQ_01', 'SQ_02', 'weaponAttack', 'throwweaponAttack', 'main_e1', 'main_e2', 'main_e3',
-      'wuqi', 'wuqi2', 'jineng', 'daoju', 'jinbeidaoju', 'tudi', 'go', 'starter_effect', 'loadingp',
+    const coreSheets = ['SQ_01', 'SQ_02',
+      'wuqi', 'wuqi2', 'jineng', 'daoju', 'jinbeidaoju', 'tudi', 'go', 'loadingp',
       'fightNum_r', 'fightNum_g', 'fightNum_y', 'tilishuzi', 'energyNum', 'expNum', 'jingyanshuzi', 'num_28', 'num_36',
       'resource_1', 'resource_6', 'resource_13', 'resource_15', 'resource_16', 'resource_3', 'resource_4',
       'resource_5', 'resource_9', 'resource_10', 'resource_11', 'resource_12', 'resource_14', 'resource_2', 'resource_7', 'resource8',
@@ -686,7 +686,7 @@
     drawLoading(0.85, '正在加载界面素材…');
     setStatus('加载界面素材…');
 // 角色/特效图集必须优先于场景图集，否则同名标签会被场景图元抢走
-    Engine.pinSheets(['SQ_01', 'SQ_02', 'weaponAttack', 'throwweaponAttack']);
+    Engine.pinSheets(['SQ_01', 'SQ_02']);
     drawLoading(0.95, '准备完成');
     setStatus(window.__SSDZ_ONLINE__ ? '松鼠大战 Online' : '松鼠大战 · 怀旧单机版');
     UI.installFavicon();
@@ -1163,12 +1163,9 @@
     homeT = 0;
     const SQ = ['SQ_01', 'SQ_02'];
     const walkName = ['mainWalk1', 'mainWalk2', 'mainWalk3'].find((n) => Engine.hasAnim(n)) || 'standby';
-    homeWalk = Engine.playAnim(mainPlayer, walkName, { loop: true, fps: HOME_WALK_FPS, layer: 2, sheets: SQ });
-    if (Engine.hasAnim(walkName + '_e')) {
-      Engine.playAnim(mainPlayer, walkName + '_e', { loop: true, fps: HOME_WALK_FPS, layer: 4, sheets: ['main_e1'] });
-    }
+    Engine.playAnim(mainPlayer, walkName, { loop: true, fps: HOME_WALK_FPS, layer: 2, sheets: SQ });
   }
-  let homeBgPlayer = null, homeWalk = null;
+  let homeBgPlayer = null;
 
 
   // 这一场由谁来播：经典模式 = 原版 fight 帧（`js/ssfight/ui-fight.js`）。

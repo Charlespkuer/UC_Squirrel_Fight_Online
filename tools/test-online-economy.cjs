@@ -260,6 +260,32 @@ test('联机融合部位按三件材料抽取，变异阈值为 2%', () => {
   assert.strictEqual(new Set(uext.map((e) => e.id)).size, 3, '剩余槽位补随机词条，不能重复');
 });
 
+test('深海/机器猫 q3 与普通黑装上位进字典，融合能产出稀有与同套黑装', () => {
+  function merge(ids, draws) {
+    freshSave({ level: 90 });
+    const gear = ids.map((id) => State.addGear(id));
+    const old = Math.random; let i = 0;
+    try {
+      Math.random = () => i < draws.length ? draws[i++] : 0.5;
+      return State.mergeGears(gear.map((g) => g.key));
+    } finally { Math.random = old; }
+  }
+  assert.strictEqual(State.gearInst(189).quality, 3, '深海头饰 q3 应进字典');
+  assert.strictEqual(State.gearInst(189).setId, 48);
+  assert.strictEqual(State.gearInst(213).quality, 5, '普通黑装上位 q5 应进字典');
+  const up = merge([189, 189, 189], [0.5, 0.5, 0.5, 0.5, 0.5, 0.5]);
+  assert.strictEqual(up.ok, true, up.msg);
+  assert.strictEqual(up.gear.id, 197, '3 件深海 q3 → 深海 q4');
+  const reg = merge([149, 149, 149], [0.5, 0.5, 0.5, 0.5, 0.5, 0.5]);
+  assert.strictEqual(reg.ok, true, reg.msg);
+  assert.strictEqual(reg.gear.id, 237, '3 件浣熊橙 → 浣熊黑');
+  const mut = merge([149, 149, 149], [0.5, 0.019, 0.5, 0.5, 0.5, 0.5, 0.5]);
+  assert.strictEqual(mut.ok, true, mut.msg);
+  assert.strictEqual(mut.gear.quality, 5);
+  assert.strictEqual(mut.gear.mutant, true, '2% 变异应命中');
+  assert.ok([265, 269, 273, 277].includes(mut.gear.id), '变异目标是黑狂战/怒战/深海/机器猫之一');
+});
+
 test('属性碎片随机合成力量/敏捷/速度转化丸，不产出永久属性丸', () => {
   const s = freshSave();
   s.props[GData.CONVERT_SHARD_ID] = 20;

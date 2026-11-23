@@ -297,7 +297,7 @@
 
 
   const CHAR_FILE = { tl: 'mantis', xh: 'crane', xm: 'panda' };
-  const SQ_SHEETS = ['SQ_01', 'SQ_02', 'weaponAttack', 'throwweaponAttack'];
+  const SQ_SHEETS = ['SQ_01', 'SQ_02'];
 
   const NPC_SHEETS = { tl: ['tl'], xh: ['xh1', 'xh2'], xm: ['xm1', 'xm2'] };
   const NPC_IDLE = { tl: 'tl_rest', xh: 'xh_rest', xm: 'xm_rest' };
@@ -395,6 +395,87 @@
       }
     }
     return n;
+  }
+
+  // 外观格画稿：`gear-frames.json` 的容器帧 → 原版矢量（头 1919 / 外拳 1915 / 身体 1909 / 鞋 1912）。
+  // 强化差分靠 `classicGearFrame` 加帧，和纸娃娃同一套 frame 口径；不再走 PNG 缩略图。
+  let heroGearArtToken = 0;
+  function stopHeroGearArt(root) {
+    heroGearArtToken++;
+    if (!root) return;
+    if (root.__heroGearArtIO) {
+      try { root.__heroGearArtIO.disconnect(); } catch (e) {}
+      root.__heroGearArtIO = null;
+    }
+    if (!root.querySelectorAll) return;
+    root.querySelectorAll('[data-hero-gear-art]').forEach((host) => {
+      const view = host.__heroGearArtView;
+      host.__heroGearArtView = null;
+      if (view && typeof view.destroy === 'function') { try { view.destroy(); } catch (e) {} }
+    });
+  }
+  async function mountHeroGearArt(host, tables, token) {
+    if (!host || host.__heroGearArtDone) return;
+    const box = host.closest ? host.closest('.hero-gear-icon') : null;
+    const fallback = () => { if (box) box.classList.add('missing'); };
+    const id = Number(host.dataset.heroGearArt);
+    const tier = Math.max(1, Math.min(3, Number(host.dataset.heroTier) || 1));
+    const type = heroGearTypeOf(id);
+    const cont = tables && tables.cont && tables.cont[type] && tables.cont[type][0];
+    if (!(id > 0) || !Number.isInteger(type) || type < 0 || type > 3 || !cont) { fallback(); return; }
+    const frame = classicGearFrame({ id: id, type: type, tier: tier, ext: [] });
+    if (!(frame > 0)) { fallback(); return; }
+    host.__heroGearArtDone = true;
+    try {
+      const view = await SfRender.mountSymbol(host, cont, { frame: frame, label: '' });
+      if (token !== heroGearArtToken || !host.isConnected) {
+        try { view.destroy(); } catch (e) {}
+        return;
+      }
+      host.__heroGearArtView = view;
+      const svg = host.querySelector('svg');
+      if (svg && view && view.g && view.g.getBBox) {
+        try {
+          const bb = view.g.getBBox();
+          if (bb && bb.width > 0 && bb.height > 0) {
+            const padX = Math.max(0.4, bb.width * 0.04);
+            const padY = Math.max(0.4, bb.height * 0.04);
+            svg.setAttribute('viewBox', (bb.x - padX) + ' ' + (bb.y - padY) + ' ' +
+              (bb.width + padX * 2) + ' ' + (bb.height + padY * 2));
+            svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+          }
+        } catch (e) {}
+      }
+    } catch (e) {
+      fallback();
+    }
+  }
+  async function hydrateHeroGearArt(root) {
+    if (!root || !window.SfRender || typeof SfRender.mountSymbol !== 'function') return;
+    const tables = await loadClassicGear().catch(() => null);
+    if (!root.isConnected) return;
+    const hosts = Array.from(root.querySelectorAll('[data-hero-gear-art]'));
+    if (!hosts.length) return;
+    if (!tables) {
+      root.querySelectorAll('.hero-gear-icon').forEach((box) => box.classList.add('missing'));
+      return;
+    }
+    const token = ++heroGearArtToken;
+    const run = (host) => { mountHeroGearArt(host, tables, token); };
+    if (typeof IntersectionObserver === 'function') {
+      const scroll = root.querySelector('.hero-gear-picker-scroll');
+      const io = new IntersectionObserver((entries) => {
+        for (const ent of entries) {
+          if (!ent.isIntersecting) continue;
+          io.unobserve(ent.target);
+          run(ent.target);
+        }
+      }, { root: scroll || null, rootMargin: '240px 0px' });
+      hosts.forEach((host) => io.observe(host));
+      root.__heroGearArtIO = io;
+    } else {
+      hosts.forEach(run);
+    }
   }
 
   async function mountClassicSquirrel(host, info, opts) {
@@ -1394,19 +1475,12 @@
     } catch (e) { /* 素材入口没挂上也别让整页挂掉 */ }
     return '';
   }
-  function heroGearIcon(id, size) {
+  // 外观格走原版容器帧（`gear-frames.json` → 1919/1915/1909/1912 等符号），不请求静态 gear 图标。
+  function heroGearIcon(id, size, tier) {
     const n = Number(size) || 48;
-
-    let iconId = Number(id) || 0;
-    try {
-      if (window.UI && UI.classic && typeof UI.classic.gearIconId === 'function') {
-        const hit = UI.classic.gearIconId({ id: iconId });
-        if (hit > 0) iconId = hit;
-      }
-    } catch (e) {  }
-    return '<img alt="" loading="lazy" width="' + n + '" height="' + n +
-      '" src="images/ui/icons/gear/gear-' + iconId + '.png" ' +
-      'onerror="this.style.display=\'none\';this.parentNode.classList.add(\'missing\')">';
+    const t = Math.max(1, Math.min(3, Number(tier) || 1));
+    return '<span class="hero-gear-art" data-hero-gear-art="' + (Number(id) || 0) +
+      '" data-hero-tier="' + t + '" aria-hidden="true" style="width:' + n + 'px;height:' + n + 'px"></span>';
   }
   const HERO_PART_CHAR = ['头', '拳', '衣', '鞋'];
   function heroGearName(id) {
@@ -1690,7 +1764,7 @@
     return '<button type="button" class="hero-gear-item' + (equipped ? ' is-equipped' : '') + '"' +
       ' data-hero-gear="' + item.id + '" data-gear-part="' + item.type + '" data-hero-tier="' + tier + '"' +
       ' aria-pressed="' + (equipped ? 'true' : 'false') + '" title="' + esc(title) + '">' +
-      '<span class="hero-gear-icon" data-part="' + esc(HERO_PART_CHAR[item.type] || '装') + '">' + heroGearIcon(item.id, 48) + '</span>' +
+      '<span class="hero-gear-icon" data-part="' + esc(HERO_PART_CHAR[item.type] || '装') + '">' + heroGearIcon(item.id, 48, tier) + '</span>' +
       '<b>' + esc(item.name) + '</b><i>' + esc(HERO_PARTS[item.type] || '') + '</i>' +
       '<span class="hero-gear-zero">0 加成</span></button>';
   }
@@ -2009,6 +2083,7 @@
   function closeHeroGearPicker() {
     const el = heroGearPickerEl;
     heroGearPickerEl = null;
+    stopHeroGearArt(el);
     if (el && typeof el.__close === 'function') el.__close();
     else if (el && el.parentNode) el.parentNode.removeChild(el);
 
@@ -2044,6 +2119,7 @@
     el.setAttribute('data-hero-gear-picker', '');
     document.body.appendChild(el);
     heroGearPickerEl = el;
+    hydrateHeroGearArt(el);
     const slotsHost = el.querySelector('[data-hero-gear-slots]');
     const paintSlots = () => {
       if (!slotsHost) return;
@@ -2077,6 +2153,7 @@
     });
     const onKey = (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); close(); } };
     const close = () => {
+      stopHeroGearArt(el);
       if (el.parentNode) el.parentNode.removeChild(el);
       if (heroGearPickerEl === el) heroGearPickerEl = null;
       document.removeEventListener('keydown', onKey, true);
@@ -4375,7 +4452,7 @@
 
   window.TowerUI = { openTower, openEndless, openHeroSetup, openHeroStatus, openMintShop, openShop, openPickBuff, openPatrolToll, openPatrolDiscard,
 
-    _heroAppearanceSlots: heroAppearanceSlots };
+    _heroAppearanceSlots: heroAppearanceSlots, _openHeroGearPicker: openHeroGearPicker };
 
   if (window.TowerPlot && TowerPlot.setMainOpener) TowerPlot.setMainOpener(openEndless);
 })();

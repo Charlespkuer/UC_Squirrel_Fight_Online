@@ -205,10 +205,6 @@ html[data-ui-mode="classic"] .classic-page,
 .sf-addfriend-foot{display:flex;justify-content:flex-start;margin:14px 4px 0}
 .sf-addfriend-dialog .modal-buttons{margin-top:18px}
 
-.item-icon:has(.reference-art){border:0;background:transparent;box-shadow:none;border-radius:0;overflow:visible}
-.item-icon>.reference-art{width:100%;height:100%}
-.village-door{background:none;border:0;box-shadow:none;width:110px;height:110px;right:40px;bottom:160px}
-.village-door:before,.village-door:after{display:none}.village-door img{width:100%;height:100%;object-fit:contain}
 .home-side [data-action="daily"] img{width:95px;height:100px}.home-side{gap:18px}
 
 .home-side [data-action="chat"] img{width:95px;height:100px}

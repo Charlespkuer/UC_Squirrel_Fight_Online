@@ -65,6 +65,28 @@ const RETIRED_FILES = new Set([
   'images/atlas/resource_13.png', 'images/atlas/resource_14.png', 'images/atlas/resource_15.png',
   'images/atlas/resource_16.png', 'images/atlas/resource8.png', 'images/atlas/wuqi.png',
   'images/atlas/wuqi2.png', 'images/atlas/resource_1.png', 'images/atlas/resource_10.png',
+  /* 2026-11-23 退役的现代 canvas 战斗特效：联机经典入口只用 main_e1 与
+   * tl/xh/xm/woodman 五张三侠特效，其余 gamedict 条目不再随包。 */
+  'images/battle/fx/beatBack.png', 'images/battle/fx/die.png',
+  'images/battle/fx/effectCommonAttack.png', 'images/battle/fx/GM_01.png', 'images/battle/fx/GM_02.png',
+  'images/battle/fx/hurtRunBack.png',
+  'images/battle/fx/lightning1.png', 'images/battle/fx/lightning2.png', 'images/battle/fx/lightning3.png',
+  'images/battle/fx/lightning4.png', 'images/battle/fx/lightning5.png',
+  'images/battle/fx/main_e2.png', 'images/battle/fx/main_e3.png', 'images/battle/fx/runAround.png',
+  'images/battle/fx/skill_13.png', 'images/battle/fx/skill_14.png', 'images/battle/fx/skill_15.png',
+  'images/battle/fx/skill_15_d.png', 'images/battle/fx/skill_16_1.png', 'images/battle/fx/skill_16_2.png',
+  'images/battle/fx/skill_17.png', 'images/battle/fx/skill_18.png', 'images/battle/fx/skill_18_d_1.png',
+  'images/battle/fx/skill_18_d_2.png', 'images/battle/fx/skill_23.png', 'images/battle/fx/skill_6.png',
+  'images/battle/fx/skill_7.png', 'images/battle/fx/skill_8.png', 'images/battle/fx/skill_8_d.png',
+  'images/battle/fx/skill_9.png', 'images/battle/fx/skill_9_d.png', 'images/battle/fx/starter_effect.png',
+  'images/battle/fx/think.png', 'images/battle/fx/throwEffect.png', 'images/battle/fx/throwweaponAttack.png',
+  'images/battle/fx/weaponAttack.png', 'images/battle/fx/weaponEffect.png', 'images/battle/fx/win_effect.png',
+  'images/battle/fx/main_e1.png',
+  /* 2026-11-23 退役的位图数字条：联机经典入口只用 tanchutiao 进度条，数字改 CSS 文本。 */
+  'images/ui/numbers/energyNum.png', 'images/ui/numbers/expNum.png', 'images/ui/numbers/fightNum_g.png',
+  'images/ui/numbers/fightNum_r.png', 'images/ui/numbers/fightNum_y.png', 'images/ui/numbers/jingyanshuzi.png',
+  'images/ui/numbers/num_28.png', 'images/ui/numbers/num_36.png', 'images/ui/numbers/shade.png',
+  'images/ui/numbers/substarate0.png', 'images/ui/numbers/tilishuzi.png',
 ]);
 let retiredRefs = 0;
 const ROOTS = 'images|css|js|audio|music|fonts|assets';

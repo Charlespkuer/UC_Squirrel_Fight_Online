@@ -73,7 +73,11 @@
     return imgTag(url, 'icon', size || 56);
   }
   function gearIcon(g, size) {
-    return imgTag('images/ui/icons/gear/gear-' + g.id + '.png', 'icon', size || 56);
+    const classic = window.UI && window.UI.classic;
+    const url = classic && typeof classic.gearIconSrc === 'function'
+      ? classic.gearIconSrc(g.id)
+      : 'images/ui/icons/gear/gear-' + g.id + '.png';
+    return imgTag(url, 'icon', size || 56);
   }
 
   let equipSheetAsked = false;

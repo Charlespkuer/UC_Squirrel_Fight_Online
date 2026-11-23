@@ -230,4 +230,23 @@ scanFakeDie('幻兽协战', () => fighter({ speed: 60, power: 500, agility: 100,
 assert(fakeDieEvents > 100, '样本里应出现装死，实际 ' + fakeDieEvents);
 assert(swallowedSecondThrows > 0, '样本里应出现被装死吞掉的第二投，实际 ' + swallowedSecondThrows);
 console.log(`PASS fake die takes the next action and swallows the second throw (${fakeDieEvents} events, ${swallowedSecondThrows} swallowed)`);
+/* 装死只给先手、不给行动点：色诱的追加攻击之后，装死方不能再用行动条接一次正常行动。 */
+{
+  const fast = fighter({ level: 60, power: 300, agility: 60, speed: 1100, hp: 3000, maxHp: 3000, pattern: ['common'] });
+  const die = fighter({ level: 60, power: 100, agility: 80, speed: 1000, hp: 500, maxHp: 500,
+    skills: [{ id: 6, level: 1 }, { id: 8, level: 10 }, { id: 14, level: 10 }, { id: 17, level: 10 }] });
+  const rounds = run(2, fast, die).rounds;
+  const i = rounds.findIndex((r) => r.fakeDie && Number(r.fakeDieSide) === 1);
+  assert.ok(i >= 0, 'seed 2 必须出现装死');
+  const seq = [];
+  for (let j = i + 1; j < rounds.length; j++) {
+    const r = rounds[j];
+    if (Number(r.attacker) !== 1) break;
+    if (r.action === 'pet' || r.isRound === 0) continue;
+    seq.push(r.action + (r.id ? '#' + r.id : ''));
+  }
+  assert.deepEqual(seq, ['skill#8', 'common'],
+    '装死立即行动（色诱）消耗行动点后不能再接一次正常行动，实测 ' + seq.join('>'));
+}
+console.log('PASS fake die grants initiative without an extra action point (charm follow-up only)');
 console.log(`PASS throws, ordinary/true defensive limits, charm free action and 4 action strip (${casts} casts, ${freeActions} free, ${strips} strip)`);

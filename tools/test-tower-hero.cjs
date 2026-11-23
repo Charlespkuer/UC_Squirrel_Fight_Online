@@ -725,6 +725,29 @@ test('爬塔中换外观只改本局勇者四部位，不碰账号装备并能�
   assert.equal(run.hero.wins, 0);
 });
 
+test('勇者外观格走原版容器帧：深海/机器猫 q3 与普通黑装上位都有画稿，不再拼 PNG', () => {
+  const { c } = setup();
+  assert.equal(c.State.gearInst(189).quality, 3, '深海头饰 q3 应进字典');
+  assert.equal(c.State.gearInst(213).quality, 5, '普通黑装上位 q5 应进字典');
+  const src = fs.readFileSync(path.join(ROOT, 'js/tower-ui.js'), 'utf8').replace(/\r\n/g, '\n');
+  assert.ok(/data-hero-gear-art/.test(src), '外观格要留矢量画稿挂点');
+  assert.ok(/classicGearFrame\(\{ id: id, type: type, tier: tier/.test(src),
+    '外观格帧号要走 classicGearFrame（和纸娃娃同一套）');
+  assert.ok(!/images\/ui\/icons\/gear\/gear-' \+ iconId/.test(src), '外观格不能再用 PNG 缩略图');
+  modernUi(c);
+  c.State.setSettings({ uiMode: 'classic' });
+  const picker = c.TowerUI._openHeroGearPicker({ slots: [] });
+  assert.ok(picker, '外观装备层应能打开');
+  const cards = picker.querySelectorAll('[data-hero-gear]');
+  const arts = picker.querySelectorAll('[data-hero-gear-art]');
+  assert.ok(cards.length >= 280, '外观池至少 280 件（288 件去掉重复黑狂战/怒战）');
+  assert.equal(arts.length, cards.length, '每张外观卡都要有矢量画稿挂点');
+  assert.ok(!/gear-\d+\.png/.test(picker.innerHTML), '外观层不能出现 PNG 缩略图');
+  picker.parentNode.removeChild = () => {};
+  c.document.removeEventListener = () => {};
+  picker.__close();
+});
+
 test('勇者准备页换装按部位归位：同部位多选只保留一件，不会四格都穿同一部位', () => {
   const { c } = setup();
   modernUi(c);

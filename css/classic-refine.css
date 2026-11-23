@@ -32,8 +32,6 @@
 .collection-board .item-icon img{width:90%;height:90%}
 .catalog-cell.locked .item-icon{background-image:url("../images/ui/cells/cell-locked.svg");border:0;box-shadow:none}
 .catalog-cell.locked .item-icon img{opacity:1}
-.collection-board .item-icon:has(.reference-art){border:0;box-shadow:none;background:none;border-radius:35px;overflow:hidden}
-.item-icon>.reference-art{width:100%;height:100%;object-fit:fill}
 .collection-board .item-caption{font-family:Georgia,"SimSun","Songti SC","STSong",serif;font-size:38px;line-height:46px;color:#860d08}
 .collection-board .selected .item-caption{color:#648a28;font-family:"SimSun","Songti SC","STSong",serif;font-size:34px;font-weight:normal}
 .catalog-cell.selected .item-icon{outline:4px solid #278000;outline-offset:0;box-shadow:inset 0 0 0 6px #ecffa7;background-image:url("../images/ui/cells/cell-selected.svg");border:0}
@@ -532,8 +530,6 @@ html[data-ui-mode="classic"] .classic-page.classic-tower,
 .bag-grid .catalog-cell.sf-feedback.sf-hover{filter:drop-shadow(0 0 6px rgba(82,150,35,.95)) brightness(1.04)}
 .bag-grid .item-caption{font:36px/44px Georgia,"SimSun","Songti SC","STSong",serif;color:#8e1006}
 .bag-grid .selected .item-caption{color:#4f7c1d;font-weight:bold}
-.bag-grid .item-icon:has(.reference-art){border:0;box-shadow:none;background:none;overflow:hidden}
-.bag-grid .selected .item-icon:has(.reference-art){outline:0}
 
 .gold-price{display:inline-flex;align-items:center;gap:4px;vertical-align:-.12em;line-height:1}
 .gold-price-art{height:1.05em;width:auto;object-fit:contain;flex-shrink:0;filter:drop-shadow(0 1px 0 rgba(90,59,34,.35))}

@@ -1807,6 +1807,8 @@
         actions = 0;
       }
       const followup = pendingImmediate.shift() || null;
+      // 装死只给先手、不给行动点：这一手消耗 100 行动条，避免免费行动后再接一次正常行动。
+      if (followup && followup.reason === 'fakeDie') followup.actor.ap = Math.max(0, followup.actor.ap - 100);
       const resumeTurn = !!(followup && followup.reason === 'resumeTurn');
       let actor = followup && followup.actor;
       if (!actor) {

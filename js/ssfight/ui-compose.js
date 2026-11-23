@@ -167,10 +167,9 @@
 
   function iconSrc(kind, id) {
     if (kind === 'gear') {
-      if ([201, 202, 203, 204, 205, 206, 207, 208].includes(Number(id))) {
-        return 'images/ui/icons/gear/gear-' + Number(id) + '-classic.svg?v=4';
-      }
-      return 'images/ui/icons/gear/gear-' + Number(id) + '.png' + ([205, 206, 207, 208].includes(Number(id)) ? '?v=3' : '');
+      const classic = window.UI && window.UI.classic;
+      if (classic && typeof classic.gearIconSrc === 'function') return classic.gearIconSrc(id);
+      return 'images/ui/icons/gear/gear-' + Number(id) + '.png';
     }
     // 道具：背包/商店同一张路径表（`UI.classic.propIconSrc`，原版无框矢量优先）。
     const classic = window.UI && window.UI.classic;

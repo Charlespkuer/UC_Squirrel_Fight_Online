@@ -1491,7 +1491,10 @@
       const gemLv = g && g.gem && State.gemLevel ? State.gemLevel(g.gem.id) : 0;
       const extra = [gearNames[ty] || '', orange ? '橙装' : '', gemLv ? '宝石 Lv' + gemLv : '']
         .filter(Boolean).join(' · ');
-      return '<li><span class="sf-fd-icon gear" data-img="images/ui/icons/gear/gear-' + gid + '.png"></span>' +
+      const gearSrc = (window.UI && UI.classic && UI.classic.gearIconSrc)
+        ? UI.classic.gearIconSrc(gid)
+        : 'images/ui/icons/gear/gear-' + gid + '.png';
+      return '<li><span class="sf-fd-icon gear" data-img="' + gearSrc + '"></span>' +
         '<b' + (orange ? ' style="color:#c45a12"' : '') + '>' + esc(C && C.gearName ? C.gearName(gid) : ('装备' + gid)) + (orange ? '（橙）' : '') + '</b>' +
         '<i>' + esc(extra) + '</i></li>';
     }).join('') || '<li class="none">（未穿戴）</li>';

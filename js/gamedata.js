@@ -129,7 +129,7 @@
   // 每关一个标定系数（力/敏/速/血同乘）。按 `test-stage-balance` 的模型（推荐等级随机玩家、
   // 连战三场、每场后回 25% 血）标到约 0.6 通关率；改战斗伤害/闪避公式后必须重跑该套件再调。
   const STAGE_CAL = Object.freeze([
-    0.931, 0.899, 0.948, 0.882, 0.907, 0.890, 1.005, 1.005, 1.013, 1.071, 1.046, 1.096,
+    0.92, 0.899, 0.948, 0.882, 0.907, 0.890, 1.005, 1.005, 1.013, 1.071, 1.046, 1.096,
     0.997, 1.013, 0.940, 0.923, 0.907, 0.989, 1.054, 1.046, 1.079, 1.046, 1.063, 1.087,
     1.309, 1.260, 1.219, 1.227, 1.202, 1.276, 1.219, 1.186, 1.169, 1.137, 1.194, 1.210,
   ]);
@@ -1082,6 +1082,38 @@
   }
   registerOrangeGear();
 
+  // 原版 288 件里有两组只进了外观池、运行时字典一直没登记的装备：
+  // · 深海 / 机器猫 q3（189~196，套装 48/49）：q4 由 registerOrangeGear 注册，q3 缺；
+  // · 普通套装的黑装上位 q5（213~264，套装 54~66）：只有专门黑套 46/47/67~72 被注册。
+  // 不补进 gearMap / gearSetMap，融合池 `gearIdsOf` 永远产不出它们，装备实例也会判成 -1。
+  const RARE_GEAR_SET_IDS = Object.freeze([48, 49]);
+  const REGULAR_BLACK_SET_IDS = Object.freeze([54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66]);
+  function registerHiddenGear() {
+    const gmap = window.gearMap, smap = window.gearSetMap;
+    if (!gmap || !smap || typeof gmap.put !== 'function' || typeof smap.put !== 'function') return 0;
+    let n = 0;
+    const putSet = (id, quality, group, level, price, index) => {
+      if (smap.getValue(String(id))) return;
+      smap.put(String(id), [String(id), String(quality), String(group), String(level), '0', String(price), String(index)]);
+      n++;
+    };
+    for (const id of RARE_GEAR_SET_IDS) putSet(id, 3, id === 48 ? 23 : 24, 25, 210, id);
+    for (const id of REGULAR_BLACK_SET_IDS) putSet(id, 5, id, 60, 1400, id);
+    for (const row of GEAR_BASE) {
+      const [id, setId, quality, type, name, base] = row;
+      const rare = Number(quality) === 3 && RARE_GEAR_SET_IDS.includes(Number(setId));
+      const black = Number(quality) === 5 && REGULAR_BLACK_SET_IDS.includes(Number(setId));
+      if (!rare && !black) continue;
+      if (gmap.getValue(String(id))) continue;
+      const abilities = [0, 0, 0, 0];
+      abilities[Number(type)] = Number(base);
+      gmap.put(String(id), [String(id), abilities.join(','), String(type), name, String(setId)]);
+      n++;
+    }
+    return n;
+  }
+  registerHiddenGear();
+
 
   // H5 版 `GameDict.js` 的 gearSetMap 与 Flash 版 `MainMovie.as` 的 equipsArray
   // 必须在 gamedict 之后、State 第一次读取之前执行（本文件在 state.js 之前加载）。
@@ -1127,7 +1159,7 @@
   window.GData = { EXP_TABLE, nextExp, formatBigNumber, WS_LEVELS, ATTRIBUTE_BOOK_LEVELS, wsLimit, canLearn, passiveBonus, initialStats, STAGE_TYPES, stageTypeOf, stageStar, stageEnemyCount, isSuperStage, STAGE_NPC_HP, STAGE_NPC_EXP, STAGE_DIFFICULTY, STAGE_HP_MUL, STAGE_NPC_STAT_FIX, STAGE_REWARD_MULT, STAGE_GOLD_MULT,
     STAGE_USE_LEVEL_MODEL, STAGE_LEVEL_BAND, STAGE_ROLE_STAT, STAGE_ROLE_HP, STAGE_CAL, stageCal, STAGE_REGULAR_MUL, SUPER_HP_MUL, SUPER_TYPE_SCALE, STAGE_TYPE_SCALE, STAGE_PLAYER_CURVE,
     trueLevel, trueSkillValue, trueSkillStep, trueSkillRow, TRUE_SKILL_TABLE, TRUE_SKILL_5, TRUE_SKILL_MAX, TRUE_WEAPON_BONUS, trueWeaponBonus, TRUE_WEAPON_GLOW, trueWeaponGlow,
-    stageTargetLevel, stagePlayerStat, stagePlayerHp, stageTypeScale, CHALLENGE_DAILY_STAT_STEP, challengeDailyMul, challengeDailyScale, stageFoe, STAGE_FRAGMENT, STAGE_FRAGMENT_MUL, stageFragmentChance, stageChallengeFragmentChance, stageFragmentCount, BLUE_SHARD_DROP_MUL, stageNpcHp, stageNpcExp, stageNpcStats, AI_NAMES, NEW_PLAYER, APPRENTICE_TRIBUTE_EXP_CAP, APPRENTICE_TRIBUTE_GOLD_CAP, ARENA_TITLES, NORMAL_PILLS, SUPER_PILLS, LOTTERY_SUPER_PILL_CHANCE, LOTTERY_PRICE, LOTTERY_PRIZES, GEAR_BASE, GEAR_BASE_ATTR, BLACK_GEAR_SETS, BLACK_SHARD_SET, BLACK_CARD_ID, BLACK_BOX_ID, registerBlackGear, applyPropRemarkFixes, CONVERT_SHARD_ID, CONVERT_SHARD_NAME, CONVERT_SHARD_COST, CONVERT_FRUIT_ID, CONVERT_PILLS, registerLadderShard, EXTRA_RANK_GOODS, registerRankGoods, LEVEL_GIFT_SMALL, LEVEL_GIFT_BIG, LEVEL_GIFT_RARE, levelGift, GIFT_PACK_BOOST, giftPackPrize,
+    stageTargetLevel, stagePlayerStat, stagePlayerHp, stageTypeScale, CHALLENGE_DAILY_STAT_STEP, challengeDailyMul, challengeDailyScale, stageFoe, STAGE_FRAGMENT, STAGE_FRAGMENT_MUL, stageFragmentChance, stageChallengeFragmentChance, stageFragmentCount, BLUE_SHARD_DROP_MUL, stageNpcHp, stageNpcExp, stageNpcStats, AI_NAMES, NEW_PLAYER, APPRENTICE_TRIBUTE_EXP_CAP, APPRENTICE_TRIBUTE_GOLD_CAP, ARENA_TITLES, NORMAL_PILLS, SUPER_PILLS, LOTTERY_SUPER_PILL_CHANCE, LOTTERY_PRICE, LOTTERY_PRIZES, GEAR_BASE, GEAR_BASE_ATTR, BLACK_GEAR_SETS, RARE_GEAR_SET_IDS, REGULAR_BLACK_SET_IDS, BLACK_SHARD_SET, BLACK_CARD_ID, BLACK_BOX_ID, registerBlackGear, registerHiddenGear, applyPropRemarkFixes, CONVERT_SHARD_ID, CONVERT_SHARD_NAME, CONVERT_SHARD_COST, CONVERT_FRUIT_ID, CONVERT_PILLS, registerLadderShard, EXTRA_RANK_GOODS, registerRankGoods, LEVEL_GIFT_SMALL, LEVEL_GIFT_BIG, LEVEL_GIFT_RARE, levelGift, GIFT_PACK_BOOST, giftPackPrize,
     PETS, PET_SKILLS, PET_SKILL_RULES, petSkillValue, petSkillTrigger, petSkillInfo, PET_GRADE_EXP, PET_GRADE_COST,
     CAMPAIGN_TICKET_ID, registerCampaignTicket, campaignTicketOnSale };
 })();

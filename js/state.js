@@ -2911,11 +2911,16 @@
 
   const FUSION_SAME_NAME_RATE = { 2: 0.50, 3: 0.97 };
   const FUSION_MUTANT_RATE = { 2: 0.03, 3: 0.03 };
-  const FUSION_MUTANT_SET = 51;
-  // 紫→橙变异的目标是橙色狂战（set 52，ids 205-208）；紫→橙时 51 是紫狂战，不能用。
-  const FUSION_ORANGE_MUTANT_SET = 52;
-
+  // 变异池按目标品质分组：48/49 深海·机器猫 q3，51 狂战 q3；
+  // 45 怒战 q4，50/53 深海·机器猫 q4，52 狂战 q4；67~70 黑装四套。
+  const FUSION_MUTANT_SETS = Object.freeze([48, 49, 51]);
+  const FUSION_ORANGE_MUTANT_SETS = Object.freeze([45, 50, 52, 53]);
   const FUSION_BLACK_MUTANT_SETS = Object.freeze([67, 68, 69, 70]);
+  // 兼容旧导出；新逻辑只读上面的数组。
+  const FUSION_MUTANT_SET = 51;
+  const FUSION_ORANGE_MUTANT_SET = 52;
+  const fusionMutantSets = (quality) => Number(quality) === 5 ? FUSION_BLACK_MUTANT_SETS
+    : Number(quality) === 4 ? FUSION_ORANGE_MUTANT_SETS : FUSION_MUTANT_SETS;
   // · 继承后仍按 50% 概率升 1 星（上限 3 星）。
   // 此时产物会保留全部必继承条目 —— 这是用户“一定继承”的硬要求，不能为了槽位数丢掉词条。
   const FUSION_EXT_INHERIT_RATE = 0.5;
@@ -3054,12 +3059,11 @@
     const same = dup >= 2 ? names[0] : (names[1] === names[2] ? names[1] : null);
     if (same) {
       const hit = pool.filter((id) => gearName(id) === same);
-      const mutantSets = targetQuality === 5 ? FUSION_BLACK_MUTANT_SETS
-        : targetQuality === 4 ? [FUSION_ORANGE_MUTANT_SET] : [FUSION_MUTANT_SET];
+      const mutantSets = fusionMutantSets(targetQuality);
       const mutants = pool.filter((id) => mutantSets.includes(gearSetOf(id)));
       const others = pool.filter((id) => gearName(id) !== same);
       const key = dup === 3 ? 3 : 2;
-      // 只有目标品质确实有狂战件时才掷变异，否则那 3% 归到「随机其它」。
+      // 只有目标品质确实有变异套件时才掷变异，否则那 3% 归到「随机其它」。
       const mutantRate = mutants.length ? Math.max(0, Number(FUSION_MUTANT_RATE[key]) || 0) : 0;
       const sameRate = Math.max(0, Number(FUSION_SAME_NAME_RATE[key]) || 0);
       const roll = Math.random();
@@ -3135,8 +3139,10 @@
     const family = gearSetFamily(gs[0].id);
     const same = pool.filter((id) => gearSetFamily(id) === family);
     const others = pool.filter((id) => gearSetFamily(id) !== family);
+    const rare = others.filter((id) => FUSION_BLACK_MUTANT_SETS.includes(gearSetOf(id)));
+    const mutants = rare.length ? rare : others;
     const roll = Math.random();
-    if (others.length && roll < 0.03) return { id: pick(others), mutant: true };
+    if (mutants.length && roll < 0.03) return { id: pick(mutants), mutant: true };
     if (same.length && roll < 0.73) return { id: pick(same), mutant: false };
     return { id: pick(pool), mutant: false };
   }
@@ -3165,7 +3171,7 @@
       if (!pool.length) return { ok: false, msg: '该部位没有可融合的目标装备' };
       const family = fusionSetFamily(gearSetOf(sourceGear.id));
       const inherited = pool.filter(id => fusionSetFamily(gearSetOf(id)) === family);
-      const mutationSets = targetQuality === 5 ? FUSION_BLACK_MUTANT_SETS : targetQuality === 4 ? [FUSION_ORANGE_MUTANT_SET] : [FUSION_MUTANT_SET];
+      const mutationSets = fusionMutantSets(targetQuality);
       const alternatives = pool.filter(id => fusionSetFamily(gearSetOf(id)) !== family);
       const special = alternatives.filter(id => mutationSets.includes(gearSetOf(id)));
       const mutants = special.length ? special : alternatives;
@@ -3184,7 +3190,7 @@
     }
     if (q >= 5) {
       // 3 件黑装 → 同部位黑装（洗 3 条附加），20% 额外返 1 张黑色卡片。
-      // 黑装只能从碎片/宝箱/自选箱获得，不能由橙装融合出来。
+      // 3 橙 → 黑在下面的 q===4 分支；这里只处理 3 黑洗练。
       const target = pickBlackMergeTarget(gs, part);
       if (target == null) return { ok: false, msg: '这个部位还没有可融合的黑装' + partName + '。' };
       S.goldPoint -= cost;
@@ -5314,7 +5320,10 @@
     gearSetMap.each((id, set) => {
       const lv = Number(set && set.level);
 
-      if (set && Number.isFinite(lv) && lv <= level && lv >= minSetLevel && Number(set.quality) < 4) {
+      // 48/49（深海·机器猫 q3）只从融合变异产出，不进随机对手池；
+      // 否则同等级 NPC 会多抽到这两套，征战 / 关卡的胜率标定跟着漂。
+      if (set && Number.isFinite(lv) && lv <= level && lv >= minSetLevel &&
+          Number(set.quality) < 4 && ![48, 49].includes(Number(id))) {
         sets.push({ id: Number(id), level: lv, quality: parseInt(set.quality) || 0 });
       }
     });
@@ -6459,7 +6468,8 @@
     gearInst, myGears, wear, unwear, sellGear, gearSellPrice, gearSellRange, gearQuality, composeGear, mergeGears, addGear, grantStarterGear, setTutorialStep, extText, extTextForGear, extExtraText, extExtraTextForGear, randomExt, randomExtForQuality,
     blackGearEnabled, isBlackGearId, BLACK_PROP_IDS,
     gearBaseAttr, rollGearAttr, gearCostOf, fusionCostOf, gearAttrText, GEAR_ATTR_JITTER,
-    FUSION_SAME_NAME_RATE, FUSION_MUTANT_RATE, FUSION_MUTANT_SET, FUSION_ORANGE_MUTANT_SET, FUSION_EXT_UPGRADE_RATE,
+    FUSION_SAME_NAME_RATE, FUSION_MUTANT_RATE, FUSION_MUTANT_SET, FUSION_ORANGE_MUTANT_SET,
+    FUSION_MUTANT_SETS, FUSION_ORANGE_MUTANT_SETS, FUSION_BLACK_MUTANT_SETS, FUSION_EXT_UPGRADE_RATE,
     FUSION_EXT_INHERIT_RATE, FUSION_EXT_SLOTS,
     toggleGearStar, isGearStarred, gearsInDisplayOrder,
     gemLevel, gemPercent, gemMergeRate, rollGemDrop, mergeGems, socketGem, unsocketGem, canSocketGem, gemAffixTotal, gemUnitsForGear, rollGemAffixUnits, normalizeGemUnits, attachmentValue, GEM_AFFIX_TOTALS, GEM_AFFIX_CAP,
