@@ -1823,8 +1823,25 @@
     setTimeout(() => { if (current === page) { try { applyTab(); } catch (e) {} } }, 30);
   }
 
+  let iconTableReady = false;
   async function loadIconTable() {
-    try { await SfRender.loadExtra('tags-wsicon.json'); } catch (e) { if (window.__errs) window.__errs.push('wsicon: ' + (e && e.message)); }
+    if (iconTableReady) return true;
+    try {
+      await SfRender.loadExtra('tags-wsicon.json');
+      iconTableReady = true;
+    } catch (e) { if (window.__errs) window.__errs.push('wsicon: ' + (e && e.message)); }
+    return iconTableReady;
+  }
+  // 武器 / 技能格子要 icons，状态页首屏不需要：挂好后空闲再拉，别把 1.2MB 图标包挡在首屏前面。
+  function warmIconTable(view) {
+    const conn = (window.navigator && navigator.connection) || {};
+    if (conn.saveData) return;
+    const run = () => {
+      if (!current || current.view !== view || iconTableReady) return;
+      void loadIconTable();
+    };
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 3000 });
+    else setTimeout(run, 1200);
   }
 
   // ⚠ 复刻曾经给"未获得"单独补过一条 DOM 名字条（`.sf-cellname`），2026-10 用户口径
@@ -1915,7 +1932,14 @@
     current.gridPage = 0;
     stopAt(current.view, PAGE_FRAME[which] || 1);
     wireTabs();
-    if (which === 'status') fillValues(current.view);
+    if (which === 'status') { fillValues(current.view); applyTab(); return; }
+    // 图标包还没到：先把页框切过去，包到了再补格子；首屏（状态页）不再被它挡住。
+    if (!iconTableReady) {
+      const view = current.view;
+      showGridParts(true);
+      loadIconTable().then(() => { if (current && current.view === view && current.tab === which) applyTab(); });
+      return;
+    }
     applyTab();
   }
 
@@ -2243,7 +2267,8 @@
     await SfRender.loadExtra('tags-status.json');
     openTrace = 'bundle-status mine=' + mine + ' seq=' + seq;
 
-    await loadIconTable();
+    const initialTab = (o.tab === 'weapons' || o.tab === 'skills') ? o.tab : 'status';
+    if (initialTab !== 'status') await loadIconTable();
 
     try { await SfRender.loadExtra('tags-gear.json'); } catch (e) {}
     // 不要自己给 3362 补字，直接用关卡「挑战它」那一页的返回键）。3911 在挑战包里。
@@ -2256,7 +2281,6 @@
     });
     if (mine !== seq || host.isConnected === false) { view.destroy(); return false; }
     openTrace = 'mounted';
-    const initialTab = (o.tab === 'weapons' || o.tab === 'skills') ? o.tab : 'status';
     current = { view: view, container: host, tab: initialTab, gridPage: 0,
 
       friend: o.friend || null, hero: o.hero || null, backTo: o.backTo || null, overlay: !!o.overlay };
@@ -2273,6 +2297,7 @@
       if (initialTab !== 'status') setTab(initialTab);
       else applyTab();
     } catch (e) { if (window.__errs) window.__errs.push('status initial tab: ' + (e && e.message)); }
+    if (initialTab === 'status') warmIconTable(view);
 
     current.timer = setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return;

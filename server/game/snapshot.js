@@ -29,17 +29,6 @@ function currentSnapshot(accountId, mode) {
   return row ? hydrate(row) : null;
 }
 
-// 只要「当前快照是哪一条」的元数据，不解析 fighter JSON。
-function currentSnapshotMeta(accountId, mode) {
-  const row = db.get(
-    'SELECT id, level, revision, created_at FROM battle_snapshots WHERE account_id = ? AND mode = ? AND is_current = 1 ORDER BY level DESC, revision DESC LIMIT 1',
-    Number(accountId), mode || 'classic'
-  );
-  return row ? {
-    id: String(row.id), level: Number(row.level), revision: Number(row.revision), createdAt: Number(row.created_at),
-  } : null;
-}
-
 function snapshotById(id) {
   const row = db.get('SELECT * FROM battle_snapshots WHERE id = ?', String(id));
   return row ? hydrate(row) : null;
@@ -227,4 +216,4 @@ function renameCurrent(accountId, mode, name) {
   return true;
 }
 
-module.exports = { ensureCurrent, currentSnapshot, currentSnapshotMeta, snapshotById, snapshotByIds, candidates, historical, renameCurrent };
+module.exports = { ensureCurrent, currentSnapshot, snapshotById, snapshotByIds, candidates, historical, renameCurrent };

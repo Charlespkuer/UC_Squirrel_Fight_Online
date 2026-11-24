@@ -633,7 +633,7 @@
     container.appendChild(art);
     mountPetArt(art, pet);
   }
-  function wireBeastChoose(view, page, container) {
+  function wireBeastChoose(view, page, container, quiet) {
     preparePetPage(view, 'title1 title2 c1 c2 c3 c4 c5 c6 text1 text2 text3 text4 text5 text6 left right page button1');
     const picker = petChooser;
     if (!picker) { wireClickable(clipOf(view, 'button1'), backBeast); return; }
@@ -645,16 +645,25 @@
     setTextByName(view, 'page', picker.page + '/' + pages);
     for (let i = 1; i <= 6; i++) {
       const pet = picker.list[(picker.page - 1) * 6 + i - 1];
+      const cell = clipOf(view, 'c' + i);
       setTextByName(view, 'text' + i, pet ? pet.name : '');
-      if (pet) paintPetCell(view, 'c' + i, pet, container, () => picker.choose(pet));
+      if (pet) { setVisible(cell, true); paintPetCell(view, 'c' + i, pet, container, () => picker.choose(pet)); }
       else setVisible(clipOf(view, 'c' + i), false);
     }
     const left = clipOf(view, 'left'), right = clipOf(view, 'right');
-    wireClickable(left, () => { if (picker.page > 1) { picker.page--; openPage('beast-choose'); } }, { hover: 1 });
-    wireClickable(right, () => { if (picker.page < pages) { picker.page++; openPage('beast-choose'); } }, { hover: 1 });
+    wireClickable(left, () => { if (picker.page > 1) { picker.page--; repaintChooser(); } }, { hover: 1 });
+    wireClickable(right, () => { if (picker.page < pages) { picker.page++; repaintChooser(); } }, { hover: 1 });
     setVisible(left, picker.page > 1);
     setVisible(right, picker.page < pages);
-    wireClickable(clipOf(view, 'button1'), picker.back || backBeast);
+    if (!quiet) wireClickable(clipOf(view, 'button1'), picker.back || backBeast);
+  }
+  // 翻页只换 6 个格子：4381 整页（208 个放置）与 6 颗 4280 全部重挂太贵，旧页面原地重画即可。
+  function repaintChooser() {
+    if (!current || current.key !== 'beast-choose' || !petChooser) return false;
+    clearPetArt(current.container);
+    try { wireBeastChoose(current.view, current.page, current.container, true); }
+    catch (e) { if (window.__errs) window.__errs.push('village beast-choose: ' + (e && e.message)); return false; }
+    return true;
   }
 
   function alignBeastHint(view, container) {
@@ -683,10 +692,10 @@
     const str = (box.lines || []).map((line) => line && line.tx != null ? line.tx : '').join('\n');
     if (window.SfRender && SfRender.setText) SfRender.setText(textNode, str);
   }
-  function wireBeast(view, page, container) {
+  function wireBeast(view, page, container, quiet) {
     const t = T();
     clearPetArt(container);
-    showBuildingLevel(container, 'beast', '幻兽牧场', 'left:18px;top:96px');
+    if (!quiet) showBuildingLevel(container, 'beast', '幻兽牧场', 'left:18px;top:96px');
     const list = ensureSelectedPet();
     const cap = Math.max(1, Number((State.state() || {}).petsCapacity) || 6);
     // 格子数按「牧场容量」算，不按已有幻兽数算：空位也要画出来。
@@ -727,7 +736,8 @@
           hidePetLevel(cell);
           wireClickable(cell, () => { selectedPetKey = pet.key; openPetDetail(pet); });
 
-          if (cell.g) {
+          if (cell.g && !cell.__beastHover) {
+            cell.__beastHover = true;
             cell.g.addEventListener('mouseenter', () => hidePetLevel(cell));
             cell.g.addEventListener('mouseleave', () => hidePetLevel(cell));
           }
@@ -771,8 +781,9 @@
     setVisible(left, beastPage > 1);
     setVisible(right, beastPage < pageCount);
     // 3156 的第 2 帧是空帧：悬停必须保持第 1 帧，否则箭头会“消失”。
-    wireClickable(left, () => { if (beastPage > 1) { beastPage--; openPage('beast'); } }, { hover: 1 });
-    wireClickable(right, () => { if (beastPage < pageCount) { beastPage++; openPage('beast'); } }, { hover: 1 });
+    wireClickable(left, () => { if (beastPage > 1) { beastPage--; repaintBeast(); } }, { hover: 1 });
+    wireClickable(right, () => { if (beastPage < pageCount) { beastPage++; repaintBeast(); } }, { hover: 1 });
+    if (quiet) return;
     wireClickable(clipOf(view, 'button5'), backToVillage);
     wireClickable(clipOf(view, 'button1'), openHatch);
     wireClickable(clipOf(view, 'button2'), openTeam);
@@ -780,6 +791,14 @@
     wireClickable(clipOf(view, 'button4'), openEvolve);
     wireClickable(clipOf(view, 'levelup'), () => openPage('beast-up'));
     showNote(container, PAGES.beast.note);
+  }
+  // 同 repaintChooser：翻页只重画 6 个格子，不拆 4381 整页、不重拉 tags-summons。
+  function repaintBeast() {
+    if (!current || current.key !== 'beast') return false;
+    clearPetArt(current.container);
+    try { wireBeast(current.view, current.page, current.container, true); }
+    catch (e) { if (window.__errs) window.__errs.push('village beast: ' + (e && e.message)); return false; }
+    return true;
   }
 
 

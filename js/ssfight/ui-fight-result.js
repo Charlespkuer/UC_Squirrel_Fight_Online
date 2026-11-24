@@ -496,53 +496,18 @@
         });
       };
       const actions = actionList(options);
-      const choose = index => {
-        if (record.settled || current !== record || !host.isConnected) return false;
-        if (!Number.isInteger(index) || !actions[index] || actions[index].disabled === true) return false;
-        record.settled = true;
-        const action = actions[index]; destroy();
-        if (action && typeof action.run === 'function') action.run();
-        return true;
-      };
-      record.actions = actions; record.choose = choose;
-      function button(label, centerX, centerY, run, name, disabled, width) {
-        const clip = view.attachChild('3801', 1, name);
-        const measured = clip.g.getBBox();
-        const box = measured.width > 30 && measured.height > 5 ? measured : { x: 0, y: -.02, width: 67.3, height: 19.9 };
-        const midX = box.x + box.width / 2, midY = box.y + box.height / 2;
-        const scale = Math.min(1, (width || 76) / box.width);
-        clip.setExtraTransform('translate(' + (centerX + offset[0] - midX * scale) + ',' +
-          (centerY + offset[1] - midY * scale) + ') scale(' + scale + ')');
-        const text = node('text', { x: midX, y: midY + 3.5, 'text-anchor': 'middle', 'font-family': 'SimHei,Microsoft YaHei,sans-serif', 'font-size': 10, fill: '#53341e', 'pointer-events': 'none' });
-        text.textContent = label; clip.g.appendChild(text);
-        clip.g.setAttribute('role', 'button'); clip.g.setAttribute('tabindex', disabled ? '-1' : '0'); clip.g.setAttribute('aria-label', label);
-        if (disabled) { clip.g.setAttribute('aria-disabled', 'true'); clip.g.style.opacity = '.45'; }
-        const t = window.SfUiMain && SfUiMain.toolkit;
-        if (t) t.popWrap(clip);
-        if (window.SfUiFeedback && !disabled) SfUiFeedback.bind(clip.g, { shell: () => clip.getContentHost() });
-        const fire = event => {
-          if (event && event.stopPropagation) event.stopPropagation();
-          if (record.settled || !host.isConnected || disabled) return;
-          if (window.SfUiFeedback) SfUiFeedback.tap(clip.g, run, { delay: 0, press: false }); else run();
-        };
-        clip.g.addEventListener('click', fire);
-        clip.g.addEventListener('keydown', e => { if (!e.repeat && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); fire(e); } });
-      }
-      const rankAction = action => {
-        const label = String(action.label || ''), cls = String(action.cls || '').toLowerCase();
-        if (action.muted === true || cls.includes('muted') || /返回|取消|关闭|放弃/.test(label)) return -2;
-        if (/稍后|暂不|待会|结束/.test(label)) return -1;
-        if (/开始|继续|确定|确认|闯关|挑战|再战|知道了/.test(label) || action.primary === true) return 2;
-        return 0;
-      };
+      record.actions = actions;
+      record.choose = index => commit(record, host, actions, index);
       const ordered = actions.map((action, index) => ({ action, index }))
-        .sort((a, b) => rankAction(a.action) - rankAction(b.action) || a.index - b.index);
+        .sort((a, b) => actionRank(a.action) - actionRank(b.action) || a.index - b.index);
       const step = ordered.length > 2 ? 66.5 : 90;
 
       const actionCX = (kind === 'stage' || kind === 'rank') ? 158 : 160;
-      ordered.forEach(({ action, index }, position) => button(action.label || '确定',
+      ordered.forEach(({ action, index }, position) => makeButton(view, offset, record, host,
+        action.label || '确定',
         actionCX + (position - (ordered.length - 1) / 2) * step, layout.actionY,
-        () => choose(index), 'result-action-' + index, action.disabled === true, ordered.length > 2 ? 60 : 76));
+        () => commit(record, host, actions, index), 'result-action-' + index,
+        action.disabled === true, ordered.length > 2 ? 60 : 76));
       if (rows.length > perPage) {
         const tight = kind === 'result' || kind === 'notice';
         const moreX = layout.legacy ? 270 : kind === 'arena' ? 296 : kind === 'rank' ? 252 : kind === 'stage' ? 251 : 258;
@@ -565,7 +530,7 @@
       paint();
       showLevelUp(options);
       armAutoClose(record, options);
-      return { view, host, choose, close: () => { if (current === record) destroy(); } };
+      return { view, host, choose: record.choose, close: () => { if (current === record) destroy(); } };
     } catch (error) {
       if (current === record) destroy();
       throw error;

@@ -1030,6 +1030,8 @@ async function checkClassicViewLifecycle() {
   ] });
   view.byName('tab1').g.dispatchEvent(new env.MouseEvent('click'));
   assert.equal(env.SfStatus.current().tab, 'weapons');
+  // 状态页首屏不再等绘图包：切到武器页签后要等一次异步加载再断言格子。
+  await new Promise((resolve) => setImmediate(resolve));
   const gridCell = view.byName('c1'), gridShell = gridCell.getContentHost(), gridIcon = gridCell.__attached[0];
   gridCell.g.dispatchEvent(new env.MouseEvent('mouseenter'));
   assert.equal(gridIcon.frame, 1, '悬停应进入真实图标选中帧');
@@ -3114,7 +3116,7 @@ function checkClassicTowerShell() {
   );
   assert.ok(
     /async function mountVillage\(container\)[\s\S]{0,1400}?Main\.resizeLayout\(\)/.test(main) &&
-    /classic-home ssfight-home" aria-label="松鼠村庄"[\s\S]{0,380}?Main\.resizeLayout\(\)/.test(cu),
+    /classic-home ssfight-home[^"]*" aria-label="松鼠村庄"[\s\S]{0,380}?Main\.resizeLayout\(\)/.test(cu),
     '从塔页回到村庄时要重新按 320×196 量 #ui 高度，否则村庄 SVG 只按 690 高铺满，左右会留空'
   );
 }

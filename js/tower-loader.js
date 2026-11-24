@@ -48,6 +48,11 @@
     if (promise) return promise;
     promise = loadCss()
       .then(async () => { for (const src of SCRIPTS) await loadScript(src); return true; })
+      .then(async (ok) => {
+        // 无尽塔的勇者/幻兽动画同样读 AnimationStr；进塔前等帧表，避免首屏静止。
+        if (window.Engine && Engine.loadAnim) { try { await Engine.loadAnim(); } catch (e) {} }
+        return ok;
+      })
       .catch((e) => { promise = null; throw e; });
     return promise;
   }

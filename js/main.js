@@ -629,7 +629,7 @@
     }, 600);
   }
 
-  // 经典战斗核心包 636KB gzip：主页停稳、空闲时再拉，第一场战斗不用现等。
+  // 经典战斗核心包 636KB gzip：主页 SVG 挂稳后立刻拉，别等 6 秒才起步。
   // 2G / 省流量模式不预取；玩家提前开战也没关系，`loadExtra` 会复用同一个 Promise。
   let classicCoreScheduled = false;
   function scheduleClassicFightCore() {
@@ -637,14 +637,65 @@
     classicCoreScheduled = true;
     const conn = (window.navigator && navigator.connection) || {};
     if (conn.saveData || /(^|-)2g/.test(String(conn.effectiveType || ''))) return;
+    let tries = 0;
     const start = () => {
       if (typeof document !== 'undefined' && document.hidden) return;
+      const box = document.querySelector('#ui .ssfight-home');
+      const shown = box && box.style.visibility !== 'hidden' && !!box.querySelector('svg');
+      const dom = document.querySelector('#ui .classic-home:not(.ssfight-home)');
+      if (!shown && !dom && tries++ < 40) { setTimeout(start, 250); return; }
       try { if (window.SfFight && SfFight.preloadCore) SfFight.preloadCore(); } catch (e) {}
     };
-    setTimeout(() => {
-      if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(start, { timeout: 5000 });
-      else start();
-    }, 6000);
+    setTimeout(start, 600);
+  }
+
+  // 主页停稳后按入口热度把页面素材灌进 HTTP 缓存：点击时只剩 JSON.parse 与建树。
+  // 只发请求、不保留解析结果；原生包读本地资源，跳过。
+  let pageWarmScheduled = false;
+  let pageWarmTimer = 0;
+  let pageWarmGen = 0;
+  function scheduleClassicPageWarm() {
+    if (pageWarmScheduled || !uiModeIsClassic()) return;
+    pageWarmScheduled = true;
+    const gen = ++pageWarmGen;
+    try {
+      if (window.__TAURI_INTERNALS__ || window.SSDZAndroid || /^tauri:/.test(String(location.protocol))) return;
+    } catch (e) { return; }
+    const conn = (window.navigator && navigator.connection) || {};
+    if (conn.saveData || /(^|-)2g/.test(String(conn.effectiveType || ''))) return;
+    const run = () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      try {
+        if (window.SfRender && SfRender.prefetch) {
+          // 战斗核心包优先：页面素材等它下完再预热，别让 status/challenge 和核心包抢带宽。
+          const core = (window.SfFight && SfFight.preloadCore) ? SfFight.preloadCore() : Promise.resolve();
+          Promise.resolve(core).then(() => {
+            if (gen !== pageWarmGen) return;
+            SfRender.prefetch(['tags-status.json', 'tags-challenge.json', 'tags-home.json', 'tags-homeland.json']);
+          }, () => {});
+        }
+      } catch (e) {}
+    };
+    // 等主页 SVG 真的挂好再预热：主页自身还要拉 tags-gear，先发会抢它的带宽。
+    let tries = 0;
+    const ready = () => {
+      pageWarmTimer = 0;
+      if (gen !== pageWarmGen) return;
+      if (document.hidden) return;
+      const box = document.querySelector('#ui .ssfight-home');
+      const shown = box && box.style.visibility !== 'hidden' && !!box.querySelector('svg');
+      if (shown || document.querySelector('#ui .classic-home:not(.ssfight-home)')) { run(); return; }
+      if (tries++ < 40) { pageWarmTimer = setTimeout(ready, 250); return; }
+      run();
+    };
+    pageWarmTimer = setTimeout(ready, 300);
+  }
+
+  function cancelPageWarm() {
+    pageWarmGen++;
+    pageWarmScheduled = false;
+    if (pageWarmTimer) { clearTimeout(pageWarmTimer); pageWarmTimer = 0; }
+    try { if (window.SfRender && SfRender.cancelPrefetch) SfRender.cancelPrefetch(); } catch (e) {}
   }
 
   async function boot() {
@@ -1139,6 +1190,7 @@
 
     scheduleBattleAssets();
     scheduleClassicFightCore();
+    scheduleClassicPageWarm();
     if (window.SfGuide) { try { SfGuide.onHome(); } catch (e) { if (window.__errs) window.__errs.push('SfGuide home: ' + (e && e.message)); } }
   }
   // 恢复钩子：只有确实停在首页、且主界面循环已经退出时，才重新起一次 canvas 场景。
@@ -1478,6 +1530,7 @@
     isFullscreen: () => !!document.fullscreenElement,
 
     preloadBattleAssets, pinBattleAssets, battleAssetsReady: () => !!battleAssetsPromise,
+    cancelPageWarm,
 
     SUPPORT, openExternal, openSupport };
 

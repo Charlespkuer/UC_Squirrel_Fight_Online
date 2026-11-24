@@ -118,6 +118,7 @@ function ensureRating(accountId, week) {
   if (!row) {
     db.run('INSERT INTO ratings (account_id, season, score, wins, losses, streak, best_rank, updated_at) VALUES (?,?,?,0,0,0,0,?)',
       Number(accountId), w, config.rankIntegralStart, Date.now());
+    invalidateDivisionRows();
     row = db.get('SELECT * FROM ratings WHERE account_id = ? AND season = ?', Number(accountId), w);
   }
   return row;
@@ -187,6 +188,7 @@ function ensureBots(week) {
     }
   });
   botsReadyWeek = w;
+  invalidateDivisionRows();
   return w;
 }
 
@@ -210,6 +212,7 @@ function applyBotResult(botId, playerWin, botDelta) {
   const score = Math.max(floor, Math.min(MAX_SCORE, Math.round(Number(bot.score) + delta)));
   db.run('UPDATE rank_bots SET score = ?, wins = wins + ?, losses = losses + ?, updated_at = ? WHERE id = ?',
     score, playerWin ? 0 : 1, playerWin ? 1 : 0, Date.now(), String(bot.id));
+  invalidateDivisionRows();
   return { id: String(bot.id), score, wins: Number(bot.wins) + (playerWin ? 0 : 1), losses: Number(bot.losses) + (playerWin ? 1 : 0) };
 }
 
@@ -233,6 +236,12 @@ function compareRows(a, b) {
   return Number(a.accountId) - Number(b.accountId);
 }
 
+// 名次只用于展示：同一请求里 profile / ladder / 领奖会重复算整赛区。
+// 2 秒 TTL + 写路径显式失效；隐身视角的行集合不同，单独一份缓存。
+const DIVISION_TTL_MS = 2000;
+const divisionCache = new Map();
+function invalidateDivisionRows() { divisionCache.clear(); }
+
 // `viewerAccountId` 决定看不看得到隐身账号：隐身账号看全榜（含所有隐身），
 // 普通视角排除隐身。省略时按普通视角处理，保持旧调用/旧测试的默认行为。
 function divisionRows(division, viewerAccountId) {
@@ -240,6 +249,9 @@ function divisionRows(division, viewerAccountId) {
   if (!d) return [];
   const w = ensureBots();
   const viewerHidden = viewerAccountId != null && visibility.isHidden(viewerAccountId);
+  const cacheKey = w + '|' + String(d.key) + '|' + (viewerHidden ? 1 : 0);
+  const cached = divisionCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < DIVISION_TTL_MS) return cached.rows;
   const hiddenSql = visibility.hiddenSqlFor('r.account_id', viewerHidden);
   const hiddenParams = visibility.hiddenParamsFor(viewerHidden);
   const players = db.all(
@@ -267,6 +279,8 @@ function divisionRows(division, viewerAccountId) {
   }
   rows.sort(compareRows);
   rows.forEach((row, i) => { row.rank = i + 1; });
+  if (divisionCache.size >= 32) divisionCache.delete(divisionCache.keys().next().value);
+  divisionCache.set(cacheKey, { at: Date.now(), rows });
   return rows;
 }
 
@@ -502,6 +516,6 @@ module.exports = {
   clampScore,
   todayCount, bumpDaily, refundDaily, rankDailyStatus, weekKey, weekTick, rollWeekIfNeeded,
   rankAwardStatus, claimRankAward,
-  ensureBots, botPlan, botsFor, botById, applyBotResult, divisionRows,
+  ensureBots, botPlan, botsFor, botById, applyBotResult, divisionRows, invalidateDivisionRows,
   recentRealOpponents, ladder,
 };

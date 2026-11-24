@@ -3,8 +3,11 @@
   'use strict';
 
   const BASE = 'images/ssfight/ui/';
-  // 3182 是主页/加载屏大图；页面直连 WebP，素材表里也指向同一份，避免再拉 226KB JPG。
-  const BITMAP_WEBP = { 'bitmap/3182_0.hd.jpg': 'bitmap/3182_0.hd.webp' };
+  // 主页/加载屏 3182 与村庄 7041 直连 WebP，素材表里也指向同一份，避免再拉 JPG。
+  const BITMAP_WEBP = {
+    'bitmap/3182_0.hd.jpg': 'bitmap/3182_0.hd.webp',
+    'bitmap/7041_0.hd.jpg': 'bitmap/7041_0.hd.webp',
+  };
   const SVGNS = 'http://www.w3.org/2000/svg';
   const XLINK = 'http://www.w3.org/1999/xlink';
 
@@ -155,6 +158,50 @@
     }, Math.max(0, Number(delayMs) || 0));
     releaseTimers.set(file, { kind: 'timeout', id: timer });
     return true;
+  }
+
+  const warmedUrls = new Set();
+  let prefetchGen = 0;
+  let prefetchCtrl = null;
+  // 预热只把响应灌进 HTTP 缓存，不保留解析结果；之后 loadExtra 用同一 URL 直接命中。
+  // `?v=` 必须与 loadExtra 一致，否则缓存键不同、等于没预热。
+  function warmUrl(url, signal) {
+    const u = String(url || '');
+    if (!u || warmedUrls.has(u)) return Promise.resolve(!!u);
+    if (typeof fetch !== 'function') return Promise.resolve(false);
+    warmedUrls.add(u);
+    return fetch(u, { cache: 'default', signal })
+      .then((r) => (r && r.ok ? r.arrayBuffer() : null))
+      .then(() => true, () => { warmedUrls.delete(u); return false; });
+  }
+  function prefetchExtra(file, signal) {
+    if (bundle && bundle.extraLists && bundle.extraLists.has(String(file))) return Promise.resolve(true);
+    return warmUrl(withVersion(BASE + file), signal);
+  }
+  // 列表串行预热：一条下载完再发下一条，避免和玩家刚点的请求抢满连接。
+  // 玩家点了页面先 `cancelPrefetch()`：在途那条会 abort，把带宽让给真正要显示的素材。
+  function prefetch(files) {
+    cancelPrefetch();
+    const gen = prefetchGen;
+    const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    prefetchCtrl = ctrl;
+    const signal = ctrl ? ctrl.signal : undefined;
+    const list = Array.isArray(files) ? files : [];
+    return list.reduce((chain, file) => {
+      const f = String(file || '');
+      if (!f) return chain;
+      return chain.then(() => {
+        if (gen !== prefetchGen) return false;
+        return prefetchExtra(f, signal);
+      });
+    }, Promise.resolve(true));
+  }
+  function cancelPrefetch() {
+    prefetchGen++;
+    if (prefetchCtrl) {
+      try { prefetchCtrl.abort(); } catch (e) {}
+      prefetchCtrl = null;
+    }
   }
 
   const el = (name, attrs) => {
@@ -1591,6 +1638,7 @@
 
   window.SfRender = {
     load, loaded, loadExtra, loadTable, releaseExtra, queueExtraRelease, mount, mountSymbol, buildFrames, stopTicker,
+    prefetch, cancelPrefetch,
     // 网页端构建号 / 给直接加载的图片加 `?v=`（原生包无构建号时原样返回）。
     webVersion, assetUrl: withVersion,
     // iOS / Android 16 回前台重解码 SVG 位图 + 强制图层重绘（main.js 的恢复钩子调用）。

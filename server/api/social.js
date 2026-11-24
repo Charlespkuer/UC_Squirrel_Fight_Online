@@ -466,16 +466,24 @@ module.exports = {
         ORDER BY a.last_seen DESC LIMIT 20`,
       '%' + q + '%', q, q, q
     );
-    const results = rows.map((r) => {
-      const save = db.get('SELECT level FROM saves WHERE account_id = ? AND mode = ?', Number(r.id), 'classic');
-      const rating = settlement.scoreOf(r.id);
-      return {
-        accountId: Number(r.id), playerId: Number(r.player_id), name: String(r.name), tag: String(r.tag),
-        display: String(r.name),
-        level: save ? Number(save.level) : 1,
-        score: rating,
-      };
-    });
+    const ids = rows.map((r) => Number(r.id));
+    const marks = ids.map(() => '?').join(',');
+    const levels = new Map(), scores = new Map();
+    if (ids.length) {
+      for (const row of db.all(
+        `SELECT account_id, level FROM saves WHERE mode = ? AND account_id IN (${marks})`, 'classic', ...ids
+      )) levels.set(Number(row.account_id), Number(row.level) || 1);
+      for (const row of db.all(
+        `SELECT account_id, score FROM ratings WHERE season = ? AND account_id IN (${marks})`,
+        settlement.weekKey(), ...ids
+      )) scores.set(Number(row.account_id), Math.max(0, Number(row.score) || 0));
+    }
+    const results = rows.map((r) => ({
+      accountId: Number(r.id), playerId: Number(r.player_id), name: String(r.name), tag: String(r.tag),
+      display: String(r.name),
+      level: levels.get(Number(r.id)) || 1,
+      score: scores.get(Number(r.id)) || 0,
+    }));
     return { ok: true, results };
   },
 

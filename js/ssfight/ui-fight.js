@@ -1933,8 +1933,41 @@
   function preloadCore() {
     try { return SfRender.loadExtra(FIGHT_CORE_FILE).catch(() => null); } catch (e) { return Promise.resolve(null); }
   }
+  // 挑战页选中对手后预算本场动作包并预热 HTTP 缓存；`loadFightAssets` 开打时只做解析。
+  // 只按双方面板算静态可能（录像里的随机拍是它的子集），同一套对手不重复发起。
+  let prefetchedMatchKey = '';
+  function prefetchMatch(foe) {
+    const f = foe && (foe.fighter || foe);
+    if (!f || !window.SfRender || !SfRender.prefetch) return false;
+    const me = {
+      weapons: (window.State && State.myWeapons) ? State.myWeapons() : [],
+      skills: (window.State && State.mySkills) ? State.mySkills() : [],
+      pets: (window.State && State.petTeam) ? State.petTeam() : [],
+    };
+    const sig = (list) => (Array.isArray(list) ? list : [])
+      .map((v) => Number(v && v.id) + ':' + Number(v && v.level)).join(',');
+    const key = [sig(me.weapons), sig(me.skills), sig(me.pets), sig(f.weapons), sig(f.skills), sig(f.pets)].join('|');
+    if (key === prefetchedMatchKey) return false;
+    prefetchedMatchKey = key;
+    const files = [];
+    if (hudPetList(me).length || hudPetList(f).length) files.push('tags-fight-pets.json');
+    files.push(...fightAttackSymbols({ me, foe: f }).map(fightChunkFile));
+    if (foe && foe.campaign) files.push('tags-campaign-boss.json');
+    files.push('tags-fight-result.json');
+    // 核心包优先：先等它下完再预热动作包，别让十几包把核心挤慢。
+    Promise.resolve(preloadCore()).then(() => {
+      if (key !== prefetchedMatchKey || live) return;
+      try { SfRender.prefetch(files); } catch (e) {}
+    }, () => {});
+    return true;
+  }
   async function loadFightAssets(o) {
-    await SfRender.loadExtra(FIGHT_CORE_FILE);
+    // 开打后立刻停掉串行预热：它占着缓存锁，会让 Promise.all 的动作包排队。
+    try { if (SfRender.cancelPrefetch) SfRender.cancelPrefetch(); } catch (e) {}
+    // 核心包先落地：动作包等它下完再并行，避免核心和十几包抢同一条带宽。
+    let anim = Promise.resolve(false);
+    try { if (window.Engine && Engine.loadAnim) anim = Engine.loadAnim().catch(() => false); } catch (e) {}
+    await Promise.all([anim, SfRender.loadExtra(FIGHT_CORE_FILE)]);
     const syms = fightAttackSymbols(o);
     const files = syms.map(fightChunkFile);
     if (files.length) {
@@ -2340,6 +2373,8 @@
     }
     rec.view = view;
     host.style.visibility = '';
+    // 战斗播放期间把战果页素材拉好：结算时不再等 60KB，也不会和战斗动作包抢。
+    try { SfRender.loadExtra('tags-fight-result.json').catch(() => null); } catch (e) {}
     // 同一帧内隐藏底页并清掉旧的 #ui；holdUnderlay 的接力回放要留着底页，不能在段与段之间露首页。
     if (!o.holdUnderlay) {
       if (window.Main && typeof Main.hideHeldForBattle === 'function') Main.hideHeldForBattle();
@@ -3575,6 +3610,7 @@
     _fightFiles: (o) => fightAttackSymbols(o).map(fightChunkFile),
     _loadFightAssets: loadFightAssets,
     preloadCore,
+    prefetchMatch,
 
     _petAttackFrame: (petId) => 29 + Math.max(1, Math.min(32, Number(petId) || 1)),
     _petDefenseFrame: (petId) => PET_DEFENSE_FRAME[Number(petId)] || -1,

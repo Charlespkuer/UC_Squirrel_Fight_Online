@@ -8,6 +8,7 @@
   // 待展示的更新提示 + 展示泵：启动阶段 #ui 还没挂好页面，这时弹窗会被下一次
   // innerHTML 抹掉（玩家看到的就是「闪一下」）；等界面稳定后再弹，被抹掉就补弹。
   let pending = null, pumpTimer = 0, pumpSig = '', pumpStable = 0, painted = false;
+  let checkGen = 0;
   const DEFAULT_URL = 'https://github.com/Charlespkuer/UC_Squirrel_Fight_remake/releases/latest';
 
   function esc(s) {
@@ -33,9 +34,14 @@
     }
     return 0;
   }
+  // 同步取「本机版本」：原生包是 `__SSDZ_VERSION`，网页端是服务端注入的 `<版本>-<构建号>`。
+  function versionText() {
+    return norm(window.__SSDZ_VERSION || window.__SSDZ_WEB_VERSION__ || localVersion || '');
+  }
   async function readLocalVersion() {
     if (localVersion) return localVersion;
-    if (window.__SSDZ_VERSION) { localVersion = norm(window.__SSDZ_VERSION); return localVersion; }
+    const known = String(window.__SSDZ_VERSION || window.__SSDZ_WEB_VERSION__ || '');
+    if (known) { localVersion = norm(known); return localVersion; }
     try {
       const r = await fetch('scripts/version.json', { cache: 'no-store' });
       if (r && r.ok) {
@@ -457,13 +463,16 @@
     }
   }
 
+  function stopPump() {
+    if (pumpTimer) clearInterval(pumpTimer);
+    pumpTimer = 0;
+  }
   function clearPending() {
     pending = null;
     painted = false;
     pumpSig = '';
     pumpStable = 0;
-    if (pumpTimer) clearInterval(pumpTimer);
-    pumpTimer = 0;
+    stopPump();
   }
   // 登录页不算「进入游戏」：那时弹出来，登录成功换页会把它抹掉（先闪一下再消失）。
   function uiScreen() {
@@ -507,9 +516,13 @@
     if (retryTimer) clearTimeout(retryTimer);
     timer = 0;
     retryTimer = 0;
+    checkGen++;
+    // 不清 pending 的话，登出后 `check()` 会一直被它短路，本次进程再也不会检查更新。
+    clearPending();
   }
   async function check() {
     if (checking || !O) return null;
+    const gen = checkGen;
     if (retryTimer) { clearTimeout(retryTimer); retryTimer = 0; }
     if (document.hidden) return null;
     if (pending) return null;
@@ -521,6 +534,8 @@
     checking = true;
     try {
       const info = await O.get('/api/update', { auth: false, parallel: true, timeoutMs: 8000 });
+      // 登出会 `stop()` 并清 pending；这一路请求可能还带着旧会话，回来不能再把提示装回去。
+      if (gen !== checkGen) return null;
       if (!info || !info.ok || !info.version) return null;
       const mine = await readLocalVersion();
       if (!mine) return null;
@@ -573,7 +588,10 @@
   }
 
   if (O) {
-    const kick = () => { if (timer) void check(); else start(); };
+    const kick = () => {
+      if (pending) { startPump(); pump(); return; }
+      if (timer) void check(); else start();
+    };
     O.on('ready', kick);
     O.on('login', kick);
     O.on('logout', stop);
@@ -583,5 +601,5 @@
   });
   if (O) start();
 
-  window.OnlineUpdate = { start, stop, check, checkNow, compareVersion, localVersion: readLocalVersion };
+  window.OnlineUpdate = { start, stop, check, checkNow, compareVersion, localVersion: readLocalVersion, version: versionText };
 })();

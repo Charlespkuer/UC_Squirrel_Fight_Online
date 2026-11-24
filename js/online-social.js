@@ -150,12 +150,7 @@
     const stamp = t => { const d = new Date(Number(t)); return Number.isFinite(d.getTime()) ? d.toLocaleString() : ''; };
     const badge = a => a && a.role ? '<span class="online-forum-badge" title="论坛管理员">管理员</span>' : '';
     const who = a => esc(a && a.name || '玩家') + badge(a);
-    const sizeText = bytes => {
-      const n = Math.max(0, Number(bytes) || 0);
-      if (n < 1024) return n + ' B';
-      if (n < 1048576) return Math.round(n / 1024) + ' KB';
-      return (n / 1048576).toFixed(1) + ' MB';
-    };
+    const sizeText = bytes => (U._.formatBytes ? U._.formatBytes(bytes) : String(bytes));
     let view = 'list', listPage = 1, threadId = 0, replyPage = 1, request = 0, busy = false, requestKey = key();
     let search = { q: '', no: '' };
     const account = Net.account() || {};

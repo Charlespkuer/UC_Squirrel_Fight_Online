@@ -11,6 +11,7 @@ const crypto = require('node:crypto');
 const { config, localDate } = require('./config');
 const db = require('./db');
 const runtime = require('./game/runtime');
+const settlement = require('./game/settlement');
 const { ApiError, fail, sendJson, sendError, corsHeaders, readJson, clientIp, matchPath, rateLimit } = require('./http');
 const auth = require('./auth');
 
@@ -576,6 +577,9 @@ async function handle(req, res) {
     if (req.method === 'GET') rateLimit('read:' + session.account.id, 300, 60000);
   }
 
+  // 赛区名次是纯展示数据：同一请求里 profile / 领奖 / 榜单会重复算整赛区。
+  // 每个 API 请求开头清一次，跨请求仍拿最新库（测试/运维直接改 ratings 也不会读到旧名次）。
+  settlement.invalidateDivisionRows();
   const body = matched.opts.body ? await readJson(req) : {};
   const ctx = {
     req, res, query, params, body,

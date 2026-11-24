@@ -107,8 +107,12 @@ gradleText = gradleText.replace(/manifestPlaceholders\["usesCleartextTraffic"\] 
 fs.writeFileSync(gradle, gradleText);
 fs.writeFileSync(path.join(ANDROID, 'app', 'src', 'main', 'res', 'values', 'strings.xml'),
   '<resources><string name="app_name">松鼠大战 Online</string><string name="main_activity_title">松鼠大战 Online</string></resources>\n');
-const androidIcons = path.join(TAURI, 'icons', 'android');
-if (fs.existsSync(androidIcons)) fs.cpSync(androidIcons, path.join(ANDROID, 'app', 'src', 'main', 'res'), { recursive: true });
+/* Android 自适应图标把 108dp 图层裁到中央 72dp；全出血前景会切掉松鼠。
+ * app-icon-android-fg.png 是 app-icon.png 的 60/108 预缩图，旧版图标由清单留边。 */
+const iconOut = path.join(TAURI, 'target', 'android-icons');
+fs.rmSync(iconOut, { recursive: true, force: true, maxRetries: 3 });
+run(process.execPath, [cli, 'icon', 'app-icon.json', '--output', iconOut], TAURI);
+fs.cpSync(path.join(iconOut, 'android'), path.join(ANDROID, 'app', 'src', 'main', 'res'), { recursive: true });
 const buildTask = path.join(ANDROID, 'buildSrc', 'src', 'main', 'java', 'com', 'ssdz', 'online', 'kotlin', 'BuildTask.kt');
 let task = fs.readFileSync(buildTask, 'utf8');
 const prebuiltLine = 'if (File(project.projectDir, "src/main/jniLibs/" + (if (target == "aarch64") "arm64-v8a" else target) + "/libssdz_online_lib.so").isFile) return';

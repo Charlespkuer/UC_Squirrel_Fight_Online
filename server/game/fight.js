@@ -317,6 +317,7 @@ function applyRating(accountId, win, score) {
     'UPDATE ratings SET score = ?, wins = wins + ?, losses = losses + ?, streak = ?, updated_at = ? WHERE account_id = ? AND season = ?',
     Math.round(Number(score) || 0), win ? 1 : 0, win ? 0 : 1, streak, Date.now(), Number(accountId), week
   );
+  settlement.invalidateDivisionRows();
 }
 
 function runRank({ accountId, snapshotId, rev, idemKey, revengeOf }) {

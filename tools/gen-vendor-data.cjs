@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /* ============================================================
- * tools/gen-vendor-data.cjs — 把原版数据抽成游戏自己的 js/gamedict.js
+ * tools/gen-vendor-data.cjs — 把原版数据抽成游戏自己的 js/gamedict.js（+ js/gamedict-anim.js）
  *
  * 背景：原版那 5 个文件（GameDict / assets / asset2 / animationStr / Map.min）**只留在本机的
  * references/orig/**（只作参考、不参与运行；`js/orig/` 那份副本 2026-10 第一百零一批已删除）。
@@ -10,7 +10,7 @@
  *   · GameDict.js 的 10 个数据字典（武器/技能/道具/装备/套装/强化/NPC/附件/天梯商品/礼包）
  *   · assets.js 的 asstes 素材清单（引擎用它把 id 映射到图片路径）
  *   · assets.js 的 imgMap 图集帧表（引擎用它找每帧在图里的坐标/尺寸/注册点）
- *   · animationStr.js 的 AnimationStr 动画帧表（引擎的动画播放器读它）
+ *   · animationStr.js 的 AnimationStr 动画帧表（单独生成 js/gamedict-anim.js，首战/进塔前加载）
  *   · asset2.js 的 asset_* 路径表（**注意：这类是动态读取的**）：
  *     engine.js 的 buildSrcMap() 会遍历 `Object.getOwnPropertyNames(window)`，
  *     把前缀为 `asset` 的数组里的 {id,src} 全部并进 SRC_MAP —— 所以按变量名 grep 是扫不到的。
@@ -18,8 +18,8 @@
  *   · 明确不抽（确实没人用）：Map.min.js 的小 Map、
  *     GameDict.js 的 stagesMap/giftsMap/buy91Info/vipProps/words/reg_terms/equipImgMap
  *
- * 用法：node tools/gen-vendor-data.cjs            # 生成 js/gamedict.js
- *      node tools/gen-vendor-data.cjs --check     # 只校验 js/gamedict.js 是否最新
+ * 用法：node tools/gen-vendor-data.cjs            # 生成 js/gamedict.js + js/gamedict-anim.js
+ *      node tools/gen-vendor-data.cjs --check     # 只校验这两个文件是否最新
  * ============================================================ */
 'use strict';
 const fs = require('node:fs');
@@ -234,12 +234,12 @@ function build() {
   const putTable = parsePutTable(origFile('GameDict.js'));
   const out = [];
   out.push('/* ============================================================');
-  out.push(' * gamedict.js — 原版数据字典 / 素材清单 / 动画帧表（**运行时数据，不是参考文件**）');
+  out.push(' * gamedict.js — 原版数据字典 / 素材清单（**运行时数据，不是参考文件**）');
   out.push(' *');
   out.push(' * 这个文件由 tools/gen-vendor-data.cjs 从原版数据自动生成，不要手改。');
   out.push(' * 原版文件本体在 references/orig/（只作参考，不参与运行）；游戏跑起来只认这里的数据，');
   out.push(' * 所以运行过程中不会再引用 references/ 下的任何文件。');
-  out.push(' *');
+  out.push(' * 动画帧表（1.86 MB）单独生成在 js/gamedict-anim.js，首战/进塔前按需加载。');
   out.push(' * 数据来源：references/orig/GameDict.js、assets.js、animationStr.js');
   out.push(' * 重新生成：node tools/gen-vendor-data.cjs');
   out.push(' * ============================================================ */');
@@ -326,33 +326,52 @@ function build() {
   out.push(imgMap.keys.map((k) => '    [' + JSON.stringify(String(k)) + ', ' + JSON.stringify(imgMap[k]) + ']').join(',\n'));
   out.push('  ].forEach(function (row) { imgMap.setValue(row[0], row[1]); });');
   out.push('');
-  out.push('  /* ---------- 动画帧表（engine.js 的动画播放器读它；纯数据，原样搬过来） ---------- */');
+  /* ---------- 动画帧表（engine.js 的动画播放器读它；纯数据，原样搬过来） ----------
+   * 1.86 MB，只有战斗 / 无尽塔要用：单独生成 `js/gamedict-anim.js`，不占启动链。 */
   const anim = ctx.AnimationStr;
   if (!anim || typeof anim !== 'object') throw new Error('原版 animationStr.js 里没有 AnimationStr');
   const animKeys = Object.keys(anim);
-  out.push('  const AnimationStr = {');
-  out.push(animKeys.map((k) => '    ' + JSON.stringify(k) + ': ' + jsString(anim[k])).join(',\n'));
-  out.push('  };');
-  out.push('');
+  const animOut = [];
+  animOut.push('// gamedict-anim.js — 原版 AnimationStr 动画帧表（battle / tower 首帧前按需加载）');
+  animOut.push('// 由 tools/gen-vendor-data.cjs 从原版 animationStr.js 生成，不要手改。');
+  animOut.push('(function () {');
+  animOut.push("  'use strict';");
+  animOut.push('');
+  animOut.push('  const AnimationStr = {');
+  animOut.push(animKeys.map((k) => '    ' + JSON.stringify(k) + ': ' + jsString(anim[k])).join(',\n'));
+  animOut.push('  };');
+  animOut.push('');
+  animOut.push("  if (typeof window !== 'undefined') window.AnimationStr = AnimationStr;");
+  animOut.push('  else globalThis.AnimationStr = AnimationStr;');
+  animOut.push('})();');
+  animOut.push('');
   out.push('  /* ---------- 挂到全局：与原来 <script> 直接定义这些变量的效果一致 ---------- */');
-  out.push('  const exported = { ' + DICTS.map((d) => d[0]).join(', ') + ', asstes, imgMap, AnimationStr, ' + assetNames.join(', ') + ' };');
+  out.push('  const exported = { ' + DICTS.map((d) => d[0]).join(', ') + ', asstes, imgMap, ' + assetNames.join(', ') + ' };');
   out.push('  if (typeof window !== \'undefined\') { for (const k of Object.keys(exported)) window[k] = exported[k]; }');
   out.push('  else { for (const k of Object.keys(exported)) globalThis[k] = exported[k]; }');
   out.push('})();');
   out.push('');
-  return out.join('\n');
+  return { main: out.join('\n'), anim: animOut.join('\n') };
 }
 
 const target = path.join(ROOT, 'js', 'gamedict.js');
+const animTarget = path.join(ROOT, 'js', 'gamedict-anim.js');
 const next = build();
 if (process.argv.includes('--check')) {
   // references/orig/ 不存在（精简发布包 / 别人的机器）时没得比，直接跳过
   const hasOrig = fs.existsSync(path.join(ORIG_DIR, 'GameDict.js'));
   if (!hasOrig) { console.log('· 跳过：找不到 references/orig/（精简包里没有原版文件，属正常）'); process.exit(0); }
   const cur = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : '';
-  if (cur === next) { console.log('✓ js/gamedict.js 是最新的（' + (next.length / 1048576).toFixed(2) + ' MB）'); process.exit(0); }
-  console.error('✗ js/gamedict.js 与生成结果不一致，请重新生成：node tools/gen-vendor-data.cjs');
+  const curAnim = fs.existsSync(animTarget) ? fs.readFileSync(animTarget, 'utf8') : '';
+  if (cur === next.main && curAnim === next.anim) {
+    console.log('✓ js/gamedict.js + js/gamedict-anim.js 是最新的（'
+      + ((next.main.length + next.anim.length) / 1048576).toFixed(2) + ' MB）');
+    process.exit(0);
+  }
+  console.error('✗ js/gamedict*.js 与生成结果不一致，请重新生成：node tools/gen-vendor-data.cjs');
   process.exit(1);
 }
-fs.writeFileSync(target, next, 'utf8');
-console.log('已生成 js/gamedict.js：' + (next.length / 1048576).toFixed(2) + ' MB');
+fs.writeFileSync(target, next.main, 'utf8');
+fs.writeFileSync(animTarget, next.anim, 'utf8');
+console.log('已生成 js/gamedict.js：' + (next.main.length / 1024).toFixed(0) + ' KB + js/gamedict-anim.js：'
+  + (next.anim.length / 1048576).toFixed(2) + ' MB');

@@ -51,6 +51,19 @@ function levelOf(accountId) {
   return row ? Number(row.level) : 1;
 }
 
+// 一次房间视图要取 4~8 个等级（成员表 + 座位表重复同一批账号），逐条查会变成 N+1。
+function levelsFor(accountIds) {
+  const ids = [...new Set((accountIds || []).map(Number).filter((id) => id > 0))];
+  const out = new Map(ids.map((id) => [id, 1]));
+  if (!ids.length) return out;
+  const rows = db.all(
+    'SELECT account_id, level FROM saves WHERE mode = ? AND account_id IN (' + ids.map(() => '?').join(',') + ')',
+    'classic', ...ids
+  );
+  for (const row of rows) out.set(Number(row.account_id), Number(row.level) || 1);
+  return out;
+}
+
 function realMembers(roomId) {
   return membersOf(roomId).filter((m) => !Number(m.missed));
 }
@@ -58,7 +71,7 @@ function realMembers(roomId) {
 function countReal(roomId) { return realMembers(roomId).length; }
 
 // 把房间的 4 个座位拼出来：真人优先，空位看 seats_json 里的助战快照。
-function seatList(room, members, accountId) {
+function seatList(room, members, accountId, levels) {
   const stored = unz(room.seats_json) || [];
   const out = [];
   for (let seat = 0; seat < partySize(); seat++) {
@@ -72,7 +85,7 @@ function seatList(room, members, accountId) {
       delete pub.foe;
       out.push(Object.assign(pub, {
         seat, kind: 'player', accountId: Number(real.account_id),
-        name: String(real.name || ''), tag: String(real.tag || ''), level: levelOf(real.account_id),
+        name: String(real.name || ''), tag: String(real.tag || ''), level: levels.get(Number(real.account_id)) || 1,
         isMe: Number(real.account_id) === Number(accountId), missed: false,
       }));
       continue;
@@ -97,6 +110,7 @@ function seatList(room, members, accountId) {
 function roomView(room, accountId) {
   if (!room) return null;
   const members = membersOf(room.id);
+  const levels = levelsFor(members.map((m) => m.account_id));
   const data = Data();
   const boss = data && data.bossFor(room.boss_id);
   const mine = members.find((m) => Number(m.account_id) === Number(accountId));
@@ -127,13 +141,13 @@ function roomView(room, accountId) {
       name: String(m.name),
       tag: String(m.tag),
       seat: Number(m.seat),
-      level: levelOf(m.account_id),
+      level: levels.get(Number(m.account_id)) || 1,
       dice: Number(m.dice),
       joinedAt: Number(m.joined_at),
       missed: !!Number(m.missed),
       isMe: Number(m.account_id) === Number(accountId),
     })),
-    seats: seatList(room, members, accountId),
+    seats: seatList(room, members, accountId, levels),
     // 原版 `rollDatas`（3437 第 5 帧）：只有已结算房间才有；老房间 / 失败房间为空，
     // 客户端会回落到文字结果。
     roll: String(room.status) === 'done' ? unz(room.roll_json) : null,
@@ -266,7 +280,7 @@ function enqueue({ accountId, bossId }) {
     roomId = String(room.id);
   });
 
-  pump();
+  pump({ callerRoomId: roomId });
   return { ok: true, joined: true, room: roomView(roomOf(roomId), accountId) };
 }
 
@@ -700,7 +714,12 @@ function resolveRoomTx(roomId) {
   return { ok: true, status: 'done', seed, teamWin, bossHp, bossMaxHp, seats: publicSeats, roll: rollData, settled };
 }
 
-function pump() {
+// 读接口（/api/campaign/current 等）每 5 秒轮询一次；老实现每次都把全部就绪房结算完，
+// 20 个满员房会让单个 GET 阻塞上百毫秒。每轮最多结算 2 个，调用方自己的房间优先，
+// 其余留给下一次 tick（resolveRoom 只认 status='waiting'，重复调用幂等）。
+const PUMP_SETTLE_MAX = 2;
+
+function pump(opts) {
   reap(false);
   // 一次带出每个等待房的真实人数，避免每房一次 membersOf（50 房 = 50 次 JOIN）。
   const rows = db.all(
@@ -709,22 +728,24 @@ function pump() {
        FROM campaign_rooms r WHERE r.status = 'waiting' ORDER BY r.created_at ASC LIMIT 50`
   );
   const ts = now();
+  const ready = [];
   for (const room of rows) {
     const count = Number(room.real_count) || 0;
     if (!count) {
       db.run("UPDATE campaign_rooms SET status = 'cancelled', closed_at = ? WHERE id = ? AND status = 'waiting'", ts, String(room.id));
       continue;
     }
-    if (count >= partySize()) {
-      try { resolveRoom(room.id); } catch (e) {  }
-      continue;
-    }
-    if (String(room.mode) === 'random') {
-      try { resolveRoom(room.id); } catch (e) {}
-      continue;
-    }
+    if (count >= partySize() || String(room.mode) === 'random') { ready.push(room); continue; }
     const deadline = Number(room.resolve_at) || (Number(room.created_at) + config.campaignMatchWaitMs);
     if (deadline > 0 && ts >= deadline) failRoom(room, 'timeout');
+  }
+  const caller = opts && opts.callerRoomId ? String(opts.callerRoomId) : '';
+  if (caller) {
+    const at = ready.findIndex((room) => String(room.id) === caller);
+    if (at > 0) ready.unshift(ready.splice(at, 1)[0]);
+  }
+  for (const room of ready.slice(0, PUMP_SETTLE_MAX)) {
+    try { resolveRoom(room.id); } catch (e) {}
   }
 }
 
@@ -745,10 +766,11 @@ function reap(force) {
 }
 
 function status({ accountId, code }) {
-  pump();
-  const room = db.get('SELECT * FROM campaign_rooms WHERE code = ? ORDER BY created_at DESC LIMIT 1', String(code).toUpperCase());
+  const find = () => db.get('SELECT * FROM campaign_rooms WHERE code = ? ORDER BY created_at DESC LIMIT 1', String(code).toUpperCase());
+  const room = find();
+  pump({ callerRoomId: room && room.id });
   if (!room) { const e = new Error('房间不存在'); e.code = 'NOT_FOUND'; throw e; }
-  return { ok: true, room: roomView(room, accountId) };
+  return { ok: true, room: roomView(String(room.status) === 'waiting' ? (find() || room) : room, accountId) };
 }
 
 function list({ accountId }) {
@@ -758,14 +780,16 @@ function list({ accountId }) {
 }
 
 function current({ accountId }) {
-  pump();
-  const row = db.get(
+  const find = () => db.get(
     `SELECT r.* FROM campaign_rooms r JOIN campaign_members m ON m.room_id = r.id
       WHERE m.account_id = ? AND (r.status = 'waiting' OR (r.status IN ('done','failed') AND m.acked = 0))
       ORDER BY r.created_at DESC LIMIT 1`,
     Number(accountId)
   );
-  return { ok: true, room: row ? roomView(row, accountId) : null };
+  const room = find();
+  pump({ callerRoomId: room && room.id });
+  const fresh = room && String(room.status) === 'waiting' ? find() : room;
+  return { ok: true, room: fresh ? roomView(fresh, accountId) : null };
 }
 
 function leave({ accountId, code }) {
@@ -817,7 +841,7 @@ function join({ accountId, code }) {
       String(room.id), Number(accountId), freeSeat(room.id), '', now()
     );
   });
-  pump();
+  pump({ callerRoomId: room.id });
   return { ok: true, joined: true, room: roomView(roomOf(room.id), accountId) };
 }
 

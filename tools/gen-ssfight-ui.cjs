@@ -595,6 +595,25 @@ function prune(tag) {
   return out;
 }
 
+/* 运行时没有入口的整页：load/showMovie/system 与道具页外层 7180 不挂载。
+ * 只裁「完全只被这些根引用」的标签；页签/返回/箭头等共用件显式保留。 */
+const UNUSED_PAGE_CLOSURES = {
+  'tags.json': { roots: ['6843', '6926', '7847'], keep: [] },
+  'tags-daoju.json': { roots: ['7180'], keep: ['7150', '7152', '7156', '3362', '3156'] },
+};
+const DROPPED_PAGE_KEYS = new Set(['load', 'showMovie', 'system', 'daoju']);
+function pruneUnusedPageClosures(perPart) {
+  for (const part of perPart) {
+    const spec = UNUSED_PAGE_CLOSURES[part.file];
+    if (!spec) continue;
+    const byId = new Map(part.tags.map((t) => [String(t.id), t]));
+    const target = new Set(closure(byId, spec.roots).tags.map((t) => String(t.id)));
+    const roots = part.tags.map((t) => String(t.id)).filter((id) => !target.has(id)).concat(spec.keep);
+    const retained = new Set(closure(byId, roots).tags.map((t) => String(t.id)));
+    part.tags = part.tags.filter((t) => !target.has(String(t.id)) || retained.has(String(t.id)));
+  }
+}
+
 /* ---------- 5. 位图：data URI 落成文件（同内容去重），改成相对文件名 ---------- */
 function extractBitmaps(tags, stats) {
   const dir = path.join(OUT, 'bitmap');
@@ -943,6 +962,7 @@ function main() {
     r.missing.forEach((m) => missing.push(m));
     return { file: p.file, tags: r.tags.map(prune) };
   });
+  pruneUnusedPageClosures(perPart);
   /* 把原版 `attachMovie("活动按钮", …)` 等价地补进 main 页：
    * 必须插在最后一条 ShowFrame **之前**，否则会变成第 2 帧（main 只有 1 帧）；
    * 深度取现有最大值 + 1，等价于 `getNextHighestDepth()`。 */
@@ -978,6 +998,7 @@ function main() {
     if (!want || !want.pages) continue;
     for (const w of want.pages) {
       if (w === ICON_BUNDLE) continue;                 // 不是"页"，没有页根元件
+      if (DROPPED_PAGE_KEYS.has(w)) continue;          // 运行时没有入口的整页，已裁掉
       if (!part.tags.some((t) => String(t.id) === String(ROOTS[w]))) {
         die('页包 ' + part.file + ' 里缺页根元件 ' + ROOTS[w] + '（' + w + '）');
       }
@@ -1440,9 +1461,9 @@ function main() {
     generator: 'tools/gen-ssfight-ui.cjs',
     source: path.relative(ROOT, SRC).split(path.sep).join('/'),
     sourceBytes: bytes, sourceSha256: sha,
-    pages: pageWanted,
+    pages: pageWanted.filter((p) => !DROPPED_PAGE_KEYS.has(p)),
     gear: gearWanted,
-    pageRootIds: Object.fromEntries(wanted.map((w) => [w, ROOTS[w]])),
+    pageRootIds: Object.fromEntries(wanted.filter((w) => !DROPPED_PAGE_KEYS.has(w)).map((w) => [w, ROOTS[w]])),
     dictionarySize: data.tg.length,
     exportedTags: tags.length,
     bundles: perPart.map((p) => ({ file: p.file, tags: p.tags.length })),

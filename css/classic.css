@@ -57,6 +57,8 @@ button,input,select{font:inherit}button{touch-action:manipulation}button:focus-v
 /* ⚠ overflow 必须 visible：原版舞台只有 320 宽，三格药丸会超出。 */
 .ssfight-home{position:absolute;top:0;right:0;bottom:0;left:0;inset:0;overflow:visible;background:#203a27;display:flex;align-items:center;justify-content:center}
 .ssfight-home svg{display:block;height:100%;width:auto;max-width:100%}
+/* 页面素材未挂好前先铺原版底图（图由 classic-ui 按版本号内联，避免与 SVG 位图各拉一份）。 */
+.ssfight-home.sf-wait-main,.ssfight-home.sf-wait-village{background-color:#203a27;background-position:center;background-size:cover;background-repeat:no-repeat}
 /* 缩放完全一致、坐标不用换算；上面这层盖住下面那层，正好就是弹窗的语义。 */
 .ssfight-sub{z-index:3;background:transparent}
 /* 1fr 的 min-content 会把列撑过容器，minmax(0,1fr) 不能省。 */

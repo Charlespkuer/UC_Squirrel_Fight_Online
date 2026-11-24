@@ -47,6 +47,8 @@ record('入口页不加载 references/ 里的任何文件', () => {
   const bad = refs.filter((r) => /(^|\/)references\//.test(r));
   assert.equal(bad.length, 0, '入口页不该引用 references/：' + bad.join(', '));
   assert.ok(refs.some((r) => r === 'js/gamedict.js'), '入口页应该加载 js/gamedict.js');
+  assert.ok(!refs.some((r) => /gamedict-anim\.js/.test(r)),
+    '动画帧表 1.86 MB 不该进启动链（由 Engine.loadAnim 首战/进塔前按需加载）');
   /* 【第一百零一批】原版源码副本 `js/orig/` 已整目录删除 —— 入口页当然也不该再提它
    *（这条断言留着当「别再把它加回运行时」的闸）。 */
   assert.ok(!refs.some((r) => /js\/orig\//.test(r)), '入口页不该加载 js/orig/（那份副本已删除）');
@@ -72,6 +74,7 @@ record('js/gamedict.js 能提供游戏需要的全部原版数据', () => {
   ctx.window = ctx;
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(file, 'utf8'), ctx, { filename: 'js/gamedict.js' });
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'js', 'gamedict-anim.js'), 'utf8'), ctx, { filename: 'js/gamedict-anim.js' });
   const dicts = ['weaponsMap', 'skillsMap', 'propMap', 'gearMap', 'gearSetMap', 'upgradeMap', 'npcsMap', 'attachmentMap', 'rankgoodsMap', 'giftMap'];
   for (const name of dicts) {
     const d = ctx[name];
@@ -132,7 +135,7 @@ record('动画播放链路：图集帧表 + 动画的每个图元都能解析到
   };
   ctx.window = ctx; ctx.self = ctx; ctx.window.addEventListener = () => {};
   vm.createContext(ctx);
-  for (const f of ['js/gamedict.js', 'js/engine.js']) {
+  for (const f of ['js/gamedict.js', 'js/gamedict-anim.js', 'js/engine.js']) {
     vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), ctx, { filename: f });
   }
   const E = ctx.Engine;
@@ -187,7 +190,7 @@ record('战斗图集与动画：三侠/木人/场景/我方，路径与每一帧
   };
   ctx.window = ctx; ctx.self = ctx; ctx.window.addEventListener = () => {};
   vm.createContext(ctx);
-  for (const f of ['js/gamedict.js', 'js/engine.js']) {
+  for (const f of ['js/gamedict.js', 'js/gamedict-anim.js', 'js/engine.js']) {
     vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), ctx, { filename: f });
   }
   const E = ctx.Engine;
@@ -344,7 +347,7 @@ record('浏览器侧模块都能加载并挂上全局（battle / tower / tower-u
   c.window = c; c.self = c; c.globalThis = c;
   c.addEventListener = () => {}; c.removeEventListener = () => {}; c.dispatchEvent = () => true;
   vm.createContext(c);
-  for (const f of ['js/gamedict.js', ...files]) {
+  for (const f of ['js/gamedict.js', 'js/gamedict-anim.js', ...files]) {
     const full = path.join(ROOT, f);
     if (!fs.existsSync(full)) continue;
     try {

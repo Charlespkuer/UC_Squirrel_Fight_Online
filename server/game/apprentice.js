@@ -81,11 +81,12 @@ function fighterOfAccount(accountId) {
 // 师徒面板与改版后的「徒弟先上阵」都按当前存档现算：防守快照只保证到最近一次
 // 带 snapshotSource 的写入，徒弟换装/加点后可能落后，不能当作实时属性来源。
 // 调用点都在 `runtime.withState` 之外（见 store.runOnSave）。
-function liveFighterOfAccount(accountId) {
-  const save = store.peek(accountId);
-  if (!save) return fighterOfAccount(accountId);
+// `save` 可选：调用方已经 `store.peek` 过同一账号时传进来，省一次整档 JSON 解析。
+function liveFighterOfAccount(accountId, save) {
+  const data = save || store.peek(accountId);
+  if (!data) return fighterOfAccount(accountId);
   try {
-    const out = runtime.withState(save, () => fighterFromState({ useProps: false }));
+    const out = runtime.withState(data, () => fighterFromState({ useProps: false }));
     return out && out.value ? out.value : fighterOfAccount(accountId);
   } catch (_) {
     return fighterOfAccount(accountId);
@@ -100,7 +101,7 @@ function livePrenticeStats(masterId) {
   for (const row of rowsForMaster(masterId)) {
     const id = Number(row.prentice_id);
     if (!(id > 0)) continue;
-    const f = liveFighterOfAccount(id);
+    const f = liveFighterOfAccount(id, store.peek(id));
     if (!f) continue;
     const stats = displayStats(f);
     stats.tag = String(row.acc_tag || '');
@@ -199,7 +200,7 @@ function tributeCaps() {
   };
 }
 
-function tributeOf(row) {
+function tributeOf(row, save) {
   const y = yesterday();
   const blank = { date: y, exp: 0, gold: 0, claimable: false, claimed: false, newPrentice: false };
   if (!row || row.master_kind !== 'account' || !(Number(row.master_id) > 0)) return blank;
@@ -208,9 +209,9 @@ function tributeOf(row) {
 
   // 收徒当天还没走完，不能结算；从收徒次日起把「收徒当天」的收益也计入。
   if (since && since > y) return Object.assign({}, blank, { claimed, newPrentice: true });
-  const save = store.peek(row.prentice_id);
-  if (!save) return Object.assign({}, blank, { claimed });
-  const earn = (Array.isArray(save.earnHistory) ? save.earnHistory : [])
+  const data = save || store.peek(row.prentice_id);
+  if (!data) return Object.assign({}, blank, { claimed });
+  const earn = (Array.isArray(data.earnHistory) ? data.earnHistory : [])
     .find((d) => d && String(d.date) === y) || { exp: 0, gold: 0 };
   const caps = tributeCaps();
   const exp = Math.min(caps.exp, Math.floor(Math.max(0, Number(earn.exp) || 0) * config.apprenticeTributeExpRate));
@@ -221,28 +222,29 @@ function tributeOf(row) {
   };
 }
 
-function prenticeView(row) {
+function prenticeView(row, save) {
   const snap = snapshots.currentSnapshot(row.prentice_id, 'classic');
-  const save = store.peek(row.prentice_id);
-  const live = liveFighterOfAccount(row.prentice_id);
+  const data = save || store.peek(row.prentice_id);
+  const live = liveFighterOfAccount(row.prentice_id, data);
   return {
     accountId: Number(row.prentice_id),
-    name: String(row.acc_name || (save && save.name) || ''),
+    name: String(row.acc_name || (data && data.name) || ''),
     tag: String(row.acc_tag || ''),
-    level: Math.max(1, Number(save ? save.level : (snap ? snap.level : 1)) || 1),
-    vipLevel: save ? vip.levelAt(save.vip && save.vip.level, save.vip && save.vip.until) : 0,
+    level: Math.max(1, Number(data ? data.level : (snap ? snap.level : 1)) || 1),
+    vipLevel: data ? vip.levelAt(data.vip && data.vip.level, data.vip && data.vip.until) : 0,
     since: String(row.since_date || ''),
     snapshotId: snap ? snap.id : '',
     stats: displayStats(live || { name: row.acc_name, level: 1 }),
     cheer: cheer.forPrentice(row.prentice_id),
-    tribute: tributeOf(row),
+    tribute: tributeOf(row, data),
   };
 }
 
 function list(accountId) {
   const save = store.peek(accountId);
   if (!save) throw error('CONFLICT', '还没有存档');
-  const prentices = rowsForMaster(accountId).map(prenticeView);
+  // 同一徒弟的存档在视图 / 实时属性 / 日供里各用一次：先解一次再往下传。
+  const prentices = rowsForMaster(accountId).map((row) => prenticeView(row, store.peek(row.prentice_id)));
   const claimable = prentices.reduce((sum, p) => sum + (p.tribute.claimable ? 1 : 0), 0);
   const caps = tributeCaps();
   return {

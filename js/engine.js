@@ -11,7 +11,6 @@
     if (typeof console !== 'undefined' && console.warn) console.warn('[engine] ' + m);
   }
 
-  const HAS_ANIM = (typeof AnimationStr !== 'undefined' && AnimationStr);
   const HAS_IMGMAP = (typeof imgMap !== 'undefined' && imgMap && typeof imgMap.getValue === 'function');
 
 
@@ -482,6 +481,50 @@
 
 
   const ANIM_CACHE = Object.create(null);
+  const ANIM_SRC = 'js/gamedict-anim.js';
+  let animPromise = null;
+
+  // 帧表不在启动链里（1.86 MB，只有战斗/无尽塔用），进游戏或进塔前按需加载。
+  function animTable() {
+    return (typeof window !== 'undefined' && window.AnimationStr) || null;
+  }
+  function animLoaded() { return !!animTable(); }
+  function loadAnim() {
+    if (animTable()) return Promise.resolve(true);
+    if (animPromise) return animPromise;
+    if (typeof document === 'undefined' || !document.createElement) {
+      animPromise = Promise.resolve(false);
+      return animPromise;
+    }
+    animPromise = new Promise((resolve) => {
+      const s = document.createElement('script');
+      let src = ANIM_SRC;
+      try {
+        const v = window.__SSDZ_WEB_VERSION__;
+        if (v) src += '?v=' + encodeURIComponent(v);
+      } catch (e) {}
+      s.src = src;
+      s.async = true;
+      s.onload = () => {
+        if (animTable()) for (const k of Object.keys(ANIM_CACHE)) delete ANIM_CACHE[k];
+        resolve(!!animTable());
+      };
+      s.onerror = () => {
+        if (s.parentNode) s.parentNode.removeChild(s);
+        animPromise = null;
+        resolve(false);
+      };
+      (document.head || document.documentElement).appendChild(s);
+    });
+    return animPromise;
+  }
+  // 主页空闲时预热：登录页不下载，进游戏后不抢首屏带宽。
+  function warmAnim() {
+    if (animTable() || animPromise) return;
+    const run = () => { void loadAnim(); };
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 4000 });
+    else setTimeout(run, 1500);
+  }
   function parseAnim(str) {
     const frames = [];
     for (const f of String(str).split(':')) {
@@ -506,13 +549,16 @@
   function anim(name) {
     if (name == null) return null;
     if (name in ANIM_CACHE) return ANIM_CACHE[name];
-    const s = HAS_ANIM ? AnimationStr[name] : null;
+    const table = animTable();
+    const s = table ? table[name] : null;
     const v = s ? parseAnim(s) : null;
-    ANIM_CACHE[name] = v;
+    // 没加载时不要缓存 null：帧表到位后同一名字要能立刻解析出来。
+    if (v || table) ANIM_CACHE[name] = v;
+    if (!table) warmAnim();
     return v;
   }
   function hasAnim(name) { return !!anim(name); }
-  function animNames() { return HAS_ANIM ? Object.keys(AnimationStr) : []; }
+  function animNames() { const table = animTable(); return table ? Object.keys(table) : []; }
 
 
   function frameSprite(label, opt) {
@@ -814,7 +860,7 @@
     retrySheet, retrySheets, retryFailedImages, missingSheets, imagesHealthy, recoverSheets,
     sheet: sheet, spriteFor: spriteFor, spriteIn: spriteIn, pinSheets: pinSheets, frameSize: frameSize, has: has,
     ensureMutantSheets: ensureMutantSheets, mutantSheets: mutantSheets,
-    anim: anim, hasAnim: hasAnim, animNames: animNames,
+    anim: anim, hasAnim: hasAnim, animNames: animNames, loadAnim: loadAnim, warmAnim: warmAnim, animLoaded: animLoaded,
     drawFrame: drawFrame, drawSprite: drawSprite,
     frameBounds: frameBounds,
     makePlayer: makePlayer, playAnim: playAnim, updatePlayer: updatePlayer, drawPlayer: drawPlayer, killInst: killInst,

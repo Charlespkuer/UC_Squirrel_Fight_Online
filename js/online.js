@@ -207,6 +207,8 @@
   const BADGE_POLL_MS = 60000;
   let badgeTimer = null;
   let badgeInFlight = false;
+  // 标已读的 POST 在途时暂停轮询：否则一个在提交前发出的 GET 回来会把刚清零的红点又点亮。
+  let seenPending = 0;
   let badgeSeq = 0;
 
   function setBadge(out, at) {
@@ -226,7 +228,7 @@
 
   async function refreshBadge() {
     if (!S.ready) return S.badge;
-    if (badgeInFlight) return S.badge;
+    if (badgeInFlight || seenPending) return S.badge;
     if (typeof document !== 'undefined' && document.hidden) return S.badge;
     const seq = ++badgeSeq;
     badgeInFlight = true;
@@ -245,16 +247,20 @@
   // 打开消息页：普通消息本地先熄红点；留言板未读保留，等玩家真的进留言 tab。
   async function markMessagesSeen() {
     if (!S.ready) return null;
-    badgeSeq++;
+    const seq = ++badgeSeq;
     const leave = Math.max(0, Number(S.badge && S.badge.leave) || 0);
     setBadge({ unread: leave, leave, requests: 0, total: leave }, Date.now());
+    seenPending++;
     try {
       const out = await Net.post('/api/messages/seen', {});
+      if (seq !== badgeSeq) return S.badge;
       return setBadge(out, Date.now());
     } catch (e) {
-      // 失败就重新问一次服务端，别让红点停在错误的清零状态。
-      void refreshBadge();
+      // 失败就重新问一次服务端，别让红点停在错误的清零状态；等 finally 放开 seenPending 再查。
+      setTimeout(() => { if (!seenPending) void refreshBadge(); }, 0);
       return null;
+    } finally {
+      seenPending = Math.max(0, seenPending - 1);
     }
   }
 
@@ -530,7 +536,7 @@
     clickGuard.clear(); syncClickGuard.clear();
     badgeSeq++;
     badgeInFlight = false;
-    S.badge = { unread: 0, requests: 0, total: 0, at: 0 };
+    S.badge = { unread: 0, leave: 0, requests: 0, total: 0, at: 0 };
     emit('logout', null);
   }
 

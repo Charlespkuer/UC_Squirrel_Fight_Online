@@ -209,17 +209,12 @@
 
   function fileUrl(pkg) { return base() + String((pkg && pkg.url) || ''); }
   function downloadPageUrl(info) { return base() + String((info && info.downloadPage) || '/download'); }
-  function sizeText(bytes) {
-    const n = Number(bytes) || 0;
-    return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
-  }
+  function sizeText(bytes) { return U._.formatBytes ? U._.formatBytes(bytes) : String(bytes); }
 
   function openUrl(url) {
+    if (U._.openExternal) { U._.openExternal(url); return; }
     const u = String(url || '');
     if (!/^https?:\/\//i.test(u)) return;
-    try {
-      if (window.Main && typeof Main.openExternal === 'function') { void Main.openExternal(u); return; }
-    } catch (e) {}
     try { window.open(u, '_blank', 'noopener'); } catch (e) {}
   }
 

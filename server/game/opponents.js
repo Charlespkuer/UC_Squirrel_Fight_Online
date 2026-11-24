@@ -125,9 +125,11 @@ function randomPlayers(owner, level, excluded) {
     FROM battle_snapshots b JOIN accounts a ON a.id=b.account_id
     LEFT JOIN saves sv ON sv.account_id=b.account_id AND sv.mode=b.mode
     WHERE b.mode='classic' AND b.account_id<>? AND b.level BETWEEN ? AND ? AND a.banned=0
+      AND b.revision = (SELECT MAX(x.revision) FROM battle_snapshots x
+        WHERE x.account_id=b.account_id AND x.mode=b.mode AND x.level=b.level)
       AND (a.last_seen>=? OR EXISTS (SELECT 1 FROM simulated_accounts sa WHERE sa.account_id=a.id))
       AND ${visibility.hiddenSqlFor('b.account_id', viewerHidden)}
-    ORDER BY b.account_id,b.level,b.revision DESC`,
+    ORDER BY b.account_id,b.level`,
     ...params);
   const groups = new Map(), banned = new Set(excluded.map(Number));
   for (const r of rows) {

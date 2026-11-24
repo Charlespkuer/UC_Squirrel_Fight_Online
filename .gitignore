@@ -28,8 +28,8 @@ _site/
 dist/
 __pycache__/
 
-# Tauri 桌面版：web/ 由 tools/build-tauri-app.cjs --web 生成，
-# icons/ 由 `npx tauri icon app-icon.png` 生成，target/ 是 Rust 编译产物
+# 桌面版：web/ 由 tools/build-online-app.cjs --web 生成；
+# icons/ 由 `npx tauri icon app-icon.json` 生成（Android 自适应前景/旧版留边走清单），target/ 是 Rust 编译产物
 src-tauri/web/
 src-tauri/icons/
 src-tauri/target/

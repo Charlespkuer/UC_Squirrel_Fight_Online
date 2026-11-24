@@ -77,6 +77,8 @@ Environment=ALLOW_ORIGIN=tauri://localhost,http://tauri.localhost,https://tauri.
 Environment=LOG_REQUESTS=0
 EnvironmentFile=-/etc/ssdz/creator.env
 EnvironmentFile=-/etc/ssdz/owner.env
+# 备份由 ssdz-backup.timer 在独立进程 / cgroup 里跑，避免 VACUUM INTO 阻塞 API 事件循环。
+Environment=BACKUP_ENABLED=false
 ExecStart=/opt/node22/bin/node index.js
 Restart=on-failure
 RestartSec=2
@@ -85,16 +87,50 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/ssdz
-MemoryMax=512M
+# 常驻 anon 约 200M；页缓存超过 480M 由内核回收，640M 是硬顶。
+# MemorySwapMax=0 保证页缓存回收不会把 Node 堆换出（换出会造成请求抖动）。
+MemoryHigh=480M
+MemoryMax=640M
+MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target
 UNIT
 sudo -n systemctl daemon-reload
 sudo -n systemctl enable ssdz-online >/dev/null 2>&1 || true
+
+echo "== 4.1 内存水位线定时器 =="
+sudo -n install -m 755 "$APP/server/memguard.sh" /usr/local/sbin/ssdz-memguard.sh
+sudo -n tee /etc/systemd/system/ssdz-memguard.service >/dev/null <<'UNIT'
+[Unit]
+Description=SSDZ Online memory guard (reclaim cold page cache)
+After=ssdz-online.service
+ConditionPathExists=/sys/fs/cgroup/system.slice/ssdz-online.service/memory.current
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ssdz-memguard.sh
+Nice=10
+IOSchedulingClass=idle
+UNIT
+sudo -n tee /etc/systemd/system/ssdz-memguard.timer >/dev/null <<'UNIT'
+[Unit]
+Description=Run SSDZ Online memory guard every 15 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
+UNIT
+sudo -n systemctl daemon-reload
+sudo -n systemctl enable ssdz-memguard.timer >/dev/null 2>&1 || true
+sudo -n systemctl restart ssdz-memguard.timer
 sudo -n systemctl restart ssdz-online
 echo "== 5. 自检 =="
-# 启动时要先做一次整库备份（100+ MB 的库约 5 秒），固定 sleep 2 会在服务还没监听时误判失败。
+# 启动要先加载游戏内核与数据库，固定 sleep 2 会在服务还没监听时误判失败。
 HEALTH_OK=0
 for _ in $(seq 1 30); do
   if curl -fsS -m 2 http://127.0.0.1:5896/api/health; then
@@ -113,6 +149,56 @@ fi
 curl -sS -m 8 http://140.143.142.110:5896/api/health
 echo
 systemctl is-active ssdz-online
+
+echo "== 5.1 独立备份（6 小时定时） =="
+sudo -n systemctl stop ssdz-backup.timer 2>/dev/null || true
+sudo -n tee /etc/systemd/system/ssdz-backup.service >/dev/null <<'UNIT'
+[Unit]
+Description=SSDZ Online database backup
+After=ssdz-online.service
+ConditionPathExists=/var/lib/ssdz/ssdz.db
+
+[Service]
+Type=oneshot
+User=ssdz
+Group=ssdz
+WorkingDirectory=/opt/ssdz/server
+Environment=DATA_DIR=/var/lib/ssdz
+Environment=GAME_ROOT=/opt/ssdz
+Environment=TZ=Asia/Shanghai
+Environment=NODE_NO_WARNINGS=1
+Environment=BACKUP_RETENTION_DAYS=7
+Environment=BACKUP_MAX_FILES=56
+ExecStart=/opt/node22/bin/node /opt/ssdz/server/admin-backup.js
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ssdz
+MemoryMax=512M
+TimeoutStartSec=600
+UMask=0077
+UNIT
+sudo -n tee /etc/systemd/system/ssdz-backup.timer >/dev/null <<'UNIT'
+[Unit]
+Description=Run SSDZ Online database backup every 6 hours
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=6h
+AccuracySec=1min
+RandomizedDelaySec=30s
+
+[Install]
+WantedBy=timers.target
+UNIT
+sudo -n systemctl daemon-reload
+sudo -n systemctl enable ssdz-backup.timer >/dev/null 2>&1 || true
+sudo -n systemctl restart ssdz-backup.timer
+echo "  定时器已启动；已开机主机上会立即补跑一次，否则开机后 5 分钟"
+
 echo "== 6. 清理旧包（只留当前版本） =="
 VERSION=$(/opt/node22/bin/node -p "require('/opt/ssdz/scripts/version.json').version" 2>/dev/null || true)
 if [ -n "$VERSION" ] && [ -f "$DATA/downloads/squirrel_fight_online-$VERSION.exe" ]; then

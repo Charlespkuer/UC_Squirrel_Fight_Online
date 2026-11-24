@@ -108,17 +108,12 @@
   // 服务器主人：设置页「一键同步更改」
   // 可见性由服务端按 TCP 对端 IP 判定（/api/owner/sync/preview）；非主人只拿到
   // owner:false，页面连按钮都不挂。预览接口按版本清单给出文件级差异：
-  function clientVersion() { return String(window.__SSDZ_VERSION || '').replace(/^v/i, ''); }
-  function fmtSyncSize(n) {
-    const v = Number(n) || 0;
-    return v >= 1048576 ? (v / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(v / 1024)) + ' KB';
+  function clientVersion() {
+    if (window.OnlineUpdate && typeof OnlineUpdate.version === 'function') return OnlineUpdate.version();
+    return String(window.__SSDZ_VERSION || window.__SSDZ_WEB_VERSION__ || '').replace(/^v/i, '');
   }
-  function openExternalUrl(url) {
-    const u = String(url || '');
-    if (!/^https?:\/\//i.test(u)) return;
-    try { if (window.Main && typeof Main.openExternal === 'function') { void Main.openExternal(u); return; } } catch (e) {}
-    try { window.open(u, '_blank', 'noopener'); } catch (e) {}
-  }
+  const fmtSyncSize = (n) => U._.formatBytes(n);
+  const openExternalUrl = (url) => U._.openExternal(url);
   function ownerDownloadUrl(info) {
     const base = String(Net.base()).replace(/\/+$/, '');
     const ua = String(navigator.userAgent || '');

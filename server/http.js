@@ -51,18 +51,22 @@ function corsHeaders(req) {
   return headers;
 }
 
+function writeJson(res, status, headers, buf) {
+  headers['content-length'] = String(buf.length);
+  try { res.writeHead(status, headers); res.end(buf); } catch (_) {}
+}
+
 function sendJson(res, status, obj, req) {
-  let text = JSON.stringify(obj);
-  let buf = Buffer.from(text, 'utf8');
+  const buf = Buffer.from(JSON.stringify(obj), 'utf8');
   const headers = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' };
   const accept = String((req && req.headers['accept-encoding']) || '');
-  if (buf.length > 1024 && /\bgzip\b/.test(accept)) {
-    buf = zlib.gzipSync(buf, { level: 6 });
+  if (buf.length <= 1024 || !/\bgzip\b/.test(accept)) { writeJson(res, status, headers, buf); return; }
+  // 大响应交给线程池压缩：`gzipSync` 会把事件循环堵在压缩里（战斗/榜单响应越大越明显）。
+  zlib.gzip(buf, { level: 6 }, (err, out) => {
+    if (err || res.headersSent || res.writableEnded) { if (!res.headersSent) writeJson(res, status, headers, buf); return; }
     headers['content-encoding'] = 'gzip';
-  }
-  headers['content-length'] = String(buf.length);
-  res.writeHead(status, headers);
-  res.end(buf);
+    writeJson(res, status, headers, out);
+  });
 }
 
 function sendError(res, err, req) {

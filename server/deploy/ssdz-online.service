@@ -26,6 +26,8 @@ Environment=ALLOW_ORIGIN=tauri://localhost,http://tauri.localhost,https://tauri.
 Environment=LOG_REQUESTS=0
 EnvironmentFile=-/etc/ssdz/creator.env
 EnvironmentFile=-/etc/ssdz/owner.env
+# 备份由 ssdz-backup.timer 在独立进程 / cgroup 里跑，避免 VACUUM INTO 阻塞 API 事件循环。
+Environment=BACKUP_ENABLED=false
 ExecStart=/opt/node22/bin/node index.js
 Restart=on-failure
 RestartSec=2
@@ -34,7 +36,11 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/ssdz
-MemoryMax=512M
+# 常驻 anon 约 200M；页缓存超过 480M 由内核回收，640M 是硬顶。
+# MemorySwapMax=0 保证页缓存回收不会把 Node 堆换出（换出会造成请求抖动）。
+MemoryHigh=480M
+MemoryMax=640M
+MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target

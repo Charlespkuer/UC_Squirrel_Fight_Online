@@ -311,7 +311,10 @@
       claimChest: chest ? async index => { const out = await requestChest(chest.combatId, index); if (out.ups) extraUps.push(...out.ups); return out; } : undefined,
       onClaimError: e => toast(O.errText(e) + '；宝箱已保留，可以重试领取。'),
     });
-    if (winner == null || !O.ready) return resp;
+    // 录像缺失 / 播放失败时 `play()` 返回 null：必须把按住的页面放回去，
+    // 否则挑战页可见但整屏点不动（与天梯/切磋的失败分支同一口径）。
+    if (winner == null) { if (O.ready) restorePage(hold, o.target || { tab: 'random' }); return resp; }
+    if (!O.ready) return resp;
     restorePage(hold, o.target || { tab: 'random' });
     const ups = [...(st.ups || []), ...extraUps].sort((a, b) => a.level - b.level);
     if (ups.length && window.SfGuide) SfGuide.onLevelup(ups);
@@ -673,7 +676,9 @@
     try { resp = await requestMatch({ kind:'wood', rev:O.rev }); }
     catch (e) { restorePage(hold, o.target); toast(O.errText(e)); return null; }
     if (resp.patch) O.applyPatch(resp.patch);
-    if (await play(resp, { kind:'wood', maxRounds:10 }) == null || !O.ready) return resp;
+    const played = await play(resp, { kind:'wood', maxRounds:10 });
+    if (played == null) { if (O.ready) restorePage(hold, o.target || { tab:'friends' }); return resp; }
+    if (!O.ready) return resp;
     restorePage(hold, o.target || { tab:'friends' });
     await waitForUiPage();
     const record = resp.settlement && resp.settlement.record;

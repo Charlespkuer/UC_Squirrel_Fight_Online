@@ -847,6 +847,7 @@
       setRowVip(current.view, k, item);
     }
     showUserPic(current.view, foeAt(i));
+    prefetchFoe(foeAt(i));
   }
   function fightRow(i) {
     const foe = foeAt(i);
@@ -966,6 +967,10 @@
     // `current.rows` 就是这一页显示的那 4 行（`fillRows` 写的），界面行号直接查它。
     // ⚠ 不要在这里再加 `pageOff`：`fillRows` 已经按页偏移切过一刀，
     return (current.rows || [])[Number(i) || 0] || null;
+  }
+  // 选中对手 / 进入随机页时先预热本场动作包；真正开打只等解析与服务端录像。
+  function prefetchFoe(foe) {
+    try { if (foe && window.SfFight && SfFight.prefetchMatch) SfFight.prefetchMatch(foe); } catch (e) {}
   }
 
 
@@ -1683,6 +1688,7 @@
     return true;
   }
   function startFight(foe, kind) {
+    prefetchFoe(foe);
     // 客户端这里只发一个请求、然后把服务端返回的录像播出来（`Online.battle`）。
     if (window.Online && window.Online.ready && window.Online.battle) {
       if (kind === 'friend') {
@@ -1933,6 +1939,7 @@
     setVisible(clipOf(view, 'left'), false);
     setVisible(clipOf(view, 'right'), false);
     showUserPic(view, current.roster[current.sel || 0] || null);
+    prefetchFoe(current.roster[current.sel || 0] || null);
 
     onlineHint(view, '玩家为异步快照；AI 一样消耗体力、结算奖励。');
   }
@@ -2872,6 +2879,12 @@
       current.gateSel = g;
       try { guard(openGate(g)); } catch (e) {}
     }
+    // 挑战页就是战斗入口：进页后就把核心包拉起来，别等主页 6s 后的空闲预热。
+    try {
+      if (window.SfFight && SfFight.preloadCore) {
+        setTimeout(() => { try { SfFight.preloadCore(); } catch (e) {} }, 250);
+      }
+    } catch (e) {}
     openTrace = 'done';
     return true;
   }
@@ -2950,8 +2963,8 @@
       };
       return {
         tab: current.tab, page: current.page, sel: current.sel, refreshRow: current.refreshRow,
-        rows: (current.rows || []).map((r) => (r ? { name: r.name, level: r.level, power: r.power, agility: r.agility, speed: r.speed, hp: r.hp, kind: r.kind } : null)),
-        roster: (current.roster || []).map((r) => (r ? { name: r.name, level: r.level, power: r.power, hp: r.hp, kind: r.kind } : null)),
+        rows: (current.rows || []).map((r) => (r ? { name: r.name, level: r.level, power: r.power, agility: r.agility, speed: r.speed, hp: r.hp, kind: r.kind, snapshotId: r.snapshotId, snapshotRef: r.snapshotRef } : null)),
+        roster: (current.roster || []).map((r) => (r ? { name: r.name, level: r.level, power: r.power, hp: r.hp, kind: r.kind, snapshotId: r.snapshotId, snapshotRef: r.snapshotRef } : null)),
         rightBgFrame: bg ? bg.frame : null,
         stats: { power: btext('power'), agility: btext('agility'), speed: btext('speed'), hp: btext('hp') },
         rowNames: [1, 2, 3, 4].map((i) => {

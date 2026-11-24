@@ -4,12 +4,9 @@
  "sourceBytes": 26436698,
  "sourceSha256": "c01b24dc33ccbae4e104983d54e14ff41f018458b10dc983f5bb5f3c78b39abb",
  "pages": [
-  "load",
-  "showMovie",
   "main",
   "fight",
-  "levelup",
-  "system"
+  "levelup"
  ],
  "gear": [
   "gearHead",
@@ -21,17 +18,13 @@
  ],
  "pageRootIds": {
   "wsicon": "",
-  "load": "6843",
-  "showMovie": "6926",
   "main": "7039",
   "homeLand": "7140",
-  "daoju": "7180",
   "zhuangtai": "7218",
   "tiaozhan": "7638",
   "fight": "7772",
   "levelup": "7795",
   "message": "7819",
-  "system": "7847",
   "gearHead": "1918",
   "gearFistOut": "1914",
   "gearFistIn": "2013",
@@ -44,11 +37,11 @@
   "repair": "5614"
  },
  "dictionarySize": 7876,
- "exportedTags": 8514,
+ "exportedTags": 7925,
  "bundles": [
   {
    "file": "tags.json",
-   "tags": 1628
+   "tags": 1081
   },
   {
    "file": "tags-home.json",
@@ -56,7 +49,7 @@
   },
   {
    "file": "tags-daoju.json",
-   "tags": 287
+   "tags": 245
   },
   {
    "file": "tags-status.json",
@@ -109,7 +102,7 @@
   "message": 100,
   "system": 110
  },
- "bitmapCount": 19,
+ "bitmapCount": 18,
  "bitmaps": [
   {
    "file": "bitmap/3182_0.jpg",
@@ -213,14 +206,6 @@
    "from": "image/jpeg",
    "firstTag": "6835",
    "hd": "bitmap/6835_0.hd.jpg",
-   "hdRefs": 1
-  },
-  {
-   "file": "bitmap/3770_0.png",
-   "bytes": 1582,
-   "from": "image/png",
-   "firstTag": "3770",
-   "hd": "bitmap/3770_0.hd.png",
    "hdRefs": 1
   },
   {

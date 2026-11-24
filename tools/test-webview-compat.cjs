@@ -16,6 +16,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const zlib = require('node:zlib');
 
 const ROOT = path.resolve(__dirname, '..');
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8').replace(/\r\n/g, '\n');
@@ -25,6 +26,59 @@ let passed = 0, failed = 0;
 function test(name, fn) {
   try { fn(); passed++; console.log('  ✓ ' + name); }
   catch (e) { failed++; console.log('  ✗ ' + name + '\n      ' + (e.message || e)); }
+}
+
+/* 图标资产是标准 8-bit RGBA、非隔行 PNG；只算 alpha 包围盒，不引入图像库。 */
+function pngAlphaBounds(rel) {
+  const buf = fs.readFileSync(path.join(ROOT, rel));
+  assert.equal(buf.readUInt32BE(0), 0x89504e47, rel + ' 不是 PNG');
+  let off = 8, width = 0, height = 0, bitDepth = 0, colorType = 0, interlace = 0;
+  const idat = [];
+  while (off < buf.length) {
+    const len = buf.readUInt32BE(off);
+    const type = buf.toString('latin1', off + 4, off + 8);
+    const data = buf.subarray(off + 8, off + 8 + len);
+    if (type === 'IHDR') {
+      width = data.readUInt32BE(0); height = data.readUInt32BE(4);
+      bitDepth = data[8]; colorType = data[9]; interlace = data[12];
+    } else if (type === 'IDAT') idat.push(data);
+    else if (type === 'IEND') break;
+    off += 12 + len;
+  }
+  assert.equal(bitDepth, 8, rel + ' 必须是 8-bit PNG');
+  assert.equal(colorType, 6, rel + ' 必须是 RGBA PNG');
+  assert.equal(interlace, 0, rel + ' 必须是非隔行 PNG');
+  const raw = zlib.inflateSync(Buffer.concat(idat));
+  const bpp = 4, stride = width * bpp;
+  const cur = Buffer.alloc(stride), prev = Buffer.alloc(stride);
+  let pos = 0, minX = width, minY = height, maxX = -1, maxY = -1;
+  for (let y = 0; y < height; y++) {
+    const filter = raw[pos++];
+    raw.copy(cur, 0, pos, pos + stride); pos += stride;
+    for (let i = 0; i < stride; i++) {
+      const left = i >= bpp ? cur[i - bpp] : 0, up = prev[i], upLeft = i >= bpp ? prev[i - bpp] : 0;
+      let value = cur[i];
+      if (filter === 1) value += left;
+      else if (filter === 2) value += up;
+      else if (filter === 3) value += (left + up) >> 1;
+      else if (filter === 4) {
+        const p = left + up - upLeft, pa = Math.abs(p - left), pb = Math.abs(p - up), pc = Math.abs(p - upLeft);
+        value += pa <= pb && pa <= pc ? left : pb <= pc ? up : upLeft;
+      } else assert.equal(filter, 0, rel + ' 的 PNG 行过滤类型异常：' + filter);
+      cur[i] = value & 255;
+    }
+    for (let x = 0; x < width; x++) {
+      if (cur[x * bpp + 3] > 16) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+    cur.copy(prev);
+  }
+  assert.ok(maxX >= 0, rel + ' 是空图');
+  return { width, height, minX, minY, maxX, maxY };
 }
 
 console.log('老 WebView 兼容');
@@ -134,6 +188,28 @@ test('静态 SVG 的渐变 id 不能带冒号（WebView 83 的 <img> 解析不�
   }
   assert.deepEqual(bad, [], '这些 SVG 的渐变/裁剪 id 还带冒号，旧 WebView 会丢掉整层填色：' + bad.join('、'));
   assert.ok(files.length > 100, '静态 SVG 扫描数量异常：' + files.length);
+});
+
+test('Android 图标：自适应前景缩进 60/108 安全区，旧版图标留边，构建时按清单重生成', () => {
+  const manifest = JSON.parse(read('src-tauri/app-icon.json'));
+  assert.equal(manifest.android_fg, 'app-icon-android-fg.png', '自适应前景必须用预缩图');
+  assert.equal(manifest.android_bg, 'app-icon-android-bg.png', '旧版图标要有实底，才能按比例留边');
+  assert.ok(manifest.android_fg_scale >= 70 && manifest.android_fg_scale <= 85, '旧版图标画稿应占 70~85%');
+
+  const fg = pngAlphaBounds('src-tauri/app-icon-android-fg.png');
+  const artW = (fg.maxX - fg.minX + 1) / fg.width * 108;
+  const artH = (fg.maxY - fg.minY + 1) / fg.height * 108;
+  assert.ok(artW >= 58 && artW <= 62, '自适应前景画稿宽应约 60/108，实际 ' + artW.toFixed(2) + 'dp');
+  assert.ok(artH >= 46 && artH <= 51, '自适应前景画稿高应约 48/108，实际 ' + artH.toFixed(2) + 'dp');
+  assert.ok(Math.abs((fg.minX + fg.maxX + 1) / 2 - fg.width / 2) <= 2, '前景必须水平居中');
+  assert.ok(Math.abs((fg.minY + fg.maxY + 1) / 2 - fg.height / 2) <= 2, '前景必须垂直居中');
+
+  const apkBuild = read('tools/build-online-apk.cjs');
+  const iconAt = apkBuild.indexOf("'icon', 'app-icon.json'");
+  const gradleAt = apkBuild.indexOf("batch('gradlew.bat'");
+  assert.ok(iconAt > 0, '构建必须按 app-icon.json 重生成 Android 图标');
+  assert.ok(iconAt < gradleAt, '图标生成必须在 Gradle 打包之前');
+  assert.doesNotMatch(apkBuild, /icons['"],\s*['"]android/, '不能再让旧的 icons/android 覆盖清单生成的图标');
 });
 
 console.log('');

@@ -369,6 +369,17 @@
 
   function closeOriginalResult() { if (window.SfFightResult) SfFightResult.destroy(); }
   function home() { Main.showHome(); }
+  // 真正切页时立刻停掉后台预热：在途预取会 abort，带宽让给当前页要显示的素材。
+  function stopPageWarm() {
+    try { if (window.Main && Main.cancelPageWarm) Main.cancelPageWarm(); } catch (e) {}
+  }
+  // 占位底图走版本号 URL：与 SVG 内嵌位图共用同一条缓存，避免再拉一份。
+  function setWaitArt(box, file) {
+    try {
+      if (!box || !window.SfRender || !SfRender.assetUrl) return;
+      box.style.backgroundImage = 'url("' + SfRender.assetUrl('images/ssfight/ui/' + file) + '")';
+    } catch (e) {}
+  }
 
   function popTap(el, run, now) {
     const f = window.SfUiFeedback;
@@ -943,13 +954,15 @@
 
     if (currentUiMode() === 'classic' && window.SfStatus && SfStatus.open) {
       screen = 'status'; activePortrait = null;
-      $('#ui').innerHTML = '<section class="classic-home ssfight-home" aria-label="松鼠状态"></section>';
+      $('#ui').innerHTML = '<section class="classic-home ssfight-home sf-wait-main" aria-label="松鼠状态"></section>';
       const box = $('#ui .ssfight-home');
       if (box) {
+        setWaitArt(box, 'bitmap/3182_0.hd.webp');
         SfStatus.open(box).then(() => {
-
+          box.classList.remove('sf-wait-main');
           if (window.SfGuide) { try { SfGuide.onPage('status'); } catch (e) {} }
         }).catch((e) => {
+          box.classList.remove('sf-wait-main');
           if (window.__errs) window.__errs.push('SfStatus: ' + (e && e.message));
           openStatusDom();
         });
@@ -1432,12 +1445,15 @@
   function openChallenge() {
     if (!window.SfChallenge || !SfChallenge.open) { toast('挑战页还没加载，请刷新后再试。'); return; }
     screen = 'challenge'; activePortrait = null;
-    $('#ui').innerHTML = '<section class="classic-home ssfight-home" aria-label="松鼠挑战"></section>';
+    $('#ui').innerHTML = '<section class="classic-home ssfight-home sf-wait-main" aria-label="松鼠挑战"></section>';
     const box = $('#ui .ssfight-home');
     if (!box) { toast('挑战页加载失败，请刷新后再试。'); return; }
+    setWaitArt(box, 'bitmap/3182_0.hd.webp');
     SfChallenge.open(box).then(() => {
+      box.classList.remove('sf-wait-main');
       if (screen === 'challenge' && window.SfGuide) { try { SfGuide.onPage('challenge'); } catch (e) {} }
     }).catch((e) => {
+      box.classList.remove('sf-wait-main');
       if (window.__errs) window.__errs.push('SfChallenge: ' + (e && e.message));
       toast('挑战页加载失败，请刷新后重试。');
     });
@@ -2934,13 +2950,18 @@
     const S = State.state();
     if (!S || Number(S.level) < 5) { notice('5级后才能使用装备。多多挑战，升级后再来吧！'); return; }
     if (!window.SfStatus || !SfStatus.openGears) { toast('装备页还没加载，请刷新后再试。'); return; }
+    stopPageWarm();
     screen = 'status'; activePortrait = null;
     const ui = $('#ui');
     if (!ui) { toast('装备页加载失败，请刷新后再试。'); return; }
-    ui.innerHTML = '<section class="classic-home ssfight-home" aria-label="松鼠状态"></section>';
+    ui.innerHTML = '<section class="classic-home ssfight-home sf-wait-main" aria-label="松鼠状态"></section>';
     const box = $('#ui .ssfight-home');
     if (!box) { toast('装备页加载失败，请刷新后再试。'); return; }
-    SfStatus.open(box).then(() => SfStatus.openGears()).catch((e) => {
+    setWaitArt(box, 'bitmap/3182_0.hd.webp');
+    SfStatus.open(box).then(() => SfStatus.openGears()).then(() => {
+      box.classList.remove('sf-wait-main');
+    }).catch((e) => {
+      box.classList.remove('sf-wait-main');
       if (window.__errs) window.__errs.push('SfStatus gears: ' + (e && e.message));
       toast('装备页加载失败，请刷新后重试。');
     });
@@ -3199,6 +3220,7 @@
 
     if (window.SfGuide) { try { SfGuide.onPage(key); } catch (e) {} }
     if (currentUiMode() === 'classic' && window.SfVillage) {
+      stopPageWarm();
       $('#ui').innerHTML = '<section class="classic-home ssfight-home" aria-label="松鼠村庄·' + key + '"></section>';
       // 从塔页（#ui 按 690 高）回来时，这里必须重新按原版 320×196 量一次；
       // 否则地点页的 SVG 只按高度铺满，左右会各空一条。
@@ -3251,14 +3273,19 @@
   function openVillage() {
 
     if (currentUiMode() === 'classic' && window.SfUiMain && SfUiMain.mountVillage) {
+      stopPageWarm();
       if (window.SfVillage) { try { SfVillage.destroy(); } catch (e) {} }
-      $('#ui').innerHTML = '<section class="classic-home ssfight-home" aria-label="松鼠村庄"></section>';
+      $('#ui').innerHTML = '<section class="classic-home ssfight-home sf-wait-village" aria-label="松鼠村庄"></section>';
       // 同 openVillageScene：从塔页回来时先把 #ui 的高度切回村庄页，
       // 再异步挂 SVG；不然村庄立绘会按 690 高算宽度，左右出现黑边。
       if (window.Main?.resizeLayout) Main.resizeLayout();
       const box = $('#ui .ssfight-home');
       if (box) {
-        SfUiMain.mountVillage(box).catch((e) => {
+        setWaitArt(box, 'bitmap/7041_0.hd.webp');
+        SfUiMain.mountVillage(box).then(() => {
+          box.classList.remove('sf-wait-village');
+        }).catch((e) => {
+          box.classList.remove('sf-wait-village');
           if (window.__errs) window.__errs.push('mountVillage: ' + e.message);
           toast('村庄页加载失败，请刷新后重试。');
         });
@@ -3511,7 +3538,7 @@
   // ⚠ `merge` 必须在这个总表里：经典（ssfight）状态页的「装备融合」按钮走的是
   const actions={home,exchange:()=>openBag('exchange'),status:openStatus,weapons:()=>openCatalog('weapon'),skills:()=>openCatalog('skill'),challenge:()=>openChallenge(),battle:()=>openChallenge(),stages:openStages,bag:()=>openBag(),shop:()=>openBag(true),gears:()=>openGears(),merge:openMerge,messages:()=>openMessages(),ranklog:()=>openMessages('ranklog'),revenge:()=>openMessages('revenge'),friends:openFriends,'gear-sell':()=>openGearSell(0),daily:()=>{const S=State.state();if(S&&Number(S.level)<3){toast('3级后开放活动礼包');return;}if(window.SfUiMain&&SfUiMain.openActivity)SfUiMain.openActivity();},system:openSystem,village:openVillage,'village-altar':villageAltar,'village-beast':villageBeast,'village-miracle':villageMiracle,'village-war':villageWar,help:openHelp,arena:()=>fallback('arena'),rank:()=>fallback('rank'),lottery:()=>fallback('lottery'),toplist:()=>fallback('toplist'),vip:()=>fallback('vip')};
 
-  function runAction(key, arg){if(actions[key]){closeOriginalResult();actions[key](arg);}}
+  function runAction(key, arg){if(actions[key]){stopPageWarm();closeOriginalResult();actions[key](arg);}}
   document.addEventListener('keydown',e=>{
     if(e.key==='Escape'){
       const dialogs=$$('.classic-modal-overlay');

@@ -663,6 +663,8 @@
       try { settleNotes = await settlePendingChoicesOnBoot(); } catch (e) {}
       try { if (window.Main && Main.showHome) Main.showHome();
         else if (window.UI && UI.runAction) UI.runAction('home'); } catch (e) {}
+      // 动画帧表（1.86 MB）不在启动链里：进游戏后空闲时预热，首次开战不必现拉。
+      try { if (window.Engine && Engine.warmAnim) Engine.warmAnim(); } catch (e) {}
       if (settleNotes.length) setTimeout(() => toast(settleNotes.join('；')), 600);
       // 安全提醒优先于宝箱提示：让玩家先看到“新设备登录”，再继续日常流程。
       try { await showSecurityAlerts(); } catch (e) { /* 提醒失败不能挡进游戏 */ }
@@ -696,7 +698,21 @@
     },
   };
 
+  function formatBytes(bytes) {
+    const n = Math.max(0, Number(bytes) || 0);
+    if (n < 1024) return Math.round(n) + ' B';
+    if (n < 1048576) return Math.round(n / 1024) + ' KB';
+    return (n / 1048576).toFixed(1) + ' MB';
+  }
+  function openExternal(url) {
+    const u = String(url || '');
+    if (!/^https?:\/\//i.test(u)) return false;
+    try { if (window.Main && typeof Main.openExternal === 'function') { void Main.openExternal(u); return true; } } catch (e) {}
+    try { window.open(u, '_blank', 'noopener'); return true; } catch (e) {}
+    return false;
+  }
+
   OnlineUI._ = { O, esc, toast, C, uiRoot, confirmBox, showLogin, passwordProblem, nameProblem, versionCompare,
-    settlePendingChoicesOnBoot };
+    settlePendingChoicesOnBoot, formatBytes, openExternal };
   window.OnlineUI = OnlineUI;
 })();
