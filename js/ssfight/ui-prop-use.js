@@ -8,13 +8,11 @@
     if (!clip || !clip.gotoAndStop) return;
     try { clip.gotoAndStop(frame); } catch (e) {}
   };
-  // 兜底图标：与背包/商店共用同一张路径表（`UI.classic.propIconSrc`，原版无框矢量优先）。
+  // 兜底图标：与背包/商店共用同一张路径表（`UI.classic.propIconSrc`，全部是矢量图）。
   const iconSrc = (id) => {
     const classic = window.UI && window.UI.classic;
     if (classic && typeof classic.propIconSrc === 'function') return classic.propIconSrc(id);
-    return [79, 82, 87, 90].includes(Number(id))
-      ? 'images/ui/icons/prop/prop-' + Number(id) + '.svg'
-      : 'images/ui/icons/prop/prop-' + Number(id) + '.png';
+    return 'images/ui/icons/prop/prop-' + Number(id) + '.svg';
   };
 
   let session = null;

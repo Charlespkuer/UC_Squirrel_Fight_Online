@@ -162,15 +162,6 @@ function drawRandomPool(realRows, limit, botSlots, rng) {
   return pool.slice(0, want);
 }
 
-function shuffle(list) {
-  const out = list.slice();
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    const t = out[i]; out[i] = out[j]; out[j] = t;
-  }
-  return out;
-}
-
 // 天梯抽取权重：积分差 0 → 1，差 `opponentRatingSpread` 分（默认 200）→ `opponentRatingWeightFloor`
 // （默认 1/5），更远也保底 1/5。权重只影响抽中概率，候选本身不再被积分差排除。
 function ratingWeight(myScore, foeScore) {
@@ -181,7 +172,7 @@ function ratingWeight(myScore, foeScore) {
   return 1 - (1 - floor) * (diff / spread);
 }
 
-// 无放回加权抽取：积分越接近，被抽中的概率越高；同一页不会重复同一个真人。
+// 按权重不放回抽取：权重越接近，被抽中的概率越高；同一次抽取不会重复池内条目。
 function weightedPick(pool, count, weightOf, rng) {
   const want = Math.max(0, Math.floor(Number(count) || 0));
   const rand = typeof rng === 'function' ? rng : Math.random;
@@ -208,12 +199,11 @@ function weightedPick(pool, count, weightOf, rng) {
   return out;
 }
 
-// 天梯人机候选：从本赛区人机池里随机抽，战斗体当场用 State.genAI 生成。
-function addBots(accountId, save, division, chosen, want, pool) {
-  if (want <= 0) return;
-  const bots = pool || shuffle(settlement.botsFor(division.key));
+// 天梯人机候选：把指定的人机行生成成票据，战斗体当场用 State.genAI。
+function addBots(accountId, save, chosen, want, pool) {
+  if (want <= 0 || !Array.isArray(pool) || !pool.length) return;
   runtime.withState(save, ({ api: S }) => {
-    for (const bot of bots) {
+    for (const bot of pool) {
       if (chosen.length >= want) break;
       const level = Math.max(1, Number(bot.level) || 1);
       const seed = battle.randomSeed();
@@ -238,54 +228,61 @@ function averageBotScore(bots) {
   return count ? sum / count : config.rankBotBaseScore;
 }
 
-function botSlotsFor(free, myScore, botScore, realCount) {
-  const n = Math.max(0, Math.floor(Number(free) || 0));
-  if (!n) return 0;
-  const mine = Number(myScore) || 0;
-  // 一个真人都没有时保持旧兜底：300 分以下补满，300 分以上只给一个人机。
-  if (!(Number(realCount) > 0)) return mine < config.rankRealMatchScoreLimit ? n : 1;
-  // 300 分以上人机按 0 分参与匹配；以下按池里人机的平均积分。权重只决定补位数量，
-  // 真人候选已经优先占位，所以积分接近的真人不会被远处人机挤掉。
-  const foe = mine >= config.rankRealMatchScoreLimit ? 0
-    : (botScore == null ? config.rankBotBaseScore : Number(botScore) || 0);
-  return Math.max(0, Math.round(n * ratingWeight(mine, foe)));
-}
-
+// 天梯抽取池：本赛区全部人机签 + 全部真人（最近打过的真人已由 snapshots.candidates 排除）。
+// 真人按与挑战者的积分差取权重；300 分以上人机按 0 分、以下按池里人机平均分取权重。
 function rankCandidates(accountId, save, o, level) {
   const division = settlement.divisionOf(level);
   if (!division) return [];
   const myScore = Number(o.myScore) || 0;
-  const limit = config.opponentsPerRefresh;
-  const chosen = [], accounts = new Set([Number(accountId)]);
+  const chosen = [];
   const list = snapshots.candidates('classic', {
     excludeAccountId: accountId, level, week: settlement.weekKey(),
     minLevel: division.lo, maxLevel: division.hi,
     recentIds: o.recentIds || [],
   });
-  const pool = [];
+  const realPool = [], seen = new Set([Number(accountId)]);
   for (const row of list) {
-    if (accounts.has(row.accountId)) continue;
-    accounts.add(row.accountId);
-    pool.push(row);
+    if (seen.has(row.accountId)) continue;
+    seen.add(row.accountId);
+    realPool.push(row);
   }
-  const picked = weightedPick(pool, limit, (row) => ratingWeight(myScore, row.score));
-  for (const row of picked) {
-    if (chosen.length >= limit) break;
-    const snap = snapshots.snapshotById(row.snapshotId);
-    if (!snap || !snap.fighter) continue;
-    chosen.push(issue(accountId, 'rank', snap.fighter, {
-      source: 'player', accountId: row.accountId, name: row.name, tag: row.tag,
-      score: row.score || 0, historical: !!row.historical, playerSnapshotId: snap.id,
-      vipLevel: row.vipLevel,
+  const botPool = settlement.botsFor(division.key);
+  const botScore = myScore >= config.rankRealMatchScoreLimit ? 0 : averageBotScore(botPool);
+  const botWeight = ratingWeight(myScore, botScore);
+  const pool = [];
+  let botWeightSum = 0, realWeightSum = 0;
+  for (const row of realPool) {
+    const weight = ratingWeight(myScore, row.score);
+    pool.push({ bot: false, row, weight });
+    realWeightSum += weight;
+  }
+  for (const bot of botPool) {
+    pool.push({ bot: true, row: bot, weight: botWeight });
+    botWeightSum += botWeight;
+  }
+  if (!pool.length) return [];
+  const picked = weightedPick(pool, 1, (entry) => entry.weight)[0];
+  if (picked.bot) {
+    const bots = [];
+    addBots(accountId, save, bots, 1, [picked.row]);
+    if (bots.length) chosen.push(bots[0]);
+  } else {
+    const snap = snapshots.snapshotById(picked.row.snapshotId);
+    if (snap && snap.fighter) chosen.push(issue(accountId, 'rank', snap.fighter, {
+      source: 'player', accountId: picked.row.accountId, name: picked.row.name, tag: picked.row.tag,
+      score: picked.row.score || 0, historical: !!picked.row.historical, playerSnapshotId: snap.id,
+      vipLevel: picked.row.vipLevel,
     }));
   }
-  const free = limit - chosen.length;
-  if (free > 0) {
-    const botPool = shuffle(settlement.botsFor(division.key));
-    const botScore = myScore >= config.rankRealMatchScoreLimit ? 0 : averageBotScore(botPool);
-    const bots = botSlotsFor(free, myScore, botScore, chosen.length);
-    if (bots > 0) addBots(accountId, save, division, chosen, chosen.length + bots, botPool);
+  // 选中的真人快照刚好失效：从同池人机补一个，避免空候选。
+  if (!chosen.length && botPool.length) {
+    const bots = [];
+    addBots(accountId, save, bots, 1, [botPool[0]]);
+    chosen.push(...bots);
   }
+  chosen.poolReal = realPool.length;
+  chosen.poolBots = botPool.length;
+  chosen.botChance = botWeightSum + realWeightSum > 0 ? botWeightSum / (botWeightSum + realWeightSum) : 0;
   prune(Number(accountId));
   return chosen;
 }
@@ -367,5 +364,5 @@ function drawTeammates(owner, save, level, count, excluded) {
 
 module.exports = {
   candidates, resolve, resolveTarget, isOffer, buildRandomFoe, forgetAccount, drawRandomPool, drawTeammates,
-  botSlotsFor, randomPlayers, ratingWeight, weightedPick,
+  randomPlayers, ratingWeight, weightedPick,
 };

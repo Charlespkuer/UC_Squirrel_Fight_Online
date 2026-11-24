@@ -12,14 +12,14 @@
     return { bot, player, label: bot ? 'AI' : player ? '玩家' : '?',
       detail: bot ? (it.kind === 'friend' ? 'AI 好友：免费切磋，不结算奖励。'
         : it.practice ? 'AI 陪练：免费，不计排名、次数与奖励。'
-          : '赛区人机：按天梯规则结算积分、次数与奖励；300 分以后人机按 0 分参与匹配，权重降到 1/5。') :
+          : '赛区人机：按天梯规则结算积分、次数与奖励；本段位全部人机和所有真人一起按积分差权重抽取，最近打过的真人不会进池。') :
         player ? '玩家战斗快照，异步挑战，不代表此刻在线。' : '对手来源尚未确认。' };
   }
   async function roster(kind) {
     const data = kind === 'friends' ? await O.get('/api/friends') : await O.battle.opponents({ kind: kind || 'rank' });
     const entries = kind === 'friends' ? data.friends || [] : data.opponents || [];
     // 服务端已经把战斗体塞在列表里了（原版 `randomfriends.do` 也是这么做的）：
-    // 一页 3 个对手 = 1 次请求。只有老服务端/超出预算的好友才回落到 `/api/fighter`。
+    // 一页最多 3 个对手（天梯现在只抽 1 个）= 1 次请求。只有老服务端/超出预算的好友才回落到 `/api/fighter`。
     // 师徒行的装备/属性/武技在服务端是当前快照，存档里的 `master` / `prentices` 只是拜师/收徒
     // 当时的镜像；好友页把师徒行也画在同一份名单里，所以这里一并取最新的。
     const kinRequest = kind === 'friends' ? O.get('/api/apprentice').catch(() => null) : null;
@@ -81,7 +81,7 @@
         catch (e) { if (m.element.isConnected) toast(O.errText(e)); } finally { busy = false; }
       } }, { label: '返回', cls: 'muted' }], { small: true });
   }
-  // 天梯开打：服务端已按积分差权重抽好候选（真人优先；300 分以后人机按 0 分计权重）。
+  // 天梯开打：服务端把本段位全部人机和真人按积分差权重洗成一个池，取第一签。
   // 第一签就是加权抽签结果，不能再在候选里均匀随机，否则最终对手概率会被摊平。
   // 「战斗准备中」要显示双方名次：真人对手的 rank 在候选行里，自己的 myRank 在响应顶层。
   async function autoMatch() {

@@ -104,11 +104,18 @@ async function main() {
   ok('normal: A can claim with hidden players excluded from its rank', aClaim.ok === true
     && Number(aClaim.rank) === 1 && Number(aClaim.cups) === 50, aClaim);
 
-  const rankOpp = await call('GET', '/api/opponents', undefined, A.token);
-  const bOpp = await call('GET', '/api/opponents', undefined, B.token);
-  ok('hidden: B can still see others as opponents (including hidden C)', bOpp.ok === true
-    && bOpp.opponents.every((x) => Number(x.accountId) !== bId)
-    && bOpp.opponents.some((x) => Number(x.accountId) === cId));
+  /* 固定随机流取池头真人：隐身者 B 的池里应有 A 和 C 两个真人。 */
+  async function opponentsAt(who, value) {
+    const saved = Math.random;
+    try { Math.random = () => value; return await call('GET', '/api/opponents', undefined, who); }
+    finally { Math.random = saved; }
+  }
+  const rankOpp = await opponentsAt(A.token, 0.000001);
+  const bOpp = await opponentsAt(B.token, 0.000001);
+  ok('hidden: B rank pool still includes visible A and hidden C', bOpp.ok === true
+    && bOpp.match.poolReal === 2 && bOpp.match.poolBots === 30
+    && bOpp.opponents.length === 1
+    && bOpp.opponents.every((x) => Number(x.accountId) !== bId));
   ok('hidden: B absent from A rank candidates', !rankOpp.opponents.some((x) => Number(x.accountId) === bId));
   const randomRows = require('../server/game/opponents').randomPlayers(aId, 30, []);
   ok('hidden: B absent from randomPlayers pool', !randomRows.some((x) => Number(x.accountId) === bId));

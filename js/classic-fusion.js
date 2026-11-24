@@ -22,7 +22,7 @@
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const gearArtSrc = (id) => (window.UI && UI.classic && UI.classic.gearIconSrc)
     ? UI.classic.gearIconSrc(id)
-    : 'images/ui/icons/gear/gear-' + Number(id) + '.png';
+    : 'images/ui/icons/gear/gear-' + Number(id) + '-classic.svg?v=4';
   const art = (gear) => '<img alt="" src="' + gearArtSrc(gear.id) + '" onerror="this.style.visibility=\'hidden\'">';
 
 

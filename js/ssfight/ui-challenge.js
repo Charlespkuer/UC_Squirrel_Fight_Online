@@ -1493,7 +1493,7 @@
         .filter(Boolean).join(' · ');
       const gearSrc = (window.UI && UI.classic && UI.classic.gearIconSrc)
         ? UI.classic.gearIconSrc(gid)
-        : 'images/ui/icons/gear/gear-' + gid + '.png';
+        : 'images/ui/icons/gear/gear-' + gid + '-classic.svg?v=4';
       return '<li><span class="sf-fd-icon gear" data-img="' + gearSrc + '"></span>' +
         '<b' + (orange ? ' style="color:#c45a12"' : '') + '>' + esc(C && C.gearName ? C.gearName(gid) : ('装备' + gid)) + (orange ? '（橙）' : '') + '</b>' +
         '<i>' + esc(extra) + '</i></li>';

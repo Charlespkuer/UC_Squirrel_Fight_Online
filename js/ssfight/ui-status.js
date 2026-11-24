@@ -2597,7 +2597,7 @@
       const gearImg = g
         ? ((window.UI && UI.classic && UI.classic.gearIconSrc)
           ? UI.classic.gearIconSrc(g.id)
-          : 'images/ui/icons/gear/gear-' + Number(g.id) + '.png')
+          : 'images/ui/icons/gear/gear-' + Number(g.id) + '-classic.svg?v=4')
         : '';
       return '<li class="' + (g ? '' : 'none') + '">' +
         '<span class="sf-fd-icon gear" data-img="' + gearImg + '"></span>' +

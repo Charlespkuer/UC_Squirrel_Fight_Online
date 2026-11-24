@@ -500,7 +500,8 @@
       try { localStorage.setItem(RENDER_COMPAT_KEY, '1'); } catch (e) {}
       try { fitCanvas(true); } catch (e) {}
       redrawSurface();
-      try { if (window.UI && UI.toast) UI.toast('画面异常，已自动切换到兼容渲染'); } catch (e) {}
+      // 兼容渲染常驻会让整局都走 CPU；提示里带上开关位置，玩家能自己切回硬件层。
+      try { if (window.UI && UI.toast) UI.toast('画面异常，已自动切换到兼容渲染（设置 → 画面兼容 可切回）'); } catch (e) {}
     };
     window.__ssdzIsBackgrounded = () => inBackground;
     window.addEventListener('ssdz-native-pause', enterBackground);
@@ -682,7 +683,10 @@
       'resource_5', 'resource_9', 'resource_10', 'resource_11', 'resource_12', 'resource_14', 'resource_2', 'resource_7', 'resource8',
       'new', 'shengbai', 'tanchutiao', 'loadingShadow', 'substarate', 'substarate0', 'draw', 'activity', 'plus', 'minus'];
     // 只有「首屏 + 首页」这批必须等。战斗图集（BATTLE_SHEETS）不在这里等 ——
-    await Engine.loadSheets(window.__SSDZ_ONLINE__ ? ['tanchutiao'] : coreSheets);
+    // 联机只等进度条；`tanchutiao` 已改矢量，按 URL 单独注册（gamedict 里仍是旧 PNG 路径）。
+    await (window.__SSDZ_ONLINE__
+      ? Engine.loadSheetFromUrl('tanchutiao', 'images/ui/numbers/tanchutiao.svg')
+      : Engine.loadSheets(coreSheets));
     drawLoading(0.85, '正在加载界面素材…');
     setStatus('加载界面素材…');
 // 角色/特效图集必须优先于场景图集，否则同名标签会被场景图元抢走

@@ -250,7 +250,7 @@
     const cup = Math.floor(Number(payload.cup) || 0);
     const iconFor = (id) => {
       if (classic && typeof classic.propIconSrc === 'function') return classic.propIconSrc(id);
-      return 'images/ui/icons/prop/prop-' + id + '.png';
+      return 'images/ui/icons/prop/prop-' + id + '.svg';
     };
     const art = (src) => '<img class="mail-reward-art" alt="" src="' + htmlEscape(src) + '">';
     if (gold > 0) {

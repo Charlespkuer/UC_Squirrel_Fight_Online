@@ -433,9 +433,14 @@ test('天梯金杯商店：23 件价格与积分门槛按 2026-11 口径，月�
     assert.strictEqual(Number(goodsMap.getValue(id).integral), value, '商品 ' + id + ' 的积分门槛');
   }
   assert.deepStrictEqual([Number(goodsMap.getValue('5').cup), Number(goodsMap.getValue('5').integral)], [50, 100], '卷轴按原版 50 杯/100 分');
-  /* 力敏速血转化丸 30 杯 + 30 金松果；永久属性丸 500 杯 + 200 金松果。 */
+  /* 力敏速血转化丸 2026-11-30 前 30 杯 + 30 金松果，下周起 50 杯 + 50 金松果；
+   * 永久属性丸 500 杯 + 200 金松果。 */
+  assert.deepStrictEqual([State.rankConvertPillPrice('2026-11-23').cup, State.rankConvertPillPrice('2026-11-23').gold], [30, 30], '本周仍是 30 + 30');
+  assert.deepStrictEqual([State.rankConvertPillPrice('2026-11-30').cup, State.rankConvertPillPrice('2026-11-30').gold], [50, 50], '2026-11-30 起 50 + 50');
+  const pillPrice = State.rankWeekKey() >= '2026-11-30' ? [50, 50] : [30, 30];
   for (const id of ['15', '16', '17', '18']) {
-    assert.deepStrictEqual([Number(goodsMap.getValue(id).cup), Number(goodsMap.getValue(id).gold)], [30, 30], '转化丸 ' + id + ' 的价格');
+    const g = State.rankGoodsOf(id);
+    assert.deepStrictEqual([Number(g.cup), Number(g.gold)], pillPrice, '转化丸 ' + id + ' 的当前价格');
   }
   for (const id of ['7', '8', '9', '10']) {
     assert.deepStrictEqual([Number(goodsMap.getValue(id).cup), Number(goodsMap.getValue(id).gold)], [500, 200], '永久属性丸 ' + id + ' 的价格');
@@ -463,6 +468,21 @@ test('天梯金杯商店：23 件价格与积分门槛按 2026-11 口径，月�
   assert.strictEqual(s.gears[s.gears.length - 1].id, 205, '第二套给橙色狂战 205');
   assert.strictEqual(State.gearInst(205).quality, 4, '第二套是橙装');
   assert.strictEqual((s.gears[s.gears.length - 1].ext || []).length, 2, '第二套狂战同样带 2 条随机附加属性');
+});
+
+test('转化丸下周起按 50 金杯 + 50 金松果扣费', () => {
+  const realNow = Date.now;
+  try {
+    // 本地 2026-11-30（周一）0:05：不依赖测试机时区，rankWeekKey 一定进入下周。
+    Date.now = () => new Date(2026, 10, 30, 0, 5).getTime();
+    const s = freshSave({ level: 40, integral: 1000, goldCup: 100, goldPoint: 100,
+      rankPurchaseWeek: '', rankPurchases: {}, rankPurchaseTotals: {}, rankMonthPurchases: {}, rankPurchaseMonth: '' });
+    const r = State.rankBuy(15);
+    assert.strictEqual(r.ok, true, '下周应能兑换力量转化丸');
+    assert.deepStrictEqual([s.goldCup, s.goldPoint], [50, 50], '下周起扣 50 金杯 + 50 金松果');
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test('金杯商店两套狂战（11-14 / 20-23）每月限兑一次，跨月重置', () => {

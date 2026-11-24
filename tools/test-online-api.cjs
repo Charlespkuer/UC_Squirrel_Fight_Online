@@ -356,26 +356,33 @@ async function main() {
   }
   const playerPreview = await call('GET', '/api/fighter?snapshotId=' + player.snapshotId, undefined, token);
 
-  /* 9. 天梯对手：两个同级号应该能互相看到（随后统一抬到 30 级开天梯） */
-  /* 给 A 一个接近人机基准分的积分，保证 300 分以下也会补人机候选。 */
+  /* 9. 天梯对手：本赛区全部真人 + 全部人机洗进同一加权池。 */
+  /* 给 A 一个接近人机基准分的积分，真人 / 人机两边都能覆盖到。 */
   db.run('UPDATE ratings SET score = 250 WHERE account_id = ? AND season = ?',
     A.profile.account.accountId, require('../server/game/settlement').weekKey());
   /* 「战斗准备中」要显示真人名次：B 先有本周 rating，才会出现在赛区名次表里。 */
   require('../server/game/settlement').ensureRating(B.profile.account.accountId,
     require('../server/game/settlement').weekKey());
-  const opp = await call('GET', '/api/opponents', undefined, token);
+  /* 固定随机流：池子先真人后人机，0.000001 取首个真人，0.999999 取末尾人机。 */
+  async function opponentsAt(value) {
+    const saved = Math.random;
+    try { Math.random = () => value; return await call('GET', '/api/opponents', undefined, token); }
+    finally { Math.random = saved; }
+  }
+  const oppReal = await opponentsAt(0.000001);
+  const oppBot = await opponentsAt(0.999999);
   ok('opponents list 带赛区名次（真人对手有 rank，自己 myRank 在顶层）',
-    opp.ok && Array.isArray(opp.opponents)
-    && Number.isInteger(opp.myRank) && opp.myRank >= 1
-    && opp.opponents.some((o) => o.player && Number(o.rank) >= 1)
-    && opp.opponents.filter((o) => o.bot).every((o) => !o.rank));
-  ok('opponents exclude self', !opp.opponents.some((o) => o.accountId === A.profile.account.accountId));
+    oppReal.ok && Array.isArray(oppReal.opponents)
+    && Number.isInteger(oppReal.myRank) && oppReal.myRank >= 1
+    && oppReal.opponents.some((o) => o.player && Number(o.rank) >= 1)
+    && oppReal.opponents.filter((o) => o.bot).every((o) => !o.rank));
+  ok('opponents exclude self', !oppReal.opponents.some((o) => o.accountId === A.profile.account.accountId));
 
   /* 10. 天梯战斗（需要对手快照；30 级才开启） */
-  if (opp.opponents.length) {
+  if (oppReal.opponents.length && oppBot.opponents.length) {
     /* 10a. 500 分以下的 AI 是正常天梯对手（积分/金杯/次数/经验都结算）。 */
-    const botOffer = opp.opponents.find((x) => x.bot);
-    const realOffer = opp.opponents.find((x) => x.player);
+    const botOffer = oppBot.opponents.find((x) => x.bot);
+    const realOffer = oppReal.opponents.find((x) => x.player);
     /* 给 A 一个非 0 分，避免严格零和在 0 分下限把这场压成双方 0 变化。 */
     db.tx(() => {
       db.run('UPDATE ratings SET score = 100 WHERE account_id = ? AND season = ?',
@@ -590,13 +597,20 @@ async function main() {
   /* 清掉 A 之前的真人战报，只留赛区真人 B；A 到 300 分。 */
   db.run("DELETE FROM combats WHERE attacker_id = ? AND kind = 'rank'", aId);
   db.run('UPDATE ratings SET score = 300 WHERE account_id = ? AND season = ?', aId, weekNow);
-  const highRank = await call('GET', '/api/opponents', undefined, token);
-  ok('300 分以上：真人按积分差权重抽取，人机按 0 分计权重（1/5），模拟账号不进池',
-    highRank.match.weighted === true && highRank.match.botWeight === 0.2 && highRank.match.realCount >= 1
-    && highRank.match.botCount === 0 && highRank.opponents.length === 1
-    && highRank.opponents[0].accountId === bId
-    && !highRank.opponents.some((x) => x.accountId === demonId));
   const oppMod = require('../server/game/opponents');
+  const highRank = await call('GET', '/api/opponents', undefined, token);
+  ok('300 分以上：本赛区全部真人和 30 个人机一起洗入加权池，按积分差权重抽 1 个，模拟账号不进池',
+    highRank.match.weighted === true && highRank.match.botWeight === 0.2
+    && highRank.match.poolBots === 30 && highRank.match.poolReal >= 1
+    && highRank.match.botChance > 0 && highRank.match.botChance < 1
+    && highRank.match.realCount + highRank.match.botCount === 1
+    && highRank.opponents.length === 1
+    && !highRank.opponents.some((x) => x.accountId === demonId));
+  const forcedRank = await opponentsAt(0.999999);
+  ok('人机也走同一个加权池：抽中人机时直接作为唯一对手，不再只补空位',
+    forcedRank.match.poolBots === 30 && forcedRank.match.botCount === 1
+    && forcedRank.match.realCount === 0 && forcedRank.opponents.length === 1
+    && forcedRank.opponents[0].bot === true);
   const weightAt = (my, foe) => oppMod.ratingWeight(my, foe);
   ok('天梯抽取权重：同分 1、100 分差 0.6、200 分及更远保底 1/5',
     weightAt(1000, 1000) === 1 && Math.abs(weightAt(1000, 1100) - 0.6) < 1e-9
@@ -616,11 +630,13 @@ async function main() {
     && ladderNoBots.top.filter((x) => x.bot).every((x) => x.level >= 30 && x.level <= 39)
     && !ladderNoBots.top.some((x) => x.accountId === demonId)
     && staleWeek.me.score !== 9999 && staleWeek.week === weekNow);
-  /* B 离开 30-39 赛区 → A 没有真人可打：300 分以上按 0 分权重给 1 个兜底人机。 */
+  /* B 离开 30-39 赛区 → 池里只剩 30 个人机。 */
   db.tx(() => store.runOnSave(bId, ({ save }) => { save.level = 55; }, { snapshotSource: 'test-rank' }));
   const noRealRank = await call('GET', '/api/opponents', undefined, token);
-  ok('300 分以上没有真人时仍匹配到赛区人机（按 0 分权重 1/5）',
-    noRealRank.match.weighted === true && noRealRank.match.realCount === 0 && noRealRank.match.botCount === 1
+  ok('没有真人时加权池只剩 30 个人机，抽到的仍是赛区人机',
+    noRealRank.match.weighted === true && noRealRank.match.poolReal === 0
+    && noRealRank.match.poolBots === 30 && noRealRank.match.botChance === 1
+    && noRealRank.match.realCount === 0 && noRealRank.match.botCount === 1
     && noRealRank.opponents.length === 1 && noRealRank.opponents[0].bot === true);
   const stFb = await call('GET', '/api/state', undefined, token);
   const fbBattle = await call('POST', '/api/battle', { kind: 'rank', snapshotId: noRealRank.opponents[0].snapshotId, rev: stFb.rev }, token);
@@ -640,11 +656,11 @@ async function main() {
   db.tx(() => store.runOnSave(bId, ({ save }) => { save.level = 35; }, { snapshotSource: 'test-rank-2' }));
   db.run("DELETE FROM combats WHERE attacker_id = ? AND kind = 'rank'", aId);
   db.run('UPDATE ratings SET score = 300 WHERE account_id = ? AND season = ?', aId, weekNow);
-  const list1 = await call('GET', '/api/opponents', undefined, token);
+  const list1 = await opponentsAt(0.000001);
   const real = list1.opponents.find((x) => x.accountId === bId);
   const stReal = await call('GET', '/api/state', undefined, token);
   await call('POST', '/api/battle', { kind: 'rank', snapshotId: real.snapshotId, rev: stReal.rev }, token);
-  const afterOne = await call('GET', '/api/opponents', undefined, token);
+  const afterOne = await opponentsAt(0.000001);
   const hidden = !afterOne.opponents.some((x) => x.accountId === bId);
   db.tx(() => {
     for (let i = 0; i < 5; i++) {
@@ -653,7 +669,7 @@ async function main() {
         'c_pad' + i + '_' + Date.now(), weekNow, aId, Buffer.from('{}'), Date.now() + i);
     }
   });
-  const afterFive = await call('GET', '/api/opponents', undefined, token);
+  const afterFive = await opponentsAt(0.000001);
   ok('同一个真人至少相隔 5 场：刚打完隐藏，5 场后恢复',
     !!real && hidden && afterFive.opponents.some((x) => x.accountId === bId));
 

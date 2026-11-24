@@ -87,6 +87,8 @@ const RETIRED_FILES = new Set([
   'images/ui/numbers/fightNum_r.png', 'images/ui/numbers/fightNum_y.png', 'images/ui/numbers/jingyanshuzi.png',
   'images/ui/numbers/num_28.png', 'images/ui/numbers/num_36.png', 'images/ui/numbers/shade.png',
   'images/ui/numbers/substarate0.png', 'images/ui/numbers/tilishuzi.png',
+  // 2026-11-24 进度条改矢量：gamedict 里那条 PNG 已退役，main.js 按 URL 加载 tanchutiao.svg。
+  'images/ui/numbers/tanchutiao.png',
 ]);
 let retiredRefs = 0;
 const ROOTS = 'images|css|js|audio|music|fonts|assets';

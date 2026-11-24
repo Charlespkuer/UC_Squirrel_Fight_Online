@@ -242,7 +242,7 @@ function staticPath(pathname) {
   const rel = normalized === '/' ? '/scripts/index-online.html'
     : normalized === '/index.html' ? '/scripts/index-online.html'
       : normalized === '/play' || normalized === '/play/' ? '/scripts/index-online.html'
-        : normalized === '/favicon.ico' ? '/images/ui/web/favicon.png'
+        : normalized === '/favicon.ico' ? '/images/ui/web/favicon.svg'
           : normalized;
   const rootAbs = path.resolve(config.wwwRoot);
   const resolved = path.resolve(rootAbs, '.' + (rel.startsWith('/') ? rel : '/' + rel));

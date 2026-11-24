@@ -731,10 +731,14 @@
     }
   }
 
+  function rankGoodsOf(id) {
+    const raw = rankgoodsMap.getValue(String(id)) || rankgoodsMap.getValue(Number(id));
+    return (State.rankGoodsOf && State.rankGoodsOf(id)) || raw;
+  }
   function rankGoodsList() {
     refreshRankShopDay();
     const goods = [];
-    rankgoodsMap.each((id, item) => goods.push(item));
+    rankgoodsMap.each((id, item) => goods.push(rankGoodsOf(id) || item));
     return goods;
   }
   // 商品行可能比客户端道具字典新（服务端已补、客户端还是旧包）：买到后按商品行补登记。
@@ -752,7 +756,7 @@
     if (!s) return;
     if (s.level < 30) { alert('天梯商店需要达到30级。'); return; }
     refreshRankShopDay();
-    const item = rankgoodsMap.getValue(String(goodsId)) || rankgoodsMap.getValue(Number(goodsId));
+    const item = rankGoodsOf(goodsId);
     if (!item) return;
     const needCup = Number(item.cup) || 0, needGold = Number(item.gold) || 0, needIntegral = Number(item.integral) || 0;
     const lim = rankLimitInfo(item);
@@ -808,19 +812,19 @@
     const s = State.state();
     if (s.level < 30) { alert('\u5929\u68af\u5546\u5e97\u9700\u8981\u8fbe\u523030\u7ea7\u3002'); return; }
     refreshRankShopDay();
-    const goods = []; rankgoodsMap.each((id, item) => goods.push(item));
+    const goods = rankGoodsList();
     const total = Math.ceil(goods.length / 6); pg = Math.max(0, Math.min(pg || 0, total - 1));
     const selected = goods.slice(pg * 6, pg * 6 + 6);
     const limitOf = (item) => {
       const lim = rankLimitInfo(item);
       return lim.limit > 0 ? (lim.monthly ? '每月限兑 ' : lim.account ? '账号限购 ' : '每周限兑 ') + lim.limit + ' 次（已' + (lim.account ? '购 ' : '兑 ') + lim.bought + '）' : '';
     };
-    const p = C().page('bag', 'shop', '<div class="extra-shop-balance">\u91d1\u676f ' + s.goldCup + '\u3000\u91d1\u677e\u679c ' + s.goldPoint + '\u3000\u79ef\u5206 ' + s.integral + '</div><div class="extra-shop-grid">' + selected.map(item => '<button class="extra-shop-item" data-goods="' + item.id + '">' + (item.type === '2' ? image((C().gearIconSrc ? C().gearIconSrc(item.goodsId) : 'images/ui/icons/gear/gear-' + item.goodsId + '.png'), item.name) : C().icon('prop', +item.goodsId)) + '<b>' + esc(item.name) + '</b><span>' + item.cup + '\u91d1\u676f + ' + item.gold + '\u91d1\u677e\u679c</span><small>\u79ef\u5206\u9700 ' + item.integral + (limitOf(item) ? ' \u00b7 ' + limitOf(item) : '') + '</small></button>').join('') + '</div><div class="extra-pagination">' + button('\u4e0a\u4e00\u9875', 'rank-shop-prev', 'tiny muted') + '<span>' + (pg + 1) + '/' + total + '</span>' + button('\u4e0b\u4e00\u9875', 'rank-shop-next', 'tiny muted') + '</div>', { cls: 'extra-board extra-cup-shop' });
+    const p = C().page('bag', 'shop', '<div class="extra-shop-balance">\u91d1\u676f ' + s.goldCup + '\u3000\u91d1\u677e\u679c ' + s.goldPoint + '\u3000\u79ef\u5206 ' + s.integral + '</div><div class="extra-shop-grid">' + selected.map(item => '<button class="extra-shop-item" data-goods="' + item.id + '">' + (item.type === '2' ? image((C().gearIconSrc ? C().gearIconSrc(item.goodsId) : 'images/ui/icons/gear/gear-' + item.goodsId + '-classic.svg?v=4'), item.name) : C().icon('prop', +item.goodsId)) + '<b>' + esc(item.name) + '</b><span>' + item.cup + '\u91d1\u676f + ' + item.gold + '\u91d1\u677e\u679c</span><small>\u79ef\u5206\u9700 ' + item.integral + (limitOf(item) ? ' \u00b7 ' + limitOf(item) : '') + '</small></button>').join('') + '</div><div class="extra-pagination">' + button('\u4e0a\u4e00\u9875', 'rank-shop-prev', 'tiny muted') + '<span>' + (pg + 1) + '/' + total + '</span>' + button('\u4e0b\u4e00\u9875', 'rank-shop-next', 'tiny muted') + '</div>', { cls: 'extra-board extra-cup-shop' });
     back(p, rank, '\u8fd4\u56de\u5929\u68af\u8d5b');
     on(p, 'rank-shop-prev', () => rankShop(Math.max(0, pg - 1)));
     on(p, 'rank-shop-next', () => rankShop(Math.min(total - 1, pg + 1)));
     p.querySelectorAll('[data-goods]').forEach(element => element.onclick = () => {
-      const item = rankgoodsMap.getValue(element.dataset.goods);
+      const item = rankGoodsOf(element.dataset.goods);
       let redeemed = false;
       C().modal('\u91d1\u676f\u5151\u6362', '<p>\u5151\u6362\u3010' + esc(item.name) + '\u3011</p><p>' + esc(item.remark) + '</p><p>\u9700\u8981\uff1a' + item.cup + '\u91d1\u676f\u3001' + item.gold + '\u91d1\u677e\u679c\uff0c\u79ef\u5206\u8fbe\u5230' + item.integral + '\u3002</p>', [{ label: '\u786e\u8ba4\u5151\u6362', run: () => {
         if (redeemed || State.state() !== s) return;

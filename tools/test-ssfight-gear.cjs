@@ -102,3 +102,36 @@ test('黑怒战角填充与描线保留 SWF 矩阵精度，切页顺序不换回
   const current = render.buildFrames(selected.Sf)[121];
   assert.equal([...current.values()].find(p => p.id === '1406').ma, fill.ma);
 });
+
+test('全部 288 件装备都有矢量图标文件（装备显示不再回退 PNG）', () => {
+  const dir = path.join(ROOT, 'images/ui/icons/gear');
+  const rows = json('gear-frames.json').gear;
+  const files = new Set(fs.readdirSync(dir).filter((name) => /^gear-\d+-classic\.svg$/.test(name)));
+  const missing = rows.filter((row) => !files.has('gear-' + row.id + '-classic.svg')).map((row) => row.id);
+  assert.deepEqual(missing, [], '这些装备没有矢量图标：' + missing.join(','));
+  /* 装备路径只允许 SVG；PNG 兜底会让新装备回到 404。 */
+  for (const file of ['js/classic-ui.js', 'js/classic-fusion.js', 'js/online-campaign.js',
+    'js/ssfight/ui-status.js', 'js/ssfight/ui-challenge.js', 'js/ssfight/ui-compose.js',
+    'js/ui-base.js', 'js/classic-extras.js']) {
+    assert.doesNotMatch(read(file), /images\/ui\/icons\/gear\/[^\n]{0,90}\.png/,
+      file + ' 还留着装备 PNG 兜底');
+  }
+  const props = read('js/classic-ui.js').match(/const PROP_SVG_IDS = new Set\(\[([\s\S]*?)\]\)/);
+  const propIds = props ? props[1].split(',').map((s) => Number(s.trim())).filter(Boolean) : [];
+  const propFiles = new Set(fs.readdirSync(path.join(ROOT, 'images/ui/icons/prop'))
+    .filter((name) => /^prop-\d+\.svg$/.test(name)).map((name) => Number(name.match(/prop-(\d+)\.svg/)[1])));
+  const propMissing = propIds.filter((id) => !propFiles.has(id));
+  assert.deepEqual(propMissing, [], '这些道具没有矢量图标：' + propMissing.join(','));
+});
+
+test('gamedata 补登记的道具都有矢量图标，且进了 PROP_SVG_IDS（漏一个就显示透明占位）', () => {
+  const gamedata = read('js/gamedata.js');
+  const start = gamedata.indexOf('const EXTRA_PROPS');
+  const block = gamedata.slice(start, gamedata.indexOf('];', start));
+  const ids = [...block.matchAll(/\['(\d+)',/g)].map((m) => Number(m[1]));
+  assert.ok(ids.includes(80) && ids.includes(89), 'EXTRA_PROPS 解析异常（应当包含黑色卡片 / 黑装自选箱）');
+  const props = read('js/classic-ui.js').match(/const PROP_SVG_IDS = new Set\(\[([\s\S]*?)\]\)/);
+  const listed = new Set(props[1].split(',').map((s) => Number(s.trim())).filter(Boolean));
+  const missing = ids.filter((id) => !listed.has(id) || !fs.existsSync(path.join(ROOT, 'images/ui/icons/prop/prop-' + id + '.svg')));
+  assert.deepEqual(missing, [], '这些道具缺矢量图或没登记进 PROP_SVG_IDS：' + missing.join(','));
+});

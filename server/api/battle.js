@@ -138,6 +138,9 @@ module.exports = {
     const realCount = picked.filter((row) => row && row.player).length;
     const botCount = picked.length - realCount;
     const threshold = config.rankRealMatchScoreLimit;
+    const botChance = kind === 'rank' ? Number(picked.botChance) || 0 : 0;
+    const poolReal = kind === 'rank' ? Number(picked.poolReal) || 0 : 0;
+    const poolBots = kind === 'rank' ? Number(picked.poolBots) || 0 : 0;
 
     const weighted = kind === 'rank' && myScore >= threshold;
     return {
@@ -145,7 +148,7 @@ module.exports = {
       daily: settlement.rankDailyStatus(accountId),
       refreshCooldownMs: config.opponentRefreshCooldownMs,
       match: {
-        threshold, myScore, weighted, realCount, botCount,
+        threshold, myScore, weighted, realCount, botCount, botChance, poolReal, poolBots,
         botWeight: weighted ? opponents.ratingWeight(myScore, 0) : 1,
         ratingSpread: config.opponentRatingSpread,
         ratingWeightFloor: config.opponentRatingWeightFloor,

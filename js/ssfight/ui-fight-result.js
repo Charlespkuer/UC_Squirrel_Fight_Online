@@ -14,18 +14,64 @@
       .replace(/<\/(?:p|div|li)>/gi, '\n').replace(/<[^>]*>/g, '')
       .replace(/&(amp|lt|gt|quot|#39|nbsp);/g, (m, k) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'", nbsp: ' ' }[k]));
   }
+  const NO_LINE_START = /[，。！？；：、）》】”’…·]/;
   function lines(value, width) {
     const out = [];
     for (const paragraph of plain(value).split(/\r\n|\r|\n/)) {
       let row = '', used = 0;
       for (const ch of paragraph) {
         const size = ch.charCodeAt(0) < 128 ? .5 : 1;
-        if (used + size > width && row) { out.push(row); row = ''; used = 0; }
+        if (used + size > width && row) {
+          // 行首禁则：标点跟着上一行走，宁可让这一行超半个字宽。
+          if (NO_LINE_START.test(ch)) { row += ch; used += size; continue; }
+          out.push(row); row = ''; used = 0;
+        }
         row += ch; used += size;
       }
       if (row) out.push(row);
     }
     return out;
+  }
+  const FONT = 'SimHei,Microsoft YaHei,sans-serif';
+  // 安卓 WebView 的 CJK 回退字体行框比桌面高约 1.45 倍（9px 字号的 getBBox 高 13），
+  // 固定行距会让相邻行 / 下方按钮互相压住。按当前平台实测行框排基线；
+  // 量不到时用 1.45em 的保守值，宁可多留一点缝。
+  const cjkMetricsCache = new Map();
+  function cjkMetrics(layer, size) {
+    const key = Math.round(size * 10) / 10;
+    const hit = cjkMetricsCache.get(key);
+    if (hit) return hit;
+    let metrics = { ascent: key * 1.16, height: key * 1.45 };
+    const probe = node('text', { x: -9999, y: 0, 'font-family': FONT, 'font-size': key, fill: 'none' });
+    probe.textContent = '国';
+    layer.appendChild(probe);
+    try {
+      const box = probe.getBBox();
+      if (box && box.height > 0 && box.y < 0) {
+        metrics = { ascent: -box.y, height: box.height };
+      }
+    } catch (e) {}
+    layer.removeChild(probe);
+    cjkMetricsCache.set(key, metrics);
+    return metrics;
+  }
+  function drawTextPage(layer, rows, opts) {
+    const o = opts || {}, size = Number(o.size) || 10;
+    const metrics = cjkMetrics(layer, size);
+    const gap = Number.isFinite(Number(o.gap)) ? Number(o.gap) : 1;
+    const step = metrics.height + gap;
+    const used = rows.length ? rows.length * metrics.height + (rows.length - 1) * gap : 0;
+    const room = Number.isFinite(Number(o.bottom)) ? Math.max(0, Number(o.bottom) - Number(o.top)) : 0;
+    const start = o.valign === 'center' && room > used ? Number(o.top) + (room - used) / 2 : Number(o.top);
+    rows.forEach((text, index) => {
+      const n = node('text', {
+        x: o.x, y: Math.round((start + metrics.ascent + index * step) * 100) / 100,
+        'text-anchor': o.anchor || 'start', 'font-family': FONT, 'font-size': size, fill: o.fill || '#683b1a',
+      });
+      n.textContent = text;
+      layer.appendChild(n);
+    });
+    return { step, metrics };
   }
 
   function hasReward(options) {
@@ -234,26 +280,24 @@
 
 
     const text = rewardText(options);
-    const rows = text ? lines(text, 32) : [];
+    const rows = text ? lines(text, 30) : [];
     const perPage = 2;
     let page = 0;
     if (rows.length) {
       const footer = node('g');
-      footer.appendChild(node('rect', { x: 14, y: 152, width: 292, height: 22, rx: 6,
+      footer.appendChild(node('rect', { x: 14, y: 149.5, width: 292, height: 23, rx: 6,
         fill: '#fcf4e0', stroke: '#8b5a2b', 'stroke-width': 1.2, opacity: '.96', 'pointer-events': 'none' }));
       const textLayer = node('g', { 'pointer-events': 'none' });
       footer.appendChild(textLayer);
+      view.g.appendChild(footer);
       const paint = () => {
         while (textLayer.firstChild) textLayer.removeChild(textLayer.firstChild);
         const slice = rows.slice(page * perPage, (page + 1) * perPage);
-        slice.forEach((line, i) => {
-          const n = node('text', { x: 160, y: 160 + (2 - slice.length) * 4 + i * 8, 'text-anchor': 'middle',
-            'font-family': 'SimHei,Microsoft YaHei,sans-serif', 'font-size': 7.5, fill: '#8b3a1a' });
-          n.textContent = line; textLayer.appendChild(n);
-        });
+        drawTextPage(textLayer, slice, { x: 160, top: 150.5, bottom: 171.5, valign: 'center',
+          size: 7, anchor: 'middle', fill: '#8b3a1a', gap: .8 });
       };
       if (rows.length > perPage) {
-        const more = node('text', { x: 302, y: 169, 'text-anchor': 'end', 'font-family': 'SimHei,Microsoft YaHei,sans-serif',
+        const more = node('text', { x: 302, y: 169, 'text-anchor': 'end', 'font-family': FONT,
           'font-size': 7.5, fill: '#74552d', role: 'button', tabindex: '0', 'pointer-events': 'auto' });
         more.textContent = '更多 ›';
         const next = event => {
@@ -265,7 +309,7 @@
         footer.appendChild(more);
       }
       paint();
-      view.g.appendChild(footer);
+      record.repaint = paint;
     }
 
     const actions = actionList(options);
@@ -282,6 +326,8 @@
       () => record.choose(index), 'result-action-' + index, action.disabled === true, width));
     host.style.visibility = '';
     if (window.Main && Main.resizeLayout) Main.resizeLayout();
+    // 同 3822：缩放落定后重画一次，避免 WebView 把 SVG 文本留在旧缩放布局里。
+    if (record.repaint) record.repaint();
     showLevelUp(options);
     return { view, host, choose: record.choose, close: () => { if (current === record) destroy(); } };
   }
@@ -318,7 +364,7 @@
     host.setAttribute('role', 'dialog'); host.setAttribute('aria-modal', 'true');
     host.setAttribute('aria-label', options.title || '战斗结果');
     host.style.visibility = 'hidden'; ui.appendChild(host);
-    const record = { host, view: null, settled: false, options }; current = record;
+    const record = { host, view: null, settled: false, repaint: null, options }; current = record;
     try {
       const kind = SYMBOL[options.kind] ? options.kind : 'result';
       // 有奖励的普通战果 = 原版 `fight` 战果页（经验 + 金松果 / 战利品三格）；
@@ -344,6 +390,9 @@
       // 3822 的胜负标题自带「进入下一轮争夺冠/亚军」副标题；决赛、季军赛没有下一轮，
       // 由调用方传 `arenaSubtitle` 盖掉（3779 / 3781 是那条逐字文本字段）。
       const arenaSubtitle = kind === 'arena' ? String(options.arenaSubtitle || '').trim() : '';
+      // 只有最终名次结算（冠军/亚军/季军/第四名）用新页脚条；半决赛→决赛这层
+      // 没有 subtitle，保持旧版左对齐正文和旧按钮位置。
+      const arenaSettlement = kind === 'arena' && options.neutral !== true && !!arenaSubtitle;
       if (kind === 'arena') {
         const title = view.byName('title');
         if (title) {
@@ -355,9 +404,19 @@
             }
           }
         }
+        // 原版 3822 自带的提示行 / 返回键 / 按钮位都在卡片和正文区，和自绘战果文字抢同一块地方。
+        hide('info'); hide('info1'); hide('back');
+        hide('button1'); hide('button2'); hide('button3'); hide('buttonsMc');
         const player = options.player || {}, foe = options.foe || {};
         set('name1', player.name || '我'); set('level1', player.level || '');
         set('name2', foe.name || ''); set('level2', foe.level || '');
+        // 3822 左右卡片的「LV:」画稿与数字字段间距相差 2 单位：左侧留 1.8、右侧 -0.2。
+        // 把两侧都补到约 0.8，两个等级数字才不会一边贴着冒号、一边空一截；同时数字基线
+        // 比画稿基线低约 2.8 单位，上提 2.5（局部坐标）让 LV: 和数字落在同一条基线上。
+        for (const [field, dx] of [['level1', -1], ['level2', 1]]) {
+          const target = view.byName(field);
+          if (target && SfRender.nudge) SfRender.nudge(target, dx, -2.5);
+        }
 
         for (const field of ['name1', 'name2']) {
           const target = view.byName(field);
@@ -393,22 +452,47 @@
       }
       const body = node('g'); layer.appendChild(body);
       const layout = {
-        arena: { x: 48, y: 130, width: 21, size: 9, leading: 10, rows: 2, actionY: 154, pageY: 139 },
-        rank: { x: 68, y: 69, width: 18, size: 10, leading: 12, rows: 5, actionY: 143, pageY: 128 },
+        // 3822 的卡片下沿约 y=130、原版返回键 y=157：最终结算的正文放 124–152 的横条，
+        // 操作按钮下移到 163；半决赛/季军赛过渡仍用旧版的 y=130 / 10 行距 / 154 按钮位。
+        arena: arenaSettlement
+          ? { x: 160, top: 125.5, width: 23, size: 8.5, rows: 2, actionY: 163, pageY: 160, bottom: 151.5, anchor: 'middle' }
+          : { x: 48, y: 130, width: 21, size: 9, leading: 10, rows: 2, actionY: 154, pageY: 139, legacy: true },
+        rank: { x: 68, top: 58.5, width: 18, size: 9.5, rows: 5, actionY: 143, pageY: 131, bottom: 133 },
 
-        stage: { x: 72, y: 60, width: 18, size: 9.5, leading: 10.5, rows: 6, actionY: 140, pageY: 126 },
-        result: { x: 66, y: 78, width: 19, size: 10, leading: 12, rows: 5, actionY: 158, pageY: 141 },
+        stage: { x: 72, top: 50.5, width: 18, size: 9.5, rows: 5, actionY: 140, pageY: 128.5, bottom: 129 },
+        result: { x: 66, top: 68.5, width: 17, size: 10, rows: 5, actionY: 164, pageY: 150, bottom: 147 },
 
-        notice: { x: 66, y: 66, width: 19, size: 10, leading: 12, rows: 6, actionY: 158, pageY: 141 },
+        notice: { x: 66, top: 56.5, width: 17, size: 10, rows: 5, actionY: 164, pageY: 150, bottom: 147 },
       }[kind];
-      const rows = lines(options.text, layout.width), perPage = layout.rows;
+      let rows = lines(options.text, layout.width), perPage = layout.rows;
+      // 有下一页时给「更多 ›」腾一行：rank/stage 的原版面板窄，按钮又靠下，
+      // 多一行就会和链接/按钮叠在一起，宁可少排一行分两页。按平台实测行高决定能放几行。
+      if (rows.length > perPage && (kind === 'rank' || kind === 'stage')) {
+        const metrics = cjkMetrics(body, layout.size);
+        const fit = Math.floor((layout.pageY - 9 - layout.top - metrics.height) / (metrics.height + 1)) + 1;
+        perPage = Math.max(2, Math.min(perPage, fit));
+      }
       let page = 0;
+      if (kind === 'arena' && arenaSettlement && rows.length) {
+        const panel = node('rect', { x: 34, y: 124, width: 252, height: 28, rx: 6,
+          fill: '#fcf4e0', stroke: '#8b5a2b', 'stroke-width': 1.1, opacity: '.95', 'pointer-events': 'none' });
+        layer.insertBefore(panel, body);
+      }
       const paint = () => {
         while (body.firstChild) body.removeChild(body.firstChild);
-        rows.slice(page * perPage, (page + 1) * perPage).forEach((text, i) => {
-          const n = node('text', { x: layout.x, y: layout.y + i * layout.leading,
-            'font-family': 'SimHei,Microsoft YaHei,sans-serif', 'font-size': layout.size, fill: '#683b1a' });
-          n.textContent = text; body.appendChild(n);
+        const slice = rows.slice(page * perPage, (page + 1) * perPage);
+        if (layout.legacy) {
+          slice.forEach((text, index) => {
+            const n = node('text', { x: layout.x, y: layout.y + index * layout.leading,
+              'font-family': FONT, 'font-size': layout.size, fill: '#683b1a' });
+            n.textContent = text; body.appendChild(n);
+          });
+          return;
+        }
+        drawTextPage(body, slice, {
+          x: layout.x, top: layout.top, bottom: layout.bottom, valign: arenaSettlement ? 'center' : 'top',
+          size: layout.size, anchor: layout.anchor,
+          fill: arenaSettlement ? '#6b3a12' : '#683b1a', gap: 1,
         });
       };
       const actions = actionList(options);
@@ -460,9 +544,11 @@
         actionCX + (position - (ordered.length - 1) / 2) * step, layout.actionY,
         () => choose(index), 'result-action-' + index, action.disabled === true, ordered.length > 2 ? 60 : 76));
       if (rows.length > perPage) {
-        const more = node('text', { x: kind === 'arena' ? 270 : 251, y: layout.pageY, 'text-anchor': 'end',
-          'font-family': 'SimHei,Microsoft YaHei,sans-serif', 'font-size': 8, fill: '#74552d', role: 'button', tabindex: '0' });
-        more.textContent = '更多 ›';
+        const tight = kind === 'result' || kind === 'notice';
+        const moreX = layout.legacy ? 270 : kind === 'arena' ? 296 : kind === 'rank' ? 252 : kind === 'stage' ? 251 : 258;
+        const more = node('text', { x: moreX, y: layout.pageY, 'text-anchor': 'end',
+          'font-family': FONT, 'font-size': layout.legacy ? 8 : tight || kind === 'arena' ? 7.5 : 8, fill: '#74552d', role: 'button', tabindex: '0' });
+        more.textContent = tight ? '更多›' : '更多 ›';
         const next = event => {
           if (event && event.stopPropagation) event.stopPropagation();
           page = (page + 1) % Math.ceil(rows.length / perPage); paint();
@@ -471,8 +557,12 @@
         more.addEventListener('keydown', event => { if (!event.repeat && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); next(event); } });
         layer.appendChild(more);
       }
-      paint(); host.style.visibility = '';
+      paint();
+      host.style.visibility = '';
       if (window.Main && Main.resizeLayout) Main.resizeLayout();
+      // #ui 的缩放刚变过：安卓 WebView 会把已生成的 SVG 文本留在旧布局里。
+      // 缩放落定后重画一次正文，保证字号/换行按最终尺寸排版。
+      paint();
       showLevelUp(options);
       armAutoClose(record, options);
       return { view, host, choose, close: () => { if (current === record) destroy(); } };

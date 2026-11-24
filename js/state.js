@@ -3523,6 +3523,23 @@
 
   const BERSERK_MONTHLY_GOODS = Object.freeze([11, 12, 13, 14, 20, 21, 22, 23]);
   const RANK_MONTHLY_LIMIT_GOODS = Object.freeze(ONLINE ? [7, 8, 9, 10].concat(BERSERK_MONTHLY_GOODS) : []);
+  const RANK_CONVERT_PILL_GOODS = Object.freeze([15, 16, 17, 18]);
+  // 2026-11-30（下周一）起，力/敏/速/血转化丸从 30 杯 + 30 松果涨到 50 + 50。
+  const RANK_CONVERT_PILL_PRICE_FROM = '2026-11-30';
+  function rankConvertPillPrice(weekKey) {
+    return String(weekKey || '') >= RANK_CONVERT_PILL_PRICE_FROM
+      ? { cup: 50, gold: 50 }
+      : { cup: 30, gold: 30 };
+  }
+  function applyRankGoodsPrice(item) {
+    if (!item || !item.source || !RANK_CONVERT_PILL_GOODS.includes(Number(item.id))) return item;
+    const price = rankConvertPillPrice(rankWeekKey());
+    item.source[4] = String(price.cup);
+    item.source[5] = String(price.gold);
+    item.cup = String(price.cup);
+    item.gold = String(price.gold);
+    return item;
+  }
   function rankWeekKey() {
     if (liveServerClock()) return serverWeekKey(nowMs());
     const d = new Date(Date.now());
@@ -3605,7 +3622,8 @@
   }
   function rankGoodsOf(goodsId) {
     const map = typeof rankgoodsMap !== 'undefined' ? rankgoodsMap : null;
-    return map && map.getValue ? (map.getValue(String(goodsId)) || map.getValue(Number(goodsId))) : null;
+    const item = map && map.getValue ? (map.getValue(String(goodsId)) || map.getValue(Number(goodsId))) : null;
+    return applyRankGoodsPrice(item);
   }
   function rankLimitInfo(item) {
     const id = String(item && item.id);
@@ -6474,7 +6492,7 @@
     toggleGearStar, isGearStarred, gearsInDisplayOrder,
     gemLevel, gemPercent, gemMergeRate, rollGemDrop, mergeGems, socketGem, unsocketGem, canSocketGem, gemAffixTotal, gemUnitsForGear, rollGemAffixUnits, normalizeGemUnits, attachmentValue, GEM_AFFIX_TOTALS, GEM_AFFIX_CAP,
     totalStats, equipmentEffects, shopLimit, purchaseStatus, buyProp, useProp, openChestProp, gainRandomWS, wsChoices, wsInfo,
-    rankBuy, rankLimitInfo, refreshRankShopDay, rankWeekKey, rankMonthKey, RANK_ACCOUNT_LIMIT_GOODS, RANK_MONTHLY_LIMIT_GOODS,
+    rankBuy, rankGoodsOf, rankConvertPillPrice, rankLimitInfo, refreshRankShopDay, rankWeekKey, rankMonthKey, RANK_ACCOUNT_LIMIT_GOODS, RANK_MONTHLY_LIMIT_GOODS,
     chestState, beginChest, confirmChest,
     CHEST_FIXED_POINTS, chestOtherOdds, settlePendingChest,
     blackCardOptions, applyBlackCard, blackGearBoxOptions, applyBlackGearBox,

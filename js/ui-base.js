@@ -69,14 +69,14 @@
     const classic = window.UI && window.UI.classic;
     const url = classic && typeof classic.propIconSrc === 'function'
       ? classic.propIconSrc(id)
-      : 'images/ui/icons/prop/prop-' + id + '.png';
+      : 'images/ui/icons/prop/prop-' + id + '.svg';
     return imgTag(url, 'icon', size || 56);
   }
   function gearIcon(g, size) {
     const classic = window.UI && window.UI.classic;
     const url = classic && typeof classic.gearIconSrc === 'function'
       ? classic.gearIconSrc(g.id)
-      : 'images/ui/icons/gear/gear-' + g.id + '.png';
+      : 'images/ui/icons/gear/gear-' + g.id + '-classic.svg?v=4';
     return imgTag(url, 'icon', size || 56);
   }
 
@@ -127,24 +127,14 @@
   }
 
 
+  // 站点图标只保留矢量：入口页已声明 favicon.svg，这里只给没有声明 icon 的旧壳补一次。
   function installFavicon() {
     try {
-      const c = document.createElement('canvas');
-      c.width = c.height = 64;
-      const cx = c.getContext('2d');
-      const f = Engine.anim('standby');
-      if (!f) return;
-      const box = [64, 360, 400, 640];
-      const bw = box[2] - box[0], bh = box[3] - box[1];
-      const k = Math.min(56 / bw, 56 / bh);
-      Engine.drawFrame(cx, f[3], {
-        x: 32 - (bw * k) / 2 - box[0] * k, y: 32 - (bh * k) / 2 - box[1] * k,
-        scale: k, sheets: ['SQ_01', 'SQ_02'],
-      });
+      if (document.querySelector('link[rel="icon"]')) return;
       const link = document.createElement('link');
       link.rel = 'icon';
-      link.type = 'image/png';
-      link.href = c.toDataURL('image/png');
+      link.type = 'image/svg+xml';
+      link.href = 'images/ui/web/favicon.svg';
       document.head.appendChild(link);
     } catch (e) {}
   }

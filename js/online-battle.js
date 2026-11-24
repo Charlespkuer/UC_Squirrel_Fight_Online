@@ -582,7 +582,7 @@
     const lines = [];
     lines.push(arena.win ? '胜利！' : '再接再厉');
     if (rw.phase === 'semi') {
-      lines.push(rw.next === 'final' ? '晋级决赛' : '争夺季军');
+      // 3822 的胜负标题自带「进入下一轮争夺冠亚军」，正文只列奖励，避免重复晋级文案。
       if (rw.gem) lines.push('获得 ' + rw.gem.name + ' ×1');
     } else {
       // 名次放进 3822 的副标题（决赛/季军赛没有「下一轮」），正文只写资源，避免重复。
@@ -598,7 +598,7 @@
     actions.push({ label: '确定', primary: rw.phase !== 'semi', run: back });
     resultPanel({
       kind: 'arena',
-      title: rw.phase === 'semi' ? (rw.next === 'final' ? '晋级决赛' : '争夺季军') : '竞技场 · ' + (rw.title || '名次'),
+      title: rw.phase === 'semi' ? '竞技场 · 半决赛结果' : '竞技场 · ' + (rw.title || '名次'),
       player: resp.me, foe: resp.foe,
       arenaSubtitle: rw.phase === 'semi' ? '' : '获得' + (rw.title || '名次'),
       win: !!arena.win, exp: rw.exp, gold: 0, ups: [...(rw.ups || []), ...pickupUps].sort((a, b) => a.level - b.level),

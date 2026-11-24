@@ -76,7 +76,7 @@
     const iconSrc = (id) => {
       const classic = window.UI && UI.classic;
       if (classic && typeof classic.propIconSrc === 'function') return classic.propIconSrc(id);
-      return 'images/ui/icons/prop/prop-' + id + '.png';
+      return 'images/ui/icons/prop/prop-' + id + '.svg';
     };
     function show(reward) {
       removeButton(); active = reward;

@@ -1309,6 +1309,7 @@
     g.__nudge = 'translate(' + (Number(dx) || 0) + ',' + (Number(dy) || 0) + ')';
     applyNodeXform(g);
   }
+  function nudge(node, dx, dy) { nudgeNode(node, dx, dy); return true; }
   MovieClip.prototype.applyXform = function () { applyNodeXform(this.g); };
 
   MovieClip.prototype.setDepthExtra = function (depth, extra) {
@@ -1598,6 +1599,9 @@
     setText,
 
     fitTextWidth,
+
+    // 在素材矩阵之后追加一个局部平移；用于原版左右卡片把同一个数字留在不同起始位的情况。
+    nudge,
 
     // 按最终字号重算多行文本的首行基线与行距（缩字号后必须一起收，避免第二行压到下一个字段）。
     layoutText,

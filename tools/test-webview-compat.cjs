@@ -104,7 +104,11 @@ test('绿屏兜底链路：原生软件图层开关 + 纯绿取样 + 页面开�
   const mainJs = read('js/main.js');
   const settingsJs = read('js/online-settings.js');
   assert.match(activity, /fun setRenderMode\(mode: String\)[\s\S]{0,700}LAYER_TYPE_SOFTWARE/, '原生要能把 WebView 切到软件图层');
-  assert.match(activity, /fun probeScreen\(\)[\s\S]{0,1200}isPureGreen\(bitmap\)/, '原生要抽查画面是不是整块纯绿');
+  assert.match(activity, /fun probeScreen\(\)[\s\S]{0,1600}isPureGreen\(pixels, probeArea\)/, '原生要抽查画面是不是整块纯绿');
+  // 探针常驻 UI 线程：逐点 getPixel 会让低端机每拍掉帧，必须批量取色并按时间退避。
+  assert.match(activity, /bitmap\.getPixels\(pixels, 0, probeArea/, '纯绿取样必须一次 getPixels 批取，不能逐点 getPixel');
+  assert.doesNotMatch(activity, /\.getPixel\(/, '探针里不要再用逐点 getPixel');
+  assert.match(activity, /fun probeDelayMs\(\)[\s\S]{0,400}30_000L/, '探针间隔要随时间退到 30 秒，不能一直高频抓屏');
   assert.match(activity, /setBackgroundColor\(Color\.BLACK\)/, 'WebView 底色必须是不透明黑，不能露出未初始化的合成层');
   assert.match(mainJs, /function applyRenderCompat\(\)[\s\S]{0,300}setRenderMode/, '页面的「画面兼容」要落到原生');
   assert.match(mainJs, /function setRenderCompat\(on\)[\s\S]{0,300}applyRenderCompat\(\)/, '切换开关后要立刻重落一次渲染模式');

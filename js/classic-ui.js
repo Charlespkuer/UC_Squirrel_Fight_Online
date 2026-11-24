@@ -142,22 +142,25 @@
     if (u) u.textContent = text;
   }
 
-  // 原版道具库元件导出的无框矢量（`images/ui/icons/prop/prop-<id>.svg`）。
+  // 原版道具库元件导出的无框矢量（`images/ui/icons/prop/prop-<id>.svg`）；
+  // 77/78/80/89 原版没有导出元件，按联机自建美术画成同一套矢量。
   const PROP_SVG_IDS = new Set([
     1, 2, 3, 4, 5, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23,
     24, 25, 26, 28, 29, 30, 31, 32, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46,
-    47, 48, 49, 50, 51, 79, 82, 87, 90, 101, 102, 103, 104, 105, 106, 107,
+    47, 48, 49, 50, 51, 77, 78, 79, 80, 82, 87, 89, 90, 101, 102, 103, 104, 105, 106, 107,
   ]);
   // 带版本号的那批：静态 SVG 的渐变 id 已去掉冒号（WebView 83 的 <img> 解析不到
   // `url(#f2015:2)`，整个渐变层按黑/透明落色），换 URL 让 1 年 immutable 的旧图失效。
   const PROP_SVG_REV = new Set([
     1, 2, 3, 4, 5, 7, 10, 11, 12, 13, 16, 17, 18, 19, 38, 41, 42, 43, 44, 50,
   ]);
-  // 道具图标路径：有原版无框矢量就走 SVG，否则退回图集 PNG。
+  // 没有对应矢量时的透明占位：不要回退到 PNG，也不要用空 src（会重新请求当前页）。
+  const ICON_BLANK = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22/%3E';
+  // 道具图标路径：有原版无框矢量就走 SVG，没有就占位（联机版不再有 PNG 道具图）。
   function propIconSrc(id) {
     const n = Number(id);
-    const file = 'images/ui/icons/prop/prop-' + n + (PROP_SVG_IDS.has(n) ? '.svg' : '.png');
-    return PROP_SVG_REV.has(n) ? file + '?v=4' : file;
+    if (!PROP_SVG_IDS.has(n)) return ICON_BLANK;
+    return 'images/ui/icons/prop/prop-' + n + '.svg' + (PROP_SVG_REV.has(n) ? '?v=4' : '');
   }
   /* 把 <img src="*.svg"> 换成内联 <svg>，只给「需要按画面实际占位重设 viewBox」的地方用
    *（抽奖格子的道具图标：原版矢量各家留白差很多，同尺寸格子会一大一小）。
@@ -218,25 +221,22 @@
       return svg;
     }).catch(() => { if (img.isConnected) img.style.visibility = prev; return null; });
   }
-  // 1~124 + 201~208 有原版容器导出的 `-classic.svg`；其余 id 没有对应矢量，保留旧 PNG 路径。
-  const GEAR_CLASSIC_SVG_IDS = new Set(
-    Array.from({ length: 124 }, (_, i) => i + 1).concat([201, 202, 203, 204, 205, 206, 207, 208])
-  );
+  // 288 件装备都有原版容器帧导出的矢量（`images/ui/icons/gear/gear-<id>-classic.svg`）；
+  // 装备显示不再保留 PNG 分支，缺图时由 `<img>` 的 onerror 收口，不能又冒出第二套格式。
+  const GEAR_ICON_MAX = 288;
   function gearIconSrc(id) {
     const n = Number(id) || 0;
-    return GEAR_CLASSIC_SVG_IDS.has(n)
-      ? 'images/ui/icons/gear/gear-' + n + '-classic.svg?v=4'
-      : 'images/ui/icons/gear/gear-' + n + '.png';
+    if (n < 1 || n > GEAR_ICON_MAX) return ICON_BLANK;
+    return 'images/ui/icons/gear/gear-' + n + '-classic.svg?v=4';
   }
   function atlasIcon(kind, id, locked) {
-    // 图标按类型分了目录（images/ui/icons/<类型>/<类型>-<id>.png），而 kind 是运行时变量，
-    // 所以查 ICON_DIRS 表 —— 不能再拼死路径（漏改这里会让背包/融合的图标全裂）。
+    // 图标按类型分了目录（`images/ui/icons/<类型>/<类型>-<id>[-locked].svg`），kind 是运行时
+    // 变量，所以查 ICON_DIRS 表 —— 不能再拼死路径（漏改这里会让背包/融合的图标全裂）。
     const dir = ICON_DIRS[kind] || 'misc';
     if (kind === 'gear') return gearIconSrc(id);
-
     if (kind === 'prop') return propIconSrc(id);
-    return 'images/ui/icons/' + dir + '/' + kind + '-' + id + (locked ? '-locked' : '') +
-      (kind === 'weapon' || kind === 'skill' ? '.svg?v=4' : '.png');
+    if (kind !== 'weapon' && kind !== 'skill') return ICON_BLANK;
+    return 'images/ui/icons/' + dir + '/' + kind + '-' + id + (locked ? '-locked' : '') + '.svg?v=4';
   }
 
   const levelLabel = (level, withPrefix) => {

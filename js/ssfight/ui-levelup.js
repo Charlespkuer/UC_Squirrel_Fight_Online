@@ -86,7 +86,7 @@
       if (Number(icon.id) === 8) return 'images/ui/icons/gold-acorn.svg';
       const classic = window.UI && window.UI.classic;
       if (classic && typeof classic.propIconSrc === 'function') return classic.propIconSrc(icon.id);
-      return 'images/ui/icons/prop/prop-' + icon.id + '.png';
+      return 'images/ui/icons/prop/prop-' + icon.id + '.svg';
     }
     return 'images/ui/icons/' + icon.kind + '/' + icon.kind + '-' + icon.id +
       (icon.kind === 'weapon' || icon.kind === 'skill' ? '.svg' : '.png');

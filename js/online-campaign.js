@@ -209,7 +209,7 @@
       const c = C();
       href = (c && typeof c.gearIconSrc === 'function')
         ? c.gearIconSrc(art.gear)
-        : ('images/ui/icons/gear/gear-' + art.gear + '.png');
+        : ('images/ui/icons/gear/gear-' + art.gear + '-classic.svg?v=4');
     }
     else if (art.prop) {
       const c = C();

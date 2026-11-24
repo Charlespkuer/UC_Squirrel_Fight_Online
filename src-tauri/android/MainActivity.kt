@@ -72,21 +72,40 @@ class MainActivity : TauriActivity() {
 
     /* 绿屏自愈：荣耀 MagicPad3 Pro（Android 16 / MagicOS 10）上 WebView 的合成层会整块丢栅格，
      * 屏幕只剩一块纯绿 —— 那不是任何一个界面色（界面里最绿的草皮是 94,180,49），是那层没内容。
-     * 每 2 秒抓 WebView 中心 96×96 取色：连续两拍接近纯绿先让页面重挂栅格，还不恢复就切软件图层。
+     * 连续两拍接近纯绿先让页面重挂栅格，还不恢复就切软件图层。
+     * TRAP: 探针跑在 UI 线程且常驻。`getPixel` 逐点取色是每像素一次 JNI，96×96 在低端机上
+     *       要十几毫秒 —— 必须批量 `getPixels` 后隔点取样，并按时间把探针间隔退到 30 秒。
      * 阈值要求红通道 ≈ 0，草绿/深绿页面不会误判。 */
     private var greenStrikes = 0
     private var lastSurfaceRepair = 0L
     @Volatile private var screenProbeOn = false
+    private var probeArmedAt = 0L
+    private var probeBitmap: Bitmap? = null
+    private var probePixels: IntArray? = null
+    private val probeStep = 3
+    private val probeArea = 96
     private val screenProbe = object : Runnable {
         override fun run() {
             if (!screenProbeOn) return
             try { probeScreen() } catch (_: Exception) {}
-            ui.postDelayed(this, 2000L)
+            if (!screenProbeOn) return
+            ui.postDelayed(this, probeDelayMs())
+        }
+    }
+
+    private fun probeDelayMs(): Long {
+        val elapsed = android.os.SystemClock.uptimeMillis() - probeArmedAt
+        return when {
+            elapsed < 60_000L -> 3_000L
+            elapsed < 300_000L -> 15_000L
+            else -> 30_000L
         }
     }
 
     private fun startScreenProbe() {
         screenProbeOn = true
+        probeArmedAt = android.os.SystemClock.uptimeMillis()
+        greenStrikes = 0
         ui.removeCallbacks(screenProbe)
         ui.postDelayed(screenProbe, 3000L)
     }
@@ -103,37 +122,49 @@ class MainActivity : TauriActivity() {
         if (view.width <= 0 || view.height <= 0 || !view.isShown) return
         val loc = IntArray(2)
         view.getLocationInWindow(loc)
-        val size = 96
-        val left = (loc[0] + view.width / 2 - size / 2).coerceAtLeast(0)
-        val top = (loc[1] + view.height / 2 - size / 2).coerceAtLeast(0)
-        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val left = (loc[0] + view.width / 2 - probeArea / 2).coerceAtLeast(0)
+        val top = (loc[1] + view.height / 2 - probeArea / 2).coerceAtLeast(0)
+        val bitmap = probeBitmap
+            ?: Bitmap.createBitmap(probeArea, probeArea, Bitmap.Config.ARGB_8888).also { probeBitmap = it }
+        val pixels = probePixels ?: IntArray(probeArea * probeArea).also { probePixels = it }
         try {
-            PixelCopy.request(window, Rect(left, top, left + size, top + size), bitmap, { result ->
+            PixelCopy.request(window, Rect(left, top, left + probeArea, top + probeArea), bitmap, { result ->
+                if (result != PixelCopy.SUCCESS || !screenProbeOn || compatRender) {
+                    greenStrikes = 0
+                    return@request
+                }
                 try {
-                    if (result == PixelCopy.SUCCESS && isPureGreen(bitmap)) onGreenFrame() else greenStrikes = 0
-                } finally {
-                    bitmap.recycle()
+                    bitmap.getPixels(pixels, 0, probeArea, 0, 0, probeArea, probeArea)
+                    if (isPureGreen(pixels, probeArea)) onGreenFrame() else greenStrikes = 0
+                } catch (_: Exception) {
+                    greenStrikes = 0
                 }
             }, ui)
-        } catch (e: Exception) {
-            try { bitmap.recycle() } catch (_: Exception) {}
+        } catch (_: Exception) {
+            greenStrikes = 0
         }
     }
 
     // 纯绿：红 ≈ 0、绿亮、蓝低于满值。游戏调色板里最绿的草皮是 (94,180,49)、页签 (130,201,72)，
-    // 红通道都远大于 40，不会误判。
-    private fun isPureGreen(bmp: Bitmap): Boolean {
+    // 红通道都远大于 40，不会误判。隔 `probeStep` 取样，96×96 只查 1024 点。
+    private fun isPureGreen(pixels: IntArray, stride: Int): Boolean {
         var green = 0
-        for (y in 0 until bmp.height) {
-            for (x in 0 until bmp.width) {
-                val c = bmp.getPixel(x, y)
+        var total = 0
+        var y = 0
+        while (y < stride) {
+            var x = 0
+            while (x < stride) {
+                val c = pixels[y * stride + x]
                 val r = (c shr 16) and 0xff
                 val g = (c shr 8) and 0xff
                 val b = c and 0xff
                 if (r < 40 && g > 130 && b < 212 && g - r > 90 && g - b > 25) green++
+                total++
+                x += probeStep
             }
+            y += probeStep
         }
-        return green * 100 >= bmp.width * bmp.height * 92
+        return total > 0 && green * 100 >= total * 92
     }
 
     private fun onGreenFrame() {

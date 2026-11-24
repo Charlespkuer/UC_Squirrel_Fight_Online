@@ -169,13 +169,12 @@
     if (kind === 'gear') {
       const classic = window.UI && window.UI.classic;
       if (classic && typeof classic.gearIconSrc === 'function') return classic.gearIconSrc(id);
-      return 'images/ui/icons/gear/gear-' + Number(id) + '.png';
+      return 'images/ui/icons/gear/gear-' + Number(id) + '-classic.svg?v=4';
     }
-    // 道具：背包/商店同一张路径表（`UI.classic.propIconSrc`，原版无框矢量优先）。
+    // 道具：背包/商店同一张路径表（`UI.classic.propIconSrc`，全部是矢量图）。
     const classic = window.UI && window.UI.classic;
     if (classic && typeof classic.propIconSrc === 'function') return classic.propIconSrc(id);
-    if ([10, 11, 12, 14].includes(Number(id))) return 'images/ui/icons/prop/prop-' + Number(id) + '.svg';
-    return 'images/ui/icons/prop/prop-' + Number(id) + '.png';
+    return 'images/ui/icons/prop/prop-' + Number(id) + '.svg';
   }
 
   function fillPage(view, id) {
