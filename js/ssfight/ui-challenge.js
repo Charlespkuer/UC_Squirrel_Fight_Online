@@ -2513,14 +2513,20 @@
         if (!C || !C.modal) return;
         const icon = C.icon ? C.icon('prop', 40) : '';
         const rank = Number(info && info.rank) || 0;
+        const final = !!(info && info.final);
         const granted = !!(info && info.ok && Number(info.cups) > 0);
+        const score = final
+          ? Math.max(0, Math.round(Number(info && info.score) || 0))
+          : Math.max(0, Math.round(Number(State.state().integral) || 0));
         const body = '<div class="rank-claim">' +
-          '<div class="rank-claim-line"><span>当前排名</span><b>' + (rank > 0 ? '第 ' + rank + ' 名' : '未参赛') + '</b>' +
-            '<span>积分</span><b>' + Math.max(0, Math.round(Number(State.state().integral) || 0)) + '</b></div>' +
+          '<div class="rank-claim-line"><span>' + (final ? '上周最终排名' : '当前排名') + '</span><b>' + (rank > 0 ? '第 ' + rank + ' 名' : '未参赛') + '</b>' +
+            '<span>' + (final ? '上周积分' : '积分') + '</span><b>' + score + '</b></div>' +
           (granted
             ? '<div class="rank-claim-reward"><span class="reward-icon">' + icon + '</span><b>金杯 +' + Number(info.cups || 0) + '</b><span>当前 ' + Number(State.state().goldCup || 0) + '</span></div>'
             : '<p class="rank-claim-note">' + esc((info && info.msg) || '暂时不能领取') + '</p>') +
-          '<p class="small-label">每周一 0 点积分减半（人机回到 300 分）；赛区前30名、且至少超过一个人机，才能领取 50 金杯。</p>' +
+          '<p class="small-label">' + (final
+            ? '按上周日 23:59 的最终排名结算（下周一 0 点换周）；赛区前30名、且至少超过一个人机，可领取 50 金杯。'
+            : '每周一 0 点积分减半（人机回到 300 分）；赛区前30名、且至少超过一个人机，才能领取 50 金杯。') + '</p>' +
           '</div>';
         C.modal('天梯奖励', body, [{ label: '知道了', cls: 'gold' }], { small: true });
       };
@@ -2550,7 +2556,11 @@
           if (!C) return;
           // 已经领过就直接弹「已经领取过了」，不再发一次请求让服务端回 200+ok:false。
           if (awardState && awardState.claimed) {
-            showAwardNotice({ rank: awardState.rank, msg: '本周的天梯奖励已经领取过了。' });
+            showAwardNotice({ rank: awardState.rank, score: awardState.score, final: awardState.final, msg: (awardState.final ? '上周' : '本周') + '的天梯奖励已经领取过了。' });
+            return;
+          }
+          if (awardState && awardState.final && awardState.noRecord) {
+            showAwardNotice({ rank: 0, score: 0, final: true, msg: '上周没有参加天梯赛，暂时没有金杯奖励。' });
             return;
           }
           let r;
@@ -2561,14 +2571,14 @@
             const b = e && e.body;
             if (b && (b.already || b.msg)) {
               awardState = b;
-              showAwardNotice({ rank: b.rank, msg: b.msg, already: !!b.already });
+              showAwardNotice({ rank: b.rank, score: b.score, msg: b.msg, final: b.final || b.mode === 'final' });
               return;
             }
             if (C.toast) C.toast(window.Online.errText(e));
             return;
           }
           awardState = r.award || Object.assign({}, awardState, { claimed: true });
-          showAwardNotice({ ok: true, rank: r.rank, cups: r.cups });
+          showAwardNotice({ ok: true, rank: r.rank, cups: r.cups, score: awardState && awardState.score, final: !!(awardState && awardState.final) });
           // 服务端状态已写入；重新拉一次把名次/积分/金杯再对一遍。
           if (r && r.ok) await load();
         },

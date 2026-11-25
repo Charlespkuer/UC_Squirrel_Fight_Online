@@ -106,23 +106,23 @@ test('ssfight 装备词条：48 条、32 空号、宝石总档 3~30 / 单条 12 
 
   /* ⑤ 42/43 武器伤害：+100% 应让同一手武器伤害翻倍。 */
   for (const [wid, effId] of [[16, 42], [17, 43]]) {
-    const base = first(run(g, fighter({ weapons: [wid + ':10'] }), fighter({ side: 1, agility: 50 }), 7), (r) => r.action === 'weapon' && r.attacker === 0 && r.dmg > 0);
-    const buff = first(run(g, fighter({ weapons: [wid + ':10'], effects: { [effId]: 100 } }), fighter({ side: 1, agility: 50 }), 7), (r) => r.action === 'weapon' && r.attacker === 0 && r.dmg > 0);
+    const base = first(run(g, fighter({ weapons: [wid + ':10'] }), fighter({ side: 1, agility: 20 }), 7), (r) => r.action === 'weapon' && r.attacker === 0 && r.dmg > 0);
+    const buff = first(run(g, fighter({ weapons: [wid + ':10'], effects: { [effId]: 100 } }), fighter({ side: 1, agility: 20 }), 7), (r) => r.action === 'weapon' && r.attacker === 0 && r.dmg > 0);
     assert.ok(base && buff, '应出现武器回合');
     assert.equal(buff.dmg, base.dmg * 2, '武器 ' + wid + ' 的专属词条 ' + effId + ' 应翻倍');
   }
 
   /* ⑥ 45 暴击倍率 +100%：同一暴击应 ×1.5；46 减暴伤 50%：同一暴击应 ×0.5。 */
-  const critBase = first(run(g, fighter({ weapons: ['1:10'], skills: ['9:10'] }), fighter({ side: 1, agility: 50 }), 3), (r) => r.crit && r.attacker === 0 && r.dmg > 0);
-  const crit45 = first(run(g, fighter({ weapons: ['1:10'], skills: ['9:10'], effects: { 45: 100 } }), fighter({ side: 1, agility: 50 }), 3), (r) => r.crit && r.attacker === 0 && r.dmg > 0);
-  const crit46 = first(run(g, fighter({ weapons: ['1:10'], skills: ['9:10'] }), fighter({ side: 1, agility: 50, effects: { 46: 50 } }), 3), (r) => r.crit && r.attacker === 0 && r.dmg > 0);
+  const critBase = first(run(g, fighter({ weapons: ['1:10'], skills: ['9:10'] }), fighter({ side: 1, agility: 20 }), 3), (r) => r.crit && r.attacker === 0 && r.dmg > 0);
+  const crit45 = first(run(g, fighter({ weapons: ['1:10'], skills: ['9:10'], effects: { 45: 100 } }), fighter({ side: 1, agility: 20 }), 3), (r) => r.crit && r.attacker === 0 && r.dmg > 0);
+  const crit46 = first(run(g, fighter({ weapons: ['1:10'], skills: ['9:10'] }), fighter({ side: 1, agility: 20, effects: { 46: 50 } }), 3), (r) => r.crit && r.attacker === 0 && r.dmg > 0);
   assert.ok(critBase && crit45 && crit46, '应出现暴击回合');
   assert.equal(crit45.dmg, Math.round(critBase.dmg * 1.5), '45 +100% 应把 2.x 倍率抬到 3.x');
   assert.equal(crit46.dmg, Math.round(critBase.dmg * 0.5), '46 -50% 应把暴击伤害减半');
 
   /* ⑦ 48 幸运一击：+100 基础伤害，先加后乘 1~6 倍。 */
-  const luckyBase = first(run(g, fighter({ skills: ['23:10'] }), fighter({ side: 1, agility: 50 }), 5), (r) => r.action === 'skill' && r.id === 23 && r.dmg > 0);
-  const lucky48 = first(run(g, fighter({ skills: ['23:10'], effects: { 48: 100 } }), fighter({ side: 1, agility: 50 }), 5), (r) => r.action === 'skill' && r.id === 23 && r.dmg > 0);
+  const luckyBase = first(run(g, fighter({ skills: ['23:10'] }), fighter({ side: 1, agility: 20 }), 5), (r) => r.action === 'skill' && r.id === 23 && r.dmg > 0);
+  const lucky48 = first(run(g, fighter({ skills: ['23:10'], effects: { 48: 100 } }), fighter({ side: 1, agility: 20 }), 5), (r) => r.action === 'skill' && r.id === 23 && r.dmg > 0);
   assert.ok(luckyBase && lucky48, '应出现幸运一击');
   assert.equal(lucky48.dmg - luckyBase.dmg, 100 * luckyBase.multiple, '48 的 +N 应在随机倍率之前加');
 

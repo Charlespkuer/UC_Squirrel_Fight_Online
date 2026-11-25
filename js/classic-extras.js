@@ -484,8 +484,8 @@
     State.save();
   }
 
-  const RANK_ACCOUNT_LIMIT_GOODS = Object.freeze(window.__SSDZ_ONLINE__ ? [19] : [7, 8, 9, 10, 19]);
-  const RANK_MONTHLY_LIMIT_GOODS = Object.freeze(window.__SSDZ_ONLINE__ ? [7, 8, 9, 10, 11, 12, 13, 14, 20, 21, 22, 23] : []);
+  const RANK_ACCOUNT_LIMIT_GOODS = Object.freeze(window.__SSDZ_ONLINE__ ? [] : [7, 8, 9, 10, 19]);
+  const RANK_MONTHLY_LIMIT_GOODS = Object.freeze(window.__SSDZ_ONLINE__ ? [7, 8, 9, 10, 19, 11, 12, 13, 14, 20, 21, 22, 23] : []);
   function rankLimitInfo(goods) {
     if (State.rankLimitInfo) return State.rankLimitInfo(goods || {});
     const item = goods || {};
@@ -493,7 +493,10 @@
     const id = String(item.id);
     const account = RANK_ACCOUNT_LIMIT_GOODS.includes(Number(item.id));
     const monthly = RANK_MONTHLY_LIMIT_GOODS.includes(Number(item.id));
-    const limit = Math.max(0, Math.floor(Number(item.timesLimit) || 0));
+    const convert = [15, 16, 17, 18].includes(Number(item.id));
+    const limit = convert && State.rankConvertPillWeeklyLimit
+      ? State.rankConvertPillWeeklyLimit(State.rankWeekKey ? State.rankWeekKey() : '')
+      : Math.max(0, Math.floor(Number(item.timesLimit) || 0));
     const bag = monthly ? (s.rankMonthPurchases || {}) : account ? (s.rankPurchaseTotals || {}) : (s.rankPurchases || {});
     const bought = Math.max(0, Math.floor(Number(bag[id]) || 0));
     return { account, monthly, limit, bought, remaining: limit > 0 ? Math.max(0, limit - bought) : Infinity };

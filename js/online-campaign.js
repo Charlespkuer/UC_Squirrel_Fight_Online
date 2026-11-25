@@ -173,7 +173,7 @@
     if (award && award.fallback && Number(award.gold) > 0) return { prop: 8 };
     if (p.kind === 'gold') return { prop: 8 };
     if (p.kind === 'prop') return { prop: Number(p.id) || 0 };
-    if (p.kind === 'gear') return { gear: Number(award && award.id) || 201 };
+    if (p.kind === 'gear') return { gear: Number(award && award.id) || Number(p.gearId) || 201 };
     if (p.kind === 'pet') {
       const pet = (award && award.kind === 'pet' && award.pet) || p.pet || null;
       return (pet && campaignPetSymbol(pet.id)) ? { pet: Number(pet.id) } : { prop: 45 };

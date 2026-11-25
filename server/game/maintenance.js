@@ -58,6 +58,7 @@ function sweep(nowMs) {
 
     changes += Number(db.run('DELETE FROM account_daily_actions WHERE date < ?', dailyCut).changes || 0);
     changes += Number(db.run('DELETE FROM rank_awards WHERE created_at < ?', awardCut).changes || 0);
+    changes += Number(db.run('DELETE FROM rank_finals WHERE created_at < ?', awardCut).changes || 0);
     changes += Number(db.run('DELETE FROM friend_messages WHERE created_at < ?', friendMessageCut).changes || 0);
     changes += Number(db.run('DELETE FROM friend_requests WHERE created_at < ?', friendRequestCut).changes || 0);
     changes += Number(db.run('DELETE FROM account_ips WHERE last_seen < ?', ipCut).changes || 0);

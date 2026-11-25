@@ -455,6 +455,9 @@ async function main() {
       && scoreRange(1501, 1000, 1, 2) && scoreRange(1000, 1050, 15, 18)
       && scoreRange(1000, 1100, 16, 19) && scoreRange(1000, 1200, 17, 20)
       && scoreRange(1000, 1400, 20, 25));
+    ok('天梯人机败场只扣正常积分差的一半（向上取整）',
+      settleMod.rankBotLoseDelta(-16) === -8 && settleMod.rankBotLoseDelta(-15) === -8
+      && settleMod.rankBotLoseDelta(-1) === -1 && settleMod.rankBotLoseDelta(0) === 0);
     const winPair = settleMod.rankDeltaPair(1000, 1050, true, 0);
     const losePair = settleMod.rankDeltaPair(1000, 1050, false, 0);
     const zeroAttacker = settleMod.rankDeltaPair(0, 0, false, 0);

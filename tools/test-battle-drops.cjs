@@ -193,6 +193,23 @@ test('天梯战用专属掉落表：飘出来的是属性碎片与恶魔果实�
   assert.equal(g.c.BattleDrops.poolFor('rank').some(p=>p.id===51),true);
   assert.equal(g.c.BattleDrops.poolFor().some(p=>p.id===51),false);
   assert.equal(g.c.BattleDrops.poolFor('rank').some(p=>p.id===46),true,'天梯也掉恶魔果实种子');
+  /* 50 级以上天梯才追加黑凤凰/黑圣熊碎片：低等级池原样，50 级池尾两项是碎片。 */
+  assert.equal(g.c.BattleDrops.poolFor('rank',49).some(p=>[77,78].includes(p.id)),false,'49 级天梯不刷黑装碎片');
+  assert.equal(g.c.BattleDrops.poolFor('rank',50).some(p=>p.id===77),true,'50 级天梯池含黑凤凰碎片');
+  assert.equal(g.c.BattleDrops.poolFor('rank',50).some(p=>p.id===78),true,'50 级天梯池含黑圣熊碎片');
+  const shardPool=g.c.BattleDrops.poolFor('rank',50);
+  assert.equal(shardPool.find(p=>p.id===77).weight,0.01,'黑凤凰碎片权重 0.01（两碎片每格合计约 0.02%）');
+  assert.equal(shardPool.find(p=>p.id===78).weight,0.01,'黑圣熊碎片权重 0.01（两碎片每格合计约 0.02%）');
+  /* 属性碎片权重从 34 反算到 13.62：旧池 34/102.6 ≈ 33.1%，对半 ≈ 16.6%。 */
+  const ladderBase=g.c.BattleDrops.ladderPool;
+  const ladderTotal=ladderBase.reduce((n,p)=>n+Number(p.weight||0),0);
+  assert.equal(ladderBase.find(p=>p.id===51).weight,13.62,'属性碎片权重 13.62');
+  assert.ok(Math.abs(ladderBase.find(p=>p.id===51).weight/ladderTotal-0.16565)<0.0001,
+    '属性碎片每卡概率应约为原来 33.1% 的一半（实际 '+(ladderBase.find(p=>p.id===51).weight/ladderTotal*100).toFixed(2)+'%）');
+  const top=g.c.BattleDrops.plan(()=>0.999999,'rank',{level:50});
+  same(top.map(x=>x.id),[78,78,78],'随机数落在池尾时三格都能刷出黑圣熊碎片');
+  const lowTop=g.c.BattleDrops.plan(()=>0.999999,'rank',{level:49});
+  same(lowTop.map(x=>x.id),[26,26,26],'49 级仍落在原天梯池尾（蓝色碎片）');
 });
 
 test('天使/恶魔果实种子权重减半：普通池 3→1.5 / 1.5→0.75，天梯池 15→7.5',()=>{
@@ -312,7 +329,7 @@ test('每个掉落项的拾取卡图标都在仓库里（prop SVG / PNG 至少�
    * `check-asset-paths` 只认字面量路径，扫不到这里；联机包曾只留了 draw-15，
    * 结果金松果 / 卷轴 / 药剂的卡片都是空图。现在统一走 `propIconSrc`，逐项验文件。 */
   const g=setup();
-  const ids=[...new Set([...g.c.BattleDrops.pool,...g.c.BattleDrops.ladderPool].map(x=>x.id))];
+  const ids=[...new Set([...g.c.BattleDrops.pool,...g.c.BattleDrops.ladderPool,...g.c.BattleDrops.poolFor('rank',50)].map(x=>x.id))];
   const missing=[];
   for(const id of ids){
     const base=path.join(project,'images/ui/icons/prop/prop-'+id);

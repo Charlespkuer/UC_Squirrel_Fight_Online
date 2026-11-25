@@ -2191,6 +2191,16 @@ test('装备词条改变对应武器伤害与减伤，不只显示说明', () =>
   assert.equal(geared, plain * 3); assert.equal(reduced, Math.round(geared * 0.5));
 });
 
+test('敏捷减伤：20 点以下不生效，110 敏减 10%，200 敏封顶 20%', () => {
+  const g = game(), S = g.Sim;
+  const mk = (agility) => ({ agility, skills: {}, effects: {}, shellCount: 0, shellCharges: 0, mods: null, mech: [], side: 1 });
+  assert.equal(S.agilityDROf(mk(20)), 0);
+  assert.ok(Math.abs(S.agilityDROf(mk(110)) - 0.10) < 1e-9);
+  assert.ok(Math.abs(S.agilityDROf(mk(200)) - S.rules.agiDrCap) < 1e-9);
+  assert.equal(S.agilityDROf(mk(1000)), S.rules.agiDrCap);
+  assert.equal(S.dmgReduce(mk(110), 100, {}).dmg, 90);
+});
+
 test('徒手攻击的权重：基准 100，工具再多也让它的份额不低于 5%', () => {
   const g = game();
   /* kindWeights 收的是「候选对象」，权重按 .id 查 —— 与 pickKind 的调用口径一致。 */
@@ -2212,7 +2222,7 @@ test('徒手攻击的权重：基准 100，工具再多也让它的份额不低�
   assert.equal(heavy.weapon + heavy.skill + heavy.common, heavy.total);
 });
 
-test('出手权重新表：技能 5 / 普通武器 8 / 投掷前两次 100 / 徒手 100；绝对防御与龟甲术按等级首/次/三次', () => {
+test('出手权重新表：技能 5 / 普通武器 8 / 投掷前两次 100 / 徒手 100；绝对防御与龟甲术按等级首/次', () => {
   const g = game(), S = g.Sim;
   assert.equal(S.rules.repeatSkill, 5);
   assert.equal(S.rules.repeatWeapon, 8);
@@ -2240,7 +2250,10 @@ test('出手权重新表：技能 5 / 普通武器 8 / 投掷前两次 100 / 徒
   const s7 = (lv, n) => S.shellChanceOf({ skills: { 7: lv }, effects: {}, skillBoost: {} }, n);
   assert.deepEqual([1, 5, 10].map((lv) => s7(lv, 0)), [20, 22, 24.5]);
   assert.deepEqual([11, 13, 15].map((lv) => s7(lv, 1)), [20, 60, 100]);
-  assert.equal(s7(10, 1), 1); assert.equal(s7(15, 2), 100);
+  assert.equal(s7(10, 1), 1); assert.equal(s7(15, 2), 0, '第三次起不再触发');
+  const capped = { skills: { 7: 15 }, effects: {}, silence: 0, shellCount: 2, shellCharges: 0, mods: null, mech: [], side: 1 };
+  assert.equal(S.dmgReduce(capped, 100, {}).guiJia, 0, '用满两次后 dmgReduce 不再挡');
+  assert.equal(capped.shellCount, 2, '用满后计数不再增长');
   /* 流星锤三连击：固定随机 0 必中 2% 那一下，一次行动打出 3 段。 */
   const meteor = fighter({ power: 100, weapons: [{ id: 10, level: 1 }], mods: { mustHitFirst: 1 }, hp: 100000 });
   const dummy = fighter({ power: 1, agility: 1, speed: 1, hp: 1000000, maxHp: 1000000 });
@@ -2279,6 +2292,20 @@ test('龟甲术一次出手只判一次：多段攻击共用 shellLock，不重�
   assert.equal(rolls, 1, '流星锤三连只应掷一次龟甲');
   assert.ok(meteor && meteor.hits === 3, '三连击应当真的打出 3 段');
   assert.equal(meteor.shellAbsorb, undefined, '首掷失败后三整段都不挡');
+});
+
+test('龟甲术真5 一场最多触发两次（不再无限续挡）', () => {
+  const g = game(), S = g.Sim;
+  let maxUses = 0;
+  for (let seed = 0; seed < 200; seed++) {
+    const battle = S.simulate(
+      { name: 'A', level: 90, power: 1, agility: 1, speed: 999, hp: 100000, maxHp: 100000,
+        weapons: [{ id: 2, level: 1 }], skills: [], effects: {}, pattern: ['weapon'] },
+      { name: 'B', level: 90, power: 1, agility: 1, speed: 1, hp: 100000, maxHp: 100000,
+        weapons: [], skills: [{ id: 7, level: 15 }], effects: {} });
+    maxUses = Math.max(maxUses, battle.rounds.filter((r) => r.guiJia > 0).length);
+  }
+  assert.equal(maxUses, 2, '真5 龟甲术一场最多触发 2 次');
 });
 
 test('全部原版武器、技能与 NPC 的事件流都能有限结束并维持合法血量', () => {

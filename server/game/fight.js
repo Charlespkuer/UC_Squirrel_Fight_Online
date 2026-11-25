@@ -31,7 +31,9 @@ function recordCombat(row) {
   chests.create(row);
   if (row.packet && !row.revenge && ['random', 'rank', 'stage', 'arena'].includes(row.kind)
     && !(row.settlement && row.settlement.practice)) {
-    row.packet.pickups = globalThis.BattleDrops.plan(battle.mulberry32(row.seed ^ 0x751278ab), row.kind === 'rank' ? 'rank' : 'challenge');
+    // 50 级以上的天梯战斗才把黑装碎片放进拾取池；等级随战斗记录落库，领取时用同一份重算。
+    const pickupLevel = Number(row.settlement && row.settlement.pickupLevel) || 0;
+    row.packet.pickups = globalThis.BattleDrops.plan(battle.mulberry32(row.seed ^ 0x751278ab), row.kind === 'rank' ? 'rank' : 'challenge', { level: pickupLevel });
   }
   const saved = Object.assign({}, row.settlement || {});
   let repro = null;
@@ -544,6 +546,7 @@ function runRank({ accountId, snapshotId, rev, idemKey, revengeOf }) {
         defender: { delta: defenderOut.value.dDelta, robbed: defenderOut.value.robbed, score: defenderOut.value.newScore, exp: defenderOut.value.exp || 0 },
         drop: v.drop || null,
         revengeOf: revengeOf || '',
+        pickupLevel: Number(meSave.level) || 0,
         hiddenAttacker: visibility.isHidden(accountId),
         revenge: revenge ? { count: revenge.count, cost: revenge.cost, cups: revenge.cups, stolen: v.stolen } : null,
       },
@@ -592,7 +595,7 @@ function runRankBot({ accountId, selected, rev, idemKey }) {
       const win = result.winner === 0;
       if (daily.cost > 0) S.addGold(-daily.cost, { count: false });
       const pair = settlement.rankDeltaPair(myScore, foeScore, win, null, config.rankBotFloor);
-      const delta = pair.attackerDelta;
+      const delta = win ? pair.attackerDelta : settlement.rankBotLoseDelta(pair.attackerDelta);
       const newScore = settlement.clampScore(myScore + delta);
       const exp = win ? S.challengeExp(foeFighter.level, s.level) : config.rankLoseExp;
       const ups = exp > 0 ? S.gainExp(exp) : [];
@@ -635,6 +638,7 @@ function runRankBot({ accountId, selected, rev, idemKey }) {
       settlement: {
         win: v.win, delta: v.delta, score: v.newScore, exp: v.exp, fallback: false,
         goldCup: v.win ? config.rankWinCup : config.rankLoseCup, bot: true, drop: null, revengeOf: '',
+        pickupLevel: Number(meSave.level) || 0,
         botId: bot ? String(bot.id) : '',
         defender: { delta: v.defenderDelta },
       },

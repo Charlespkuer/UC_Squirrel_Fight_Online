@@ -252,8 +252,8 @@
       // 合在同一格里显示总数，不能因为已经有一格金松果就把飘到的这份吞掉。
       if (Number(item.id) === 8) { gold += count; continue; }
       const hit = icons[String(item.id)];
-      if (!hit || !hit.id) continue;
-      picks.push({ count, icon: hit.id });
+      if (!hit || (!hit.id && !hit.svg)) continue;
+      picks.push({ count, id: Number(item.id), icon: hit.id, svg: hit.svg });
     }
     const rewards = [];
     if (gold > 0) rewards.push({ count: gold, icon: (icons['8'] || {}).id || '3131' });
@@ -273,7 +273,13 @@
       if (sign) stop(sign, 2);
       if (t && digits) t.showNumber(reward.count, digits, 0, 0, 0);
       if (slot.cell && slot.cell.detachAll) slot.cell.detachAll();
-      if (slot.cell && slot.cell.attachChild) slot.cell.attachChild(reward.icon, 1, 'prize');
+      if (slot.cell && reward.icon && slot.cell.attachChild) slot.cell.attachChild(reward.icon, 1, 'prize');
+      else if (slot.cell && reward.svg && slot.cell.attachImage) {
+        const C = window.UI && UI.classic;
+        const href = (C && typeof C.propIconSrc === 'function')
+          ? C.propIconSrc(reward.id) : ('images/ui/icons/prop/' + reward.svg);
+        slot.cell.attachImage(href, { pad: 0.08 });
+      }
     }
     const prize = view.byName('prizeBackg');
     if (prize) stop(prize, rewards.length ? 1 : 2);

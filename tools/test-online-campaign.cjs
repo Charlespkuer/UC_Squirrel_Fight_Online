@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 /* 征战异步化回归：真人 4/4、5 分钟超时不扣票、随机匹配补位、共享 BOSS 血量、
-   3~5 份骰子分奖、单份期望≈210 金松果、严格按点数最高者得（没有保底改判）。 */
+   3~5 份骰子分奖、四只首领各自的固定奖励表、严格按点数最高者得（没有保底改判）。 */
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -135,24 +135,54 @@ try {
   const relayView = require('../server/game/fight').loadCombat(relayBot.combatId, G);
   assert.ok(relayView && relayView.result && relayView.me && relayView.foe, '同房间成员能回放助战战报');
 
-  /* 3b) 3~5 份骰子奖的期望：4 个真人、单份约 210 金松果等值，每张 200 票有可比性。 */
+  /* 3b) 3~5 份骰子奖：每份必须来自该首领自己的固定奖励表，同一局不重复。 */
   const seats = [0, 1, 2, 3].map((seat) => ({ seat, accountId: seat + 1, kind: 'player' }));
-  let planValue = 0, planPrizes = 0;
-  for (let seed = 1; seed <= 300; seed++) {
-    const plan = CampaignData.rewardPlan(seed, seats);
-    assert.ok(plan.count >= 3 && plan.count <= 5, '每局 3~5 份');
-    assert.equal(plan.prizes.length, plan.count);
-    for (const win of plan.prizes) {
-      assert.equal(win.winnerKind, 'player', '4 个真人时每份都归真人');
-      assert.equal(win.rolls.length, 4, '每份 4 个座位各掷一次');
-      planValue += win.prize.value;
-      planPrizes++;
+  const rewardKey = (prize) => {
+    const p = prize || {};
+    if (p.kind === 'pet') return p.petId ? 'pet:' + p.petId : 'pet_random:' + p.grade;
+    if (p.kind === 'gear') return 'gear:' + (p.setIds || []).join(',') + ':' + p.affixMax;
+    if (p.kind === 'gold') return 'gold:' + p.gold;
+    return p.kind + ':' + p.id + ':' + p.count;
+  };
+  const requiredRewards = {
+    1: ['pet_random:1', 'pet:14', 'pet:29', 'pet:28', 'gear:17,18,28:2', 'prop:103:1', 'prop:26:100', 'gold:150'],
+    2: ['pet_random:1', 'pet_random:2', 'pet:18', 'pet:16', 'pet:26', 'gear:29,30:3', 'gear:31,19:3',
+      'prop:103:1', 'prop:26:150', 'gold:200', 'prop:47:1', 'prop:48:1'],
+    3: ['pet_random:3', 'pet:25', 'pet:27', 'gear:31,19:3', 'gear:49,48:3',
+      'prop:103:1', 'prop:26:200', 'gold:250', 'prop:47:1', 'prop:48:1'],
+    4: ['pet_random:3', 'pet:32', 'pet:30', 'pet:31', 'gear:31,19:3', 'gear:49,48:3', 'gear:51:3',
+      'prop:103:1', 'prop:104:1', 'prop:26:250', 'gold:300'],
+  };
+  for (const boss of CampaignData.BOSSES) {
+    const want = new Set(requiredRewards[boss.bossId]);
+    const seen = new Set();
+    for (let seed = 1; seed <= 500; seed++) {
+      const plan = CampaignData.rewardPlan(seed, seats, boss);
+      assert.ok(plan.count >= 3 && plan.count <= 5, boss.name + ' 每局 3~5 份');
+      assert.equal(plan.prizes.length, plan.count);
+      const keys = plan.prizes.map((win) => rewardKey(win.prize));
+      assert.equal(new Set(keys).size, keys.length, boss.name + ' 同一局不能抽到重复奖励');
+      for (const key of keys) {
+        seen.add(key);
+        assert.ok(want.has(key), boss.name + ' 抽到奖励表外的项：' + key);
+      }
+      for (const win of plan.prizes) {
+        assert.equal(win.winnerKind, 'player', '4 个真人时每份都归真人');
+        assert.equal(win.rolls.length, 4, '每份 4 个座位各掷一次');
+        assert.ok(Number(win.prize.value) > 0, '每份奖励要有估值');
+        const p = win.prize;
+        if (p.kind === 'prop') assert.ok(globalThis.propMap.getValue(p.id), '道具奖励 id 必须在字典里');
+        if (p.kind === 'pet') assert.ok(p.pet && p.pet.id > 0 && p.pet.level === 1, '幻兽奖励必须是 1 级且带幻兽 id');
+        if (p.kind === 'gear') {
+          const def = globalThis.gearMap.getValue(p.gearId);
+          const set = def && globalThis.gearSetMap.getValue(parseInt(def.setId, 10));
+          assert.ok(def && set && Number(set.quality) === 3 && (p.setIds || []).includes(parseInt(def.setId, 10)),
+            boss.name + ' 的紫装奖励必须落在指定套装内：' + JSON.stringify(p));
+        }
+      }
     }
+    assert.deepEqual([...seen].sort(), [...want].sort(), boss.name + ' 的奖励表必须能完整抽到');
   }
-  const avgPrize = planValue / planPrizes;
-  const avgPlayer = planValue / (300 * 4);
-  assert.ok(avgPrize >= 195 && avgPrize <= 225, '单份期望约 210，实际 ' + avgPrize.toFixed(2));
-  assert.ok(avgPlayer >= 195 && avgPlayer <= 225, '每张票期望约 200，实际 ' + avgPlayer.toFixed(2));
   /* 分奖页和结算必须是同一套口径：每份都是本份点数最高的一方，**没有保底改判**
    *（用户 2026-11-10 口径：去掉“第一份硬塞给真人”，严格按骰子点数发奖）。 */
   const topPoint = (p) => (p.rolls || []).reduce((m, r) => Math.max(m, Number(r.point) || 0), 0);
@@ -160,11 +190,13 @@ try {
     const win = (p.rolls || []).find((r) => Number(r.seat) === Number(p.winnerSeat));
     return win ? Number(win.point) : NaN;
   };
-  for (let seed = 1; seed <= 300; seed++) {
-    const plan = CampaignData.rewardPlan(seed, seats);
-    for (const p of plan.prizes) {
-      assert.equal(winnerPoint(p), topPoint(p), '第 ' + seed + ' 局每份赢家必须是点数最大的一方');
-      assert.equal(!!p.forced, false, '第 ' + seed + ' 局不能再出现保底改判');
+  for (const boss of CampaignData.BOSSES) {
+    for (let seed = 1; seed <= 300; seed++) {
+      const plan = CampaignData.rewardPlan(seed, seats, boss);
+      for (const p of plan.prizes) {
+        assert.equal(winnerPoint(p), topPoint(p), '第 ' + seed + ' 局每份赢家必须是点数最大的一方');
+        assert.equal(!!p.forced, false, '第 ' + seed + ' 局不能再出现保底改判');
+      }
     }
   }
   /* 1 真人 + 3 助战：真人点数不够时的那一份就归助战并作废，**不再保底给真人**。
@@ -248,27 +280,30 @@ try {
     CampaignData.rewardPlan = originalPlan;
   }
 
-  /* 4c) 随机幻兽：奖池生成时就把种类/等级掷定；等级期望随首领提高，中奖按掷定结果入栏。 */
+  /* 4c) 幻兽：奖池生成时就掷定种类与星级，全部为 1 级；中奖按同一结果入栏。 */
   const H = makeAccount('征战测试辛');
-  const expectPetLevel = { 1: 8, 2: 10, 3: 13.4, 4: 19 };
-  let prevPetAvg = 0;
+  const namedPets = { 1: [14, 29, 28], 2: [18, 16, 26], 3: [25, 27], 4: [32, 30, 31] };
+  const randomGrades = { 1: [1], 2: [1, 2], 3: [3], 4: [3] };
   for (const boss of CampaignData.BOSSES) {
-    const levels = [];
+    const named = new Set(), grades = new Set();
+    let petPrizes = 0;
     for (let seed = 1; seed <= 1200; seed++) {
       const plan = CampaignData.rewardPlan(seed, seats, boss);
       for (const win of plan.prizes) {
-        if (win.prize.kind !== 'pet') continue;
-        assert.ok(win.prize.pet && win.prize.pet.id > 0 && win.prize.pet.level >= 1,
-          boss.name + ' 的幻兽奖品必须带掷定的种类与等级');
-        levels.push(win.prize.pet.level);
+        const p = win.prize;
+        if (p.kind !== 'pet') continue;
+        petPrizes++;
+        assert.ok(p.pet && p.pet.id > 0 && p.pet.level === 1,
+          boss.name + ' 的幻兽奖品必须带掷定的 1 级幻兽');
+        if (p.petId) named.add(Number(p.petId));
+        else grades.add(Number(p.grade));
       }
     }
-    assert.ok(levels.length > 100, boss.name + ' 奖池要能抽到幻兽');
-    const avg = levels.reduce((a, b) => a + b, 0) / levels.length;
-    assert.ok(Math.abs(avg - expectPetLevel[boss.bossId]) <= 1.2,
-      boss.name + ' 幻兽等级期望应约 ' + expectPetLevel[boss.bossId] + '，实际 ' + avg.toFixed(2));
-    assert.ok(avg > prevPetAvg, boss.name + ' 的幻兽等级期望必须高于上一只首领');
-    prevPetAvg = avg;
+    assert.ok(petPrizes > 100, boss.name + ' 奖池要能抽到幻兽');
+    assert.deepEqual([...named].sort((a, b) => a - b), namedPets[boss.bossId].slice().sort((a, b) => a - b),
+      boss.name + ' 的指定幻兽奖励不对');
+    assert.deepEqual([...grades].sort((a, b) => a - b), randomGrades[boss.bossId],
+      boss.name + ' 的随机幻兽星级不对');
   }
   const petsBefore = (store.peek(H).pets || []).length;
   const originalPetPlan = CampaignData.rewardPlan;
@@ -334,11 +369,11 @@ try {
     assert.ok(foe.baseStats.power === foe.power && foe.baseStats.hp === foe.maxHp,
       boss.name + ' 的 baseStats 必须与缩放后的三维一致（被色诱/卸装时不掉档）');
     let solo = 0, team = 0, seats = 0, wins = 0, n = 0;
-    for (let p = 0; p < 5; p++) {
+    for (let p = 0; p < 10; p++) {
       const me = battle.withSeed(1000 + boss.bossId * 100 + p,
         () => State.genAI(boss.level, '', { levelJitter: 0, gearSelfLevel: true }));
       me.hp = me.maxHp = me.maxHp || me.hp;
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < 10; i++) {
         const seed = 7000 + boss.bossId * 100 + p * 10 + i;
         const r = battle.withSeed(seed, () => Sim.simulate(clone(me), clone(foe)));
         if (r.winner === 0) solo++;
@@ -356,7 +391,7 @@ try {
     assert.ok(seats / Math.max(1, wins) >= 2.4, boss.name + ' 4 人队平均至少 2.4 人上场（实际 ' + (seats / Math.max(1, wins)).toFixed(2) + '）');
   }
 
-  console.log('PASS 征战异步匹配：真人 4/4、5 分钟超时不扣票、随机助战、共享血量、3~5 份骰子分奖、期望≈200/票、随机幻兽、四雄 4 人档 (7 项)');
+  console.log('PASS 征战异步匹配：真人 4/4、5 分钟超时不扣票、随机助战、共享血量、3~5 份骰子分奖、四首领奖励表、四雄 4 人档 (7 项)');
 } finally {
   try { db.close(); } catch (e) {}
   try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5 }); } catch (e) {}

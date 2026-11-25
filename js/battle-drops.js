@@ -6,6 +6,13 @@
   const RULES = Object.freeze({ fps: 15, frames: [30, 180, 340], jitter: 130, lifetime: 31 / 15 * 1000 });
 
   const BLUE_MUL = (typeof GData !== 'undefined' && Number(GData.BLUE_SHARD_DROP_MUL)) || 1;
+  // 天梯 50 级以上才把两个黑装碎片塞进拾取池；权重是相对值：
+  // 单个碎片每格约 0.01%，两碎片合计约 0.02%，一场三格合计约 0.06%。
+  const RANK_BLACK_SHARD_LEVEL = 50;
+  const RANK_BLACK_SHARDS = Object.freeze([
+    { id: 77, name: '黑凤凰碎片', count: 1, weight: 0.01 },
+    { id: 78, name: '黑圣熊碎片', count: 1, weight: 0.01 },
+  ]);
   const POOL = [
     { id: 15, name: '经验', count: 5, weight: 30 },
     { id: 8, name: '金松果', count: 2, weight: 25 },
@@ -22,7 +29,9 @@
   ];
 
   const LADDER_POOL = [
-    { id: 51, name: '属性碎片', count: 1, weight: 34 },
+    // 原权重 34（旧池总权重 102.6 → 33.1%/卡）；这里按「概率对半」反算，
+    // 其余权重不动时 13.62 / (68.6 + 13.62) ≈ 16.6%，正好是原来的一半。
+    { id: 51, name: '属性碎片', count: 1, weight: 13.62 },
     { id: 46, name: '恶魔果实种子', count: 1, weight: 7.5 },
     { id: 15, name: '经验', count: 5, weight: 22 },
     { id: 8, name: '金松果', count: 2, weight: 18 },
@@ -30,11 +39,14 @@
     { id: 22, name: '武器卷轴', count: 1, weight: 8 },
     { id: 26, name: '蓝色碎片', count: 1, weight: 6 * BLUE_MUL },
   ];
-  const poolFor = (kind) => (kind === 'rank' ? LADDER_POOL : POOL);
+  function poolFor(kind, level) {
+    if (kind !== 'rank') return POOL;
+    return Number(level) >= RANK_BLACK_SHARD_LEVEL ? LADDER_POOL.concat(RANK_BLACK_SHARDS) : LADDER_POOL;
+  }
 
-  function plan(random, kind) {
+  function plan(random, kind, opts) {
     random = random || Math.random;
-    const pool = poolFor(kind);
+    const pool = poolFor(kind, Number(opts && opts.level) || 0);
     const offset = Math.round(random() * RULES.jitter), total = pool.reduce((n, p) => n + p.weight, 0);
     return RULES.frames.map((frame, index) => {
       let value = random() * total, reward = pool[pool.length - 1];
@@ -54,7 +66,7 @@
   }
 
   function create(options) {
-    const opts = options || {}, drops = opts.plan || plan(opts.random, opts.kind), collected = [], upgrades = [], awarded = new Set(), pending = [];
+    const opts = options || {}, drops = opts.plan || plan(opts.random, opts.kind, { level: opts.level }), collected = [], upgrades = [], awarded = new Set(), pending = [];
     const owner = State.state();
     const presenter = opts.presenter || null;
     let elapsed = 0, next = 0, active = null, closed = false, button = null, notice = null, noticeUntil = 0;

@@ -378,15 +378,39 @@
       : b.buffId === 2 ? '本日特殊状态：竞技场碎片双倍奖励！'
         : b.buffId === 3 ? '本日特殊状态：关卡金松果双倍！' : '';
     setTextByName(view, 'text3', buffText);
+    // 服务端才是权威：领取失败 / 已领过 / 响应丢失时也要按最新存档重画，
+    // 否则按钮会停在“未领取”，玩家反复点只看到“今天已经领过了”，像卡在页面里。
+    const reload = async (sync) => {
+      if (sync && window.Online && Online.ready && Online.syncState) {
+        try { await Online.syncState(); } catch (e) {}
+      }
+      if (current && current.key === 'altar' && current.view === view) await openPage('altar');
+    };
     // 「领取当日状态」：原版 `gainBuff`（一天一次，服务端判定）。按钮在已经领过时隐藏。
     // 奖励项由服务端掷随机，客户端不能本地预测，否则预测值会和权威存档分叉。
     wireClickable(clipOf(view, 'button1'), async () => {
-      const r = await StateCall('claimBuildingBuff', 'altar');
-      if (!r) return;
-      toast(r.msg);
-      if (r.ok) openPage('altar');
+      try {
+        const r = await StateCall('claimBuildingBuff', 'altar');
+        if (!r) { await reload(true); return; }
+        if (r.msg) toast(r.msg);
+        // `r.ok` 时 patch 已经落进本地镜像；失败时本地可能落后于服务端（已领过/请求丢失）。
+        await reload(!r.ok);
+      } catch (e) {
+        toast((window.Online && Online.errText) ? Online.errText(e) : ((e && e.message) || '领取失败'));
+        // 请求被服务端执行后响应丢了也算失败：拉一次整档，别让按钮长期停在可领取。
+        await reload(true);
+      }
     });
     if (claimed) setVisible(clipOf(view, 'button1'), false);
+    // 页面停在祭坛跨过 0 点，或另一台设备先领了：状态变了就按最新存档重画。
+    const timer = setInterval(() => {
+      if (!current || current.key !== 'altar' || current.view !== view || !view.g || !view.g.isConnected) {
+        clearInterval(timer);
+        return;
+      }
+      if (claimed !== State.buildingBuffClaimed('altar')) { clearInterval(timer); void openPage('altar'); }
+    }, 30000);
+    view.__buffWatch = timer;
     wireClickable(clipOf(view, 'button2'), () => openPage('altar-up'));
     wireClickable(clipOf(view, 'button3'), backToVillage);
     showNote(container, PAGES.altar.note);
@@ -1072,7 +1096,10 @@
       const note = current.container.querySelector('.ssfight-note');
       if (note && note.__hide) clearTimeout(note.__hide);
     }
-    if (current && current.view) { try { current.view.destroy(); } catch (e) {} }
+    if (current && current.view) {
+      if (current.view.__buffWatch) clearInterval(current.view.__buffWatch);
+      try { current.view.destroy(); } catch (e) {}
+    }
     if (current && window.SfRender && SfRender.releaseExtra) {
       for (const file of bundleList(current.page)) if (!keep.has(file)) SfRender.releaseExtra(file);
     }

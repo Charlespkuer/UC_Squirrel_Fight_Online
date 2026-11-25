@@ -1,6 +1,6 @@
 {
  "source": "references/ssfight/ssfight/ssfight/ssfight.swf（ExportAssets 名字 → 紧邻其前的 DefineSprite）+ js/battle-drops.js（掉落池）",
- "how": "原版 `mc.c1.attachMovie(<道具名>, \"mc\", 100)`（MainMovie.as:18804 战果页 / :18691 开宝箱）：库元件名就是道具名。`byId[道具id].id` = 该图标的元件号。",
+ "how": "原版 `mc.c1.attachMovie(<道具名>, \"mc\", 100)`（MainMovie.as:18804 战果页 / :18691 开宝箱）：库元件名就是道具名。`byId[道具id].id` = 该图标的元件号；没有 SWF 导出的联机道具用 `byId[道具id].svg` 回退背包矢量图。",
  "byId": {
   "1": {
    "name": "小体力药剂",
@@ -49,6 +49,14 @@
   "51": {
    "name": "属性碎片",
    "id": "2974"
+  },
+  "77": {
+   "name": "黑凤凰碎片",
+   "svg": "prop-77.svg"
+  },
+  "78": {
+   "name": "黑圣熊碎片",
+   "svg": "prop-78.svg"
   }
  },
  "missing": []

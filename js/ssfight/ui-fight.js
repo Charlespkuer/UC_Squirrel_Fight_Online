@@ -203,7 +203,14 @@
     if (!target || !target.attachChild || !item || item.id == null) return null;
     const hit = lootIcons && lootIcons[Number(item.id)];
     if (!hit) return null;
-    return target.attachChild(hit.id, 1, 'prize');
+    if (hit.id) return target.attachChild(hit.id, 1, 'prize');
+    // 联机自建道具（黑凤凰/黑圣熊碎片）没有原版 SWF 导出：走同一张背包矢量图。
+    if (hit.svg && target.attachImage) {
+      const C = window.UI && UI.classic;
+      const href = (C && typeof C.propIconSrc === 'function') ? C.propIconSrc(Number(item.id)) : ('images/ui/icons/prop/' + hit.svg);
+      return target.attachImage(href, { pad: 0.08 });
+    }
+    return null;
   }
 
   // 幻兽「整蛊专家」封住的武器/技能：把原版库元件里的那张武技卡挂出来。

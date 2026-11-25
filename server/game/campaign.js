@@ -378,16 +378,22 @@ function applyPrize(S, save, prize, seed, index) {
     if (state && Array.isArray(state.gears) && cap > 0 && state.gears.length < cap) {
       const part = Math.abs((Number(seed) + Number(index)) % 4);
       const quality = Math.max(0, Math.min(5, Number(prize.quality) || 3));
-      const ids = S.gearIdsOf ? S.gearIdsOf(part, quality) : [];
+      // 本首领奖励表限定套装范围（仙鹤/熊猫/犀牛…）；没有 setIds 的旧数据仍从全品质池抽。
+      const allow = new Set((Array.isArray(prize.setIds) ? prize.setIds : []).map(Number));
+      let ids = S.gearIdsOf ? S.gearIdsOf(part, quality) : [];
+      if (allow.size && S.gearSetOf) ids = ids.filter((id) => allow.has(Number(S.gearSetOf(id))));
+      const planned = Number(prize.gearId) || 0;
+      if (planned && (!allow.size || allow.has(Number(S.gearSetOf ? S.gearSetOf(planned) : 0)))) ids = [planned];
       if (Array.isArray(ids) && ids.length) {
         const id = ids[Math.abs((Number(seed) + Number(index)) % ids.length)];
-        // 装备奖励要和普通掉落一样按品质带随机词条；`addGear` 只负责基础属性浮动。
-        const ext = S.randomExtForQuality ? S.randomExtForQuality(quality) : [];
+        // 图片口径：不同首领的紫装词条上限不同（狡兔 1-2 星，其余 1-3 星）。
+        const affixMax = Math.max(1, Math.min(3, Number(prize.affixMax) || 3));
+        const ext = S.randomExtForQuality ? S.randomExtForQuality(quality, affixMax) : [];
         const gear = S.addGear(id, ext);
         if (gear) return {
           gold: 0, value: Number(prize.value) || 0,
           item: {
-            id, count: 1, name: String(prize.name || '紫色装备'), kind: 'gear',
+            id, count: 1, name: String(gear.name || prize.name || '紫色装备'), kind: 'gear',
             key: gear.key, ext: gear.ext, attr: gear.attr, quality,
           },
         };
@@ -674,6 +680,10 @@ function resolveRoomTx(roomId) {
       id: Number(p.prize.id) || 0, count: Math.max(1, Number(p.prize.count) || 1),
       gold: Number(p.prize.gold) || 0, quality: Number(p.prize.quality) || 0,
       value: Number(p.prize.value) || 0,
+      // 紫装奖励的套装范围 / 词条星级上限 / 已抽定的具体装备，分奖页图标与说明要跟实发一致。
+      setIds: Array.isArray(p.prize.setIds) ? p.prize.setIds.map(Number) : undefined,
+      affixMax: Number(p.prize.affixMax) || 0,
+      gearId: Number(p.prize.gearId) || 0,
 
       pet: p.prize.pet ? {
         id: Number(p.prize.pet.id) || 0, name: String(p.prize.pet.name || '幻兽'),

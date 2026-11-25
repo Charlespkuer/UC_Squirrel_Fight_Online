@@ -1343,14 +1343,19 @@ async function checkFightResults({ env, Node, body, flushTimeouts }) {
   /* 有奖励的普通战果走**原版 `fight` 第 2/3 帧**（经验 + 金松果/战利品三格），
    * 不再把"经验 +X 金松果 +Y"拼成文字塞进 4692 提示框。 */
   const reward = await env.SfFightResult.open({ kind: 'result', win: true, title: '战斗胜利',
-    exp: 120, gold: 25, note: '复仇成功', items: [{ id: 24, name: '白色碎片', count: 3 }],
+    exp: 120, gold: 25, note: '复仇成功',
+    items: [{ id: 77, name: '黑凤凰碎片', count: 1 }, { id: 24, name: '白色碎片', count: 3 }],
     actions: [{ label: '确定', dismiss: true, run: () => {} }] });
   assert.equal(String(reward.view.tag.id), '7772', '有奖励的战果必须使用原版 fight 战果页');
   assert.equal(reward.view.frame, 1, '胜利停第 2 帧（0 基 = 1）');
   assert.equal(reward.view.byName('maxlevel').frame, 3, 'maxlevel 拨到第 4 帧，不能显示素材里烤死的文案');
   assert.equal(reward.view.byName('getExp').frame, 0, '有经验时 getExp 停第 1 帧');
   assert.equal((reward.view.byName('c1').__attached || []).length, 1, '金松果要占第一格并用原版图标');
-  assert.equal((reward.view.byName('c2').__attached || []).length, 1, '战利品要占第二格并用原版图标');
+  const shardCell = reward.view.byName('c2');
+  const shardImg = shardCell && shardCell.g.querySelector('image');
+  assert.ok(shardImg && /prop-77\.svg/.test(shardImg.getAttribute('href')),
+    '黑凤凰碎片没有 SWF 图标时要挂背包 SVG，不能留空格');
+  assert.equal((reward.view.byName('c3').__attached || []).length, 1, '原版道具继续用 SWF 图标占第三格');
   reward.choose(0);
   assert.equal(reward.host.isConnected, false, '战果动作提交后回收整层');
   assert.equal(env.SfRender.viewCount(), 0, '原版战果页退出后回收播放注册');
@@ -1810,9 +1815,13 @@ async function checkClassicFight() {
   const lootIcons = JSON.parse(fs.readFileSync(path.join(dir, 'loot-icons.json'), 'utf8'));
   const lootIds = Object.keys(lootIcons.byId || {});
   assert.ok(lootIds.length >= 8, 'loot-icons.json 至少要覆盖掉落池里的 8 种道具，实得 ' + lootIds.length);
-  const lootMiss = lootIds.filter((k) => !byId.has(String(lootIcons.byId[k].id)));
+  const lootMiss = lootIds.filter((k) => lootIcons.byId[k].id && !byId.has(String(lootIcons.byId[k].id)));
   assert.equal(lootMiss.length, 0, '战利品图标不在 tags-fight.json 里：' +
     lootMiss.map((k) => k + ':' + lootIcons.byId[k].name).join('、'));
+  const lootSvgMiss = lootIds.filter((k) => lootIcons.byId[k].svg &&
+    !fs.existsSync(path.join(ROOT, 'images/ui/icons/prop', lootIcons.byId[k].svg)));
+  assert.equal(lootSvgMiss.length, 0, '战利品的 SVG 图标文件缺失：' +
+    lootSvgMiss.map((k) => k + ':' + lootIcons.byId[k].svg).join('、'));
   /* ②d 战果页那几个数字要写进**正确的层级**：`num`(4843) 只是外壳，位图数字是它的子元件 `num`(4315)；
    *   `getExp` 同理（子元件 `exp`）。写错层级不报错，只是那一格永远停在素材里的占位串「-0000」。 */
   const f2 = {};
@@ -3062,6 +3071,11 @@ function checkVillageBuildings() {
     && /wireClickable\(left, \(\) => \{ if \(beastPage > 1\)[^\n]*\}, \{ hover: 1 \}\)/.test(vil)
     && /wireClickable\(right, \(\) => \{ if \(beastPage < pageCount\)[^\n]*\}, \{ hover: 1 \}\)/.test(vil),
     '幻兽牧场翻页键 3156 第 2 帧是空帧：悬停必须保持第 1 帧，不能一移上去就隐形');
+  /* 祭坛领取：服务端已领过 / 响应丢失时，按钮不能停在旧状态；页面跨天或另一设备先领也要重画。 */
+  assert.ok(/claimBuildingBuff', 'altar'/.test(vil) && /await reload\(!r\.ok\)/.test(vil)
+    && /Online\.syncState/.test(vil) && /view\.__buffWatch = timer/.test(vil)
+    && /clearInterval\(current\.view\.__buffWatch\)/.test(vil),
+    '祭坛领取失败/已领过要按服务端权威存档重画，并清理跨天状态监听');
   const rd = fs.readFileSync(path.join(ROOT, 'js/ssfight/render.js'), 'utf8').replace(/\r\n/g, '\n');
   assert.ok(
     /const slotCount = Math\.max\(cap, list\.length\)/.test(vil) && /if \(!inRange\)/.test(vil) &&

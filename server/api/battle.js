@@ -21,10 +21,16 @@ module.exports = {
       throw fail('BAD_REQUEST', '无效的战斗奖励');
     return db.tx(() => {
       const combat = db.get('SELECT seed, kind, settlement FROM combats WHERE id=? AND attacker_id=?', id, Number(ctx.account.id));
-      if (!combat || !['random', 'rank', 'stage', 'arena'].includes(combat.kind) || JSON.parse(combat.settlement || '{}').practice)
+      if (!combat || !['random', 'rank', 'stage', 'arena'].includes(combat.kind))
+        throw fail('NOT_FOUND', '这场战斗没有可领取的悬浮奖励');
+      const settlementMeta = JSON.parse(combat.settlement || '{}');
+      // 复仇战和练习战本来就不弹悬浮奖励，不能凭 combatId 补领。
+      if (settlementMeta.practice || settlementMeta.revengeOf || settlementMeta.revenge)
         throw fail('NOT_FOUND', '这场战斗没有可领取的悬浮奖励');
       const battle = require('../game/battle');
-      const prize = globalThis.BattleDrops.plan(battle.mulberry32(Number(combat.seed) ^ 0x751278ab), combat.kind === 'rank' ? 'rank' : 'challenge')[index];
+      // 与出战斗时同一份计划：等级取战斗记录里的出手等级，等级 50+ 的天梯池才含黑装碎片。
+      const level = Number(settlementMeta.pickupLevel) || 0;
+      const prize = globalThis.BattleDrops.plan(battle.mulberry32(Number(combat.seed) ^ 0x751278ab), combat.kind === 'rank' ? 'rank' : 'challenge', { level })[index];
       const exists = db.get('SELECT ups FROM combat_pickups WHERE combat_id=? AND pickup_index=?', id, index);
       let out = null;
       if (!exists) {

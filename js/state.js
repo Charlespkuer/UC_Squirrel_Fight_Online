@@ -1262,7 +1262,7 @@
     if (!buildingUnlocked(key)) return { ok: false, msg: '需要达到 ' + buildingUnlockLevel(key) + ' 级才能使用' + (BUILDING_LABEL[key] || '这个建筑') };
     const b = S.buildings && S.buildings[key];
     if (!b) return { ok: false, msg: '这里还没有建筑' };
-    if (buildingBuffClaimed(key)) return { ok: false, msg: '今天已经领过了，明天再来' };
+    if (buildingBuffClaimed(key)) return { ok: false, already: true, msg: '今天已经领过了，明天再来' };
     const buffId = 1 + Math.floor(Math.random() * 3);
     b.buffId = buffId;
     b.buffDate = localDate();
@@ -2929,10 +2929,11 @@
 
   const FUSION_EXT_SLOTS = { 1: 0, 2: 1, 3: 2, 4: 3 };
   const fusionSlots = (quality) => FUSION_EXT_SLOTS[Math.max(0, Math.min(4, integer(quality, 0)))] || 0;
-  // 按目标品质随机生成词条（蓝 1 条 ≤2 星、紫/橙 2~3 条 ≤3 星）。
-  function randomExtForQuality(quality) {
+  // 按目标品质随机生成词条（蓝 1 条 ≤2 星、紫/橙 2~3 条；`maxLevel` 供征战按首领压低词条星级）。
+  function randomExtForQuality(quality, maxLevel) {
     const slots = fusionSlots(quality);
-    return slots ? randomExt(slots, quality >= 3 ? 3 : 2) : [];
+    const cap = Number(maxLevel) > 0 ? Math.min(3, Number(maxLevel)) : (quality >= 3 ? 3 : 2);
+    return slots ? randomExt(slots, cap) : [];
   }
   // 融合产物的词条：
   // ② 剩余槽位再按 50% 概率从材料池继承，否则随机补一条；
@@ -3519,10 +3520,10 @@
   // 原版 `rankgoodsMap` 的 15 件商品；价格（积分/金杯/金松果）与 `timesLimit`
   // · 其余商品是每周限购，周一零点按服务端时区重置。
   // 这里做成 `State.rankBuy` 是为了让服务端动作和单机界面共用同一套判定；
-  const RANK_ACCOUNT_LIMIT_GOODS = Object.freeze(ONLINE ? [19] : [7, 8, 9, 10, 19]);
+  const RANK_ACCOUNT_LIMIT_GOODS = Object.freeze(ONLINE ? [] : [7, 8, 9, 10, 19]);
 
   const BERSERK_MONTHLY_GOODS = Object.freeze([11, 12, 13, 14, 20, 21, 22, 23]);
-  const RANK_MONTHLY_LIMIT_GOODS = Object.freeze(ONLINE ? [7, 8, 9, 10].concat(BERSERK_MONTHLY_GOODS) : []);
+  const RANK_MONTHLY_LIMIT_GOODS = Object.freeze(ONLINE ? [7, 8, 9, 10, 19].concat(BERSERK_MONTHLY_GOODS) : []);
   const RANK_CONVERT_PILL_GOODS = Object.freeze([15, 16, 17, 18]);
   // 2026-11-30（下周一）起，力/敏/速/血转化丸从 30 杯 + 30 松果涨到 50 + 50。
   const RANK_CONVERT_PILL_PRICE_FROM = '2026-11-30';
@@ -3530,6 +3531,11 @@
     return String(weekKey || '') >= RANK_CONVERT_PILL_PRICE_FROM
       ? { cup: 50, gold: 50 }
       : { cup: 30, gold: 30 };
+  }
+  // 同日（2026-11-30）起，四种转化丸的每周限兑从 1 次提高到 2 次；之前的周仍按 1 次结算。
+  const RANK_CONVERT_PILL_WEEKLY_FROM = '2026-11-30';
+  function rankConvertPillWeeklyLimit(weekKey) {
+    return String(weekKey || '') >= RANK_CONVERT_PILL_WEEKLY_FROM ? 2 : 1;
   }
   function applyRankGoodsPrice(item) {
     if (!item || !item.source || !RANK_CONVERT_PILL_GOODS.includes(Number(item.id))) return item;
@@ -3608,7 +3614,15 @@
     }
 
     const oldBag = Math.max(0, Math.floor(Number(S.rankPurchases[19]) || 0));
-    if (oldBag > 0) {
+    if (ONLINE) {
+      // 19 号魔法袋从「账号累计 1 次」改为「每月 1 次」：本周已买过的记进本月账，
+      // 避免改版当周白送一次；以前的账号累计记录没有月份，直接作废。
+      if (S.rankPurchaseWeek === week && String(S.rankPurchaseWeek) >= (month + '-01') && oldBag > 0) {
+        S.rankMonthPurchases[19] = Math.max(Math.floor(Number(S.rankMonthPurchases[19]) || 0), 1);
+        dirty = true;
+      }
+      if (S.rankPurchaseTotals[19] !== undefined) { delete S.rankPurchaseTotals[19]; dirty = true; }
+    } else if (oldBag > 0) {
       S.rankPurchaseTotals[19] = Math.max(oldBag, Math.floor(Number(S.rankPurchaseTotals[19]) || 0));
       dirty = true;
     }
@@ -3629,7 +3643,9 @@
     const id = String(item && item.id);
     const account = RANK_ACCOUNT_LIMIT_GOODS.includes(Number(item && item.id));
     const monthly = RANK_MONTHLY_LIMIT_GOODS.includes(Number(item && item.id));
-    const limit = Math.max(0, Math.floor(Number(item && item.timesLimit) || 0));
+    const convertPill = RANK_CONVERT_PILL_GOODS.includes(Number(item && item.id));
+    const baseLimit = Math.max(0, Math.floor(Number(item && item.timesLimit) || 0));
+    const limit = convertPill ? rankConvertPillWeeklyLimit(rankWeekKey()) : baseLimit;
     const bag = monthly ? (S.rankMonthPurchases || {}) : account ? (S.rankPurchaseTotals || {}) : (S.rankPurchases || {});
     const bought = Math.max(0, Math.floor(Number(bag[id]) || 0));
     return { account, monthly, limit, bought, remaining: limit > 0 ? Math.max(0, limit - bought) : Infinity,
@@ -6492,7 +6508,7 @@
     toggleGearStar, isGearStarred, gearsInDisplayOrder,
     gemLevel, gemPercent, gemMergeRate, rollGemDrop, mergeGems, socketGem, unsocketGem, canSocketGem, gemAffixTotal, gemUnitsForGear, rollGemAffixUnits, normalizeGemUnits, attachmentValue, GEM_AFFIX_TOTALS, GEM_AFFIX_CAP,
     totalStats, equipmentEffects, shopLimit, purchaseStatus, buyProp, useProp, openChestProp, gainRandomWS, wsChoices, wsInfo,
-    rankBuy, rankGoodsOf, rankConvertPillPrice, rankLimitInfo, refreshRankShopDay, rankWeekKey, rankMonthKey, RANK_ACCOUNT_LIMIT_GOODS, RANK_MONTHLY_LIMIT_GOODS,
+    rankBuy, rankGoodsOf, rankConvertPillPrice, rankConvertPillWeeklyLimit, rankLimitInfo, refreshRankShopDay, rankWeekKey, rankMonthKey, RANK_ACCOUNT_LIMIT_GOODS, RANK_MONTHLY_LIMIT_GOODS,
     chestState, beginChest, confirmChest,
     CHEST_FIXED_POINTS, chestOtherOdds, settlePendingChest,
     blackCardOptions, applyBlackCard, blackGearBoxOptions, applyBlackGearBox,

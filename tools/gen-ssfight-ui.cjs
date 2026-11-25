@@ -283,14 +283,20 @@ function lootIconRoots() {
   const roots = [];
   for (const r of rows) {
     const sid = sym.get(r.name);
-    if (!sid || sid === 'None') { map.missing.push(r.id + ':' + r.name); continue; }
+    if (!sid || sid === 'None') {
+      // 联机自建道具（黑凤凰/黑圣熊碎片）没有 SWF 导出：运行期用 prop SVG 挂进战利品格。
+      const svg = path.join(ROOT, 'images', 'ui', 'icons', 'prop', 'prop-' + r.id + '.svg');
+      if (fs.existsSync(svg)) { map.byId[r.id] = { name: r.name, svg: 'prop-' + r.id + '.svg' }; continue; }
+      map.missing.push(r.id + ':' + r.name);
+      continue;
+    }
     map.byId[r.id] = { name: r.name, id: String(sid) };
     roots.push(String(sid));
   }
   fs.writeFileSync(path.join(OUT, 'loot-icons.json'), JSON.stringify(Object.assign({
     source: 'references/ssfight/ssfight/ssfight/ssfight.swf（ExportAssets 名字 → 紧邻其前的 DefineSprite）+ js/battle-drops.js（掉落池）',
     how: '原版 `mc.c1.attachMovie(<道具名>, "mc", 100)`（MainMovie.as:18804 战果页 / :18691 开宝箱）：'
-       + '库元件名就是道具名。`byId[道具id].id` = 该图标的元件号。',
+       + '库元件名就是道具名。`byId[道具id].id` = 该图标的元件号；没有 SWF 导出的联机道具用 `byId[道具id].svg` 回退背包矢量图。',
   }, map), null, 1));
   console.log('  战利品图标：%d 颗（缺 %d 颗在 SWF 里找不到）→ loot-icons.json', roots.length, map.missing.length);
   if (map.missing.length) console.log('    缺：%s', map.missing.join('、'));

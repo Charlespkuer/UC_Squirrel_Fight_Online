@@ -11,9 +11,9 @@ assert.deepEqual([11, 13, 15].map((lv) => d16(lv, 1)), [5, 15, 24]);
 assert.equal(d16(10, 1), 0.5); assert.equal(d16(15, 2), 0.5);
 const s7 = (lv, n) => S.shellChanceOf({ skills: { 7: lv }, effects: {}, skillBoost: {} }, n);
 assert.deepEqual([1, 5, 10].map((lv) => s7(lv, 0)), [20, 22, 24.5]);
-/* 真化：首次仍是 24.5；「可多次使用」按原表 N% = 20/40/60/80/100。 */
+/* 真化：首次仍是 24.5；「可多次使用」的 N% 只决定第二次，一场最多两次。 */
 assert.deepEqual([11, 13, 15].map((lv) => s7(lv, 1)), [20, 60, 100]);
-assert.equal(s7(10, 1), 1); assert.equal(s7(15, 2), 100);
+assert.equal(s7(10, 1), 1); assert.equal(s7(15, 2), 0, '第三次起不再触发');
 for (const lv of [1,15]) {
   for (const id of [1,2,3,4,7,10,11,12,15,16,17]) {
     for(let seed=0;seed<30;seed++) {
@@ -232,12 +232,12 @@ assert(swallowedSecondThrows > 0, '样本里应出现被装死吞掉的第二投
 console.log(`PASS fake die takes the next action and swallows the second throw (${fakeDieEvents} events, ${swallowedSecondThrows} swallowed)`);
 /* 装死只给先手、不给行动点：色诱的追加攻击之后，装死方不能再用行动条接一次正常行动。 */
 {
-  const fast = fighter({ level: 60, power: 300, agility: 60, speed: 1100, hp: 3000, maxHp: 3000, pattern: ['common'] });
-  const die = fighter({ level: 60, power: 100, agility: 80, speed: 1000, hp: 500, maxHp: 500,
+  const fast = fighter({ level: 60, power: 300, agility: 60, speed: 1100, hp: 3000, maxHp: 3000, pattern: ['common'], mods: { mustHitAll: 1 } });
+  const die = fighter({ level: 60, power: 100, agility: 80, speed: 1000, hp: 200, maxHp: 200,
     skills: [{ id: 6, level: 1 }, { id: 8, level: 10 }, { id: 14, level: 10 }, { id: 17, level: 10 }] });
-  const rounds = run(2, fast, die).rounds;
+  const rounds = run(5, fast, die).rounds;
   const i = rounds.findIndex((r) => r.fakeDie && Number(r.fakeDieSide) === 1);
-  assert.ok(i >= 0, 'seed 2 必须出现装死');
+  assert.ok(i >= 0, 'seed 5 必须出现装死');
   const seq = [];
   for (let j = i + 1; j < rounds.length; j++) {
     const r = rounds[j];

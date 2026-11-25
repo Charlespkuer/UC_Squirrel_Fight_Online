@@ -25,6 +25,8 @@
     jueDuiTrueFirst: 24.5, jueDuiTrueSecond: 5, jueDuiTrueSecondStep: 5, jueDuiTrueSecondMax: 24, jueDuiTrueRepeat: 0.5,
     shellFirstBase: 20, shellFirstStep: 0.5, shellRepeat: 1,
     shellTrueFirst: 24.5,
+    // 龟甲术每场最多 2 次：真化 N% 只决定「第二次」是否接上，不是无限续挡。
+    shellMaxUses: 2,
     xhSpeedShare: 0.35,
     skillCooldown: 2,
     // 题面·熔核·炽壳：每过一回合叠一层减伤（+10%/层），第 8 回合起封顶 70%。
@@ -39,6 +41,9 @@
     dodgeCap: 55,
     // 暴击率最终上限（百分点，隐藏规则）：溢出的暴击率按 1:1 加进暴击伤害。
     critCap: 70,
+    // 敏捷减伤：floor 以下不生效（木桩 1 敏仍按旧数值），capAt 点封顶 cap。
+    // 与闪避是两条独立曲线：闪避看双方敏捷差，减伤只看自己的敏捷。
+    agiDrFloor: 20, agiDrCapAt: 200, agiDrCap: 0.20,
   });
 
   const ACTIVE_SKILLS = [8, 12, 14, 15, 17, 18, 23];
@@ -591,8 +596,10 @@
     return Math.max(base, Math.min(out, n === 0 ? BOOSTED_FIRST_CAP : BOOSTED_AGAIN_CAP));
   }
 
+  // 真化 N% 只决定第二次是否接上；一场用满 shellMaxUses 次后不再触发。
   function shellChanceOf(def, count) {
     const n = Math.max(0, Math.floor(Number(count) || 0));
+    if (n >= RULES.shellMaxUses) return 0;
     const lv = Math.max(1, Math.floor(Number(def && def.skills && def.skills[7]) || 1));
     let base;
     if (lv <= 10) {
@@ -612,9 +619,10 @@
     if (!def || !def.skills || !def.skills[7]) return null;
     if (Number(def.silence) > 0) return null;
     const n = Math.max(0, Math.floor(Number(def.shellCount) || 0));
+    if (n >= RULES.shellMaxUses) return 'miss';
     if (!(def.shellCharges > 0) && !chance(shellChanceOf(def, n))) return 'miss';
     if (def.shellCharges > 0) def.shellCharges--;
-    else def.shellCount = n + 1;
+    def.shellCount = n + 1;
     return 'block';
   }
 
@@ -638,6 +646,12 @@
     out.dmg = 0;
     return out;
   }
+  function agilityDR(def) {
+    // dmgReduce 会被工具用最小 fighter 直接调用（没有 baseStats / debuffs），此时按裸敏捷算。
+    const a = (def && def.baseStats && def.debuffs) ? effAgility(def) : Math.max(0, Number(def && def.agility) || 0);
+    const span = Math.max(1, RULES.agiDrCapAt - RULES.agiDrFloor);
+    return clamp((a - RULES.agiDrFloor) / span, 0, 1) * RULES.agiDrCap;
+  }
   function dmgReduce(def, dmg, opts) {
     opts = opts || {};
     let out = { dmg, guiJia: 0, jueDui: 0, rebound: 0 };
@@ -656,6 +670,8 @@
       const pct = clamp((5 + (Math.min(skill(def, 10), 10) - 1)) * (1 + effect(def, 34) / 100), 0, 80);
       out.dmg = Math.round(out.dmg * (100 - pct) / 100);
     }
+    const agiDr = agilityDR(def);
+    if (agiDr > 0) out.dmg = Math.round(out.dmg * (1 - agiDr));
     if (def.mods && def.mods.takenMul) out.dmg = Math.round(out.dmg * (1 + Number(def.mods.takenMul)));
     if (def.mods && Number(def.mods.lowHpTakenMul)) {
       out.dmg = lowHpTakenDamage(def, out.dmg, Number(def.mods.lowHpTakenMul));
@@ -814,8 +830,9 @@
           rawDmg = Math.round(rawDmg * (2 + effect(att, 45) / 100 + effect(att, 4) / 100 + critDmgBonus(att)));
         } else if (chance(cc)) {
           const quad = trueVal(9, att.skills[9]);
-          const mul = (quad > 0 && chance(quad)) ? 4 : 2;
-          if (mul === 4) r.crit4 = true;
+          const quadHit = quad > 0 && chance(quad);
+          const mul = quadHit ? 3 : 2;
+          if (quadHit) r.crit4 = true;
           rawDmg = Math.round(rawDmg * (mul + effect(att, 45) / 100 + effect(att, 4) / 100 + critDmgBonus(att)));
           r.crit = true;
         }
@@ -1513,15 +1530,20 @@
         let cc = critChanceAgainst(att, def);
         if (w.id === 11) cc += weaponEffect(w, 20, 2, 3) + trueW(w, 'crit');
         cc = clamp(cc, 0, RULES.critCap);
+        // CONTRACT: 基础暴伤固定 2 倍（真·暴击 3 倍）；暴击率 / 暴伤词条只在此之后相加。
+        // 不能再恢复「随机 3 倍」：单发上限会随力量/武技膨胀，和生命成长脱节。
         if (att.petNextCrit) {
           att.petNextCrit = false;
-          let mult = 2 + (Math.random() < 0.5 ? 0 : 1) + effect(att, 45) / 100 + effect(att, w.type === '投掷' ? 3 : 2) / 100 + critDmgBonus(att);
+          // CONTRACT: 固定 2 倍后仍消耗一次随机数，回放随机流不能因公式调整而整体错位。
+          Math.random();
+          let mult = 2 + effect(att, 45) / 100 + effect(att, w.type === '投掷' ? 3 : 2) / 100 + critDmgBonus(att);
           raw = Math.round(raw * mult); r.crit = true; r.petCrit = true;
         } else if (chance(cc)) {
 
-          let mult = 2 + (Math.random() < 0.5 ? 0 : 1) + effect(att, 45) / 100 + effect(att, w.type === '投掷' ? 3 : 2) / 100 + critDmgBonus(att);
+          Math.random();
+          let mult = 2 + effect(att, 45) / 100 + effect(att, w.type === '投掷' ? 3 : 2) / 100 + critDmgBonus(att);
           const quad = trueVal(9, att.skills[9]);
-          if (quad > 0 && chance(quad)) { mult = 4 + effect(att, 45) / 100 + effect(att, w.type === '投掷' ? 3 : 2) / 100 + critDmgBonus(att); r.crit4 = true; }
+          if (quad > 0 && chance(quad)) { mult = 3 + effect(att, 45) / 100 + effect(att, w.type === '投掷' ? 3 : 2) / 100 + critDmgBonus(att); r.crit4 = true; }
           raw = Math.round(raw * mult); r.crit = true;
         }
         let hits = 1;
@@ -1636,7 +1658,7 @@
             break;
           }
           case 12: {
-            const raw = Math.round((effPower(att) + effSpeed(att)) * (1.2 + 0.15 * (Math.min(lv, 10) - 1)));
+            const raw = Math.round((effPower(att) + effSpeed(att) * 0.5) * (1.2 + 0.15 * (Math.min(lv, 10) - 1)));
             // 真阶只加「多使用一次」的几率，不加伤害；第二下是再一次野球拳（forcedSkill 那一拍不再掷）。
             const doublePct = forcedSkill ? 0 : trueVal(12, lv);
             // 命中判定必须先于真化判定：非真化野球拳不额外消耗随机数；第一下被闪避也要补第二下。
@@ -1978,6 +2000,8 @@
     jueDuiChanceOf, shellChanceOf, passiveSkillBoost,
 
     dmgReduce,
+    // 敏捷减伤的唯一出口（面板 / 测试直接读，避免复制公式）。
+    agilityDROf: (c) => agilityDR(c),
     // 闪避率的唯一出口（同样供测试/调参直接核对，不用统计近似）。
     dodgeChanceOf: (att, def) => dodgeChance(att, def),
     // 暴击率 / 暴击伤害的唯一出口（供测试直接核对 70% 上限与 1:1 溢出转化）。

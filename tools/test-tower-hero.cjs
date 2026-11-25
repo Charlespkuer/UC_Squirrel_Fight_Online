@@ -1022,7 +1022,7 @@ test('勇者真化武技白值 ×1.5 / 真5 ×2，普通模式不受影响（野
       const plainRound = c.Sim.simulate(plainF, dummy).rounds.find((r) => r.attacker === 0 && r.action === 'skill' && r.id === 12);
       assert.ok(heroRound && plainRound);
       assert.equal(heroRound.dmg, plainRound.dmg, '真' + (lv - 10) + ' 野球拳伤害与普通模式一致');
-      assert.equal(heroRound.dmg, Math.round((heroF.power + heroF.speed) * 2.55), '真' + (lv - 10) + ' 按 255% 原白值结算');
+      assert.equal(heroRound.dmg, Math.round((heroF.power + heroF.speed * 0.5) * 2.55), '真' + (lv - 10) + ' 按 255% 原白值结算');
     } finally {
       vm.runInContext('Math.random = __oldRandom;', c);
       delete c.__oldRandom;

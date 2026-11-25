@@ -1418,6 +1418,32 @@
       if (c.g.parentNode) c.g.parentNode.removeChild(c.g);
     }
     this.__attached = [];
+    // `attachImage` 挂的联机自建道具矢量图不参与播放注册，但换奖/重画时要一起收掉。
+    for (const img of this.__images || []) if (img.parentNode) img.parentNode.removeChild(img);
+    this.__images = [];
+  };
+  // 原版 SWF 没有导出的联机自建道具（如黑凤凰/黑圣熊碎片）：用背包同一张 SVG
+  // 补进战利品格。尺寸取格子的实际 bbox，避免不同战果页的格子缩放不一。
+  MovieClip.prototype.attachImage = function (href, opts) {
+    const src = String(href || '');
+    if (!src) return null;
+    const host = this.getContentHost();
+    if (!host) return null;
+    let b = null;
+    try { b = this.g.getBBox(); } catch (_) { b = null; }
+    if (!b || !(b.width > 0) || !(b.height > 0)) return null;
+    const pad = Math.max(0, Math.min(0.3, Number(opts && opts.pad) || 0)) * Math.min(b.width, b.height);
+    const img = el('image', {
+      x: b.x + pad, y: b.y + pad,
+      width: Math.max(1, b.width - pad * 2), height: Math.max(1, b.height - pad * 2),
+      preserveAspectRatio: 'xMidYMid meet', class: 'sf-loot-svg',
+    });
+    img.setAttribute('href', src);
+    img.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', src);
+    host.appendChild(img);
+    if (!this.__images) this.__images = [];
+    this.__images.push(img);
+    return img;
   };
   // 把内容缩放 `s` 后，再平移到「缩放后的包围盒 <mode> 点 = 本实例原点」。
   // 必须从这里拼进去：实例刚建出来时还没进文档，`getBBox()` 拿不到，会安排下一帧重算，

@@ -142,7 +142,7 @@ test('5 级新手装备只能由服务端发放一次', () => {
   assert.strictEqual(s.gears.length, 1);
 });
 
-test('真化武技按等级累加（龟甲多次使用按单机原表）', () => {
+test('真化武技按等级累加（龟甲第二次按原表，第三次起不再触发）', () => {
   assert.strictEqual(GData.trueWeaponBonus({id:4,level:15}, 'combo'),25);
   assert.strictEqual(GData.trueSkillValue(23,15),50);
   assert.strictEqual(GData.trueSkillValue(9,15),20);
@@ -150,7 +150,7 @@ test('真化武技按等级累加（龟甲多次使用按单机原表）', () =>
   const attacker={skills:{9:15}}, defender={skills:{10:15}};
   assert.strictEqual(globalThis.Sim.critChanceVs(attacker,defender),20);
   assert.strictEqual(globalThis.Sim.shellChanceOf({skills:{7:15},effects:{}},1),100);
-  assert.strictEqual(globalThis.Sim.shellChanceOf({skills:{7:15},effects:{}},2),100);
+  assert.strictEqual(globalThis.Sim.shellChanceOf({skills:{7:15},effects:{}},2),0);
 });
 
 test('联机碎片合成与单机同价：白30 / 绿40 / 蓝50', () => {
@@ -468,6 +468,49 @@ test('天梯金杯商店：23 件价格与积分门槛按 2026-11 口径，月�
   assert.strictEqual(s.gears[s.gears.length - 1].id, 205, '第二套给橙色狂战 205');
   assert.strictEqual(State.gearInst(205).quality, 4, '第二套是橙装');
   assert.strictEqual((s.gears[s.gears.length - 1].ext || []).length, 2, '第二套狂战同样带 2 条随机附加属性');
+});
+
+test('魔法袋改为每月限兑 1 次，跨月恢复', () => {
+  const s = freshSave({ level: 40, integral: 180, goldCup: 2000, goldPoint: 200,
+    rankPurchaseWeek: '', rankPurchases: {}, rankPurchaseTotals: {}, rankMonthPurchases: {}, rankPurchaseMonth: '' });
+  const first = State.rankBuy(19);
+  assert.strictEqual(first.ok, true, '本月第一次魔法袋应能兑换');
+  assert.strictEqual(s.rankMonthPurchases['19'], 1, '记进本月账');
+  assert.strictEqual(s.rankPurchaseTotals['19'], undefined, '不再走账号累计账');
+  s.goldCup = 2000; s.goldPoint = 200;
+  const again = State.rankBuy(19);
+  assert.strictEqual(again.ok, false, '本月第二次被拦');
+  assert.match(String(again.msg), /本月只能兑换/);
+  s.rankPurchaseMonth = '2000-01';
+  State.refreshRankShopDay();
+  s.goldCup = 2000; s.goldPoint = 200;
+  assert.strictEqual(State.rankBuy(19).ok, true, '跨月后恢复 1 次');
+});
+
+test('转化丸每周限兑：2026-11-30 前 1 次，下周起 2 次', () => {
+  const realNow = Date.now;
+  try {
+    Date.now = () => new Date(2026, 10, 23, 12).getTime();
+    let s = freshSave({ level: 40, integral: 1000, goldCup: 1000, goldPoint: 1000,
+      rankPurchaseWeek: '', rankPurchases: {}, rankPurchaseTotals: {}, rankMonthPurchases: {}, rankPurchaseMonth: '' });
+    for (const id of ['15', '16', '17', '18']) {
+      assert.strictEqual(State.rankLimitInfo(State.rankGoodsOf(id)).limit, 1, '本周转化丸 ' + id + ' 仍限 1 次');
+    }
+    assert.strictEqual(State.rankBuy(15).ok, true, '本周第 1 次');
+    assert.strictEqual(State.rankBuy(15).ok, false, '本周第 2 次被拦');
+
+    Date.now = () => new Date(2026, 10, 30, 0, 5).getTime();
+    s = freshSave({ level: 40, integral: 1000, goldCup: 1000, goldPoint: 1000,
+      rankPurchaseWeek: '', rankPurchases: {}, rankPurchaseTotals: {}, rankMonthPurchases: {}, rankPurchaseMonth: '' });
+    for (const id of ['15', '16', '17', '18']) {
+      assert.strictEqual(State.rankLimitInfo(State.rankGoodsOf(id)).limit, 2, '下周转化丸 ' + id + ' 限 2 次');
+    }
+    assert.strictEqual(State.rankBuy(15).ok, true, '下周第 1 次');
+    assert.strictEqual(State.rankBuy(15).ok, true, '下周第 2 次');
+    assert.strictEqual(State.rankBuy(15).ok, false, '下周第 3 次被拦');
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test('转化丸下周起按 50 金杯 + 50 金松果扣费', () => {

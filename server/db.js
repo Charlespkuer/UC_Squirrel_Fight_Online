@@ -7,7 +7,7 @@ const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { config } = require('./config');
 
-const SCHEMA_VERSION = 21;
+const SCHEMA_VERSION = 22;
 
 let db = null;
 const stmtCache = new Map();
@@ -386,6 +386,22 @@ const SCHEMA = [
      PRIMARY KEY (account_id, week)
    )`,
 
+  // 上周日 23:59 的最终排名快照：下周一换周时写入，下周领奖只认这份（不再看本周实时名次）。
+  `CREATE TABLE IF NOT EXISTS rank_finals (
+     account_id INTEGER NOT NULL,
+     week       TEXT    NOT NULL,
+     division   TEXT    NOT NULL,
+     rank       INTEGER NOT NULL,
+     rank_hidden INTEGER NOT NULL,
+     played     INTEGER NOT NULL,
+     surpassed_bot INTEGER NOT NULL,
+     surpassed_bot_hidden INTEGER NOT NULL,
+     score      INTEGER NOT NULL,
+     created_at INTEGER NOT NULL,
+     PRIMARY KEY (account_id, week)
+   )`,
+  `CREATE INDEX IF NOT EXISTS ix_rank_finals_week ON rank_finals (week, division, rank)`,
+
   // 服务端键值（目前只存天梯最近一次周结算的周标识；`meta` 通用，后续可复用）。
   `CREATE TABLE IF NOT EXISTS meta (
      key   TEXT PRIMARY KEY,
@@ -540,6 +556,7 @@ function migrate() {
     if (version < 19) migrateV19();
     if (version < 20) migrateV20();
     if (version < 21) migrateV21();
+    if (version < 22) migrateV22();
     db.exec('PRAGMA user_version = ' + SCHEMA_VERSION);
   });
 }
@@ -762,6 +779,10 @@ function migrateV20() {
 
 function migrateV21() {
   // hidden_accounts 由 SCHEMA 的 CREATE TABLE IF NOT EXISTS 建好；这里只占版本位。
+}
+
+function migrateV22() {
+  // rank_finals 由 SCHEMA 的 CREATE TABLE IF NOT EXISTS 建好；这里只占版本位。
 }
 
 function handle() {

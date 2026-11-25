@@ -27,7 +27,6 @@
       id: 'campaign_hare', bossId: 1, mcFrame: 1, name: '暗御狡兔', bigName: '狡兔',
       level: 35, unlockLevel: 35, rewardExpRatio: 1,
 
-      pet: { level: [6, 10], grades: [55, 28, 13, 4] },
       bias: { power: 2.0, agility: 1.3, speed: 1.43, hp: 3.2 },
       weapons: [{ id: 8, level: 10 }],
       skills: [{ id: 2, level: 10 }, { id: 11, level: 10 }, { id: 23, level: 10 }],
@@ -40,7 +39,6 @@
       id: 'campaign_wolf', bossId: 2, mcFrame: 2, name: '暗御狼王', bigName: '狼王',
       level: 40, unlockLevel: 40, rewardExpRatio: 1.1,
 
-      pet: { level: [8, 13], grades: [45, 30, 18, 7] },
       bias: { power: 2.4, agility: 0.9, speed: 1.155, hp: 3.2 },
       weapons: [{ id: 12, level: 11 }],
       skills: [{ id: 9, level: 11 }, { id: 10, level: 11 }, { id: 24, level: 11 }, { id: 14, level: 10 }],
@@ -53,7 +51,6 @@
       id: 'campaign_fox', bossId: 3, mcFrame: 3, name: '暗御妖狐', bigName: '妖狐',
       level: 50, unlockLevel: 50, rewardExpRatio: 1.15,
 
-      pet: { level: [12, 18], grades: [30, 32, 25, 13] },
       bias: { power: 1.2, agility: 1.5, speed: 1.265, hp: 5.6 },
       weapons: [{ id: 7, level: 12 }],
       skills: [{ id: 8, level: 12 }, { id: 15, level: 12 }, { id: 6, level: 10 }, { id: 16, level: 10 }],
@@ -65,9 +62,6 @@
     {
       id: 'campaign_ape', bossId: 4, mcFrame: 4, name: '暗御猿将', bigName: '猿将',
       level: 60, unlockLevel: 60, rewardExpRatio: 1.2,
-      // 幻兽等级期望 ≈19.0（16~24；1★ 封顶 10、2★ 封顶 20）。
-      // 高星权重也随首领提高，否则低星幻兽会被自己的等级上限压回 10 级。
-      pet: { level: [16, 24], grades: [8, 24, 40, 28] },
       bias: { power: 3.0, agility: 1.1, speed: 1.10, hp: 4.8 },
       weapons: [{ id: 2, level: 12 }],
       skills: [{ id: 14, level: 12 }, { id: 16, level: 10 }, { id: 5, level: 10 }, { id: 10, level: 10 }],
@@ -91,23 +85,71 @@
   const MIN_LEVEL = 20;
   const ENTRY_CUP_COST = 0;
 
-  // · 随机幻兽×1（2026-11-07 起替代原「孵化点×400」：奖池生成时就把种类/星级/等级
-  // 35→60 提升，见 `BOSSES[].pet`。幻兽栏满时服务端仍折回 400 孵化点，见
-  const REWARD_POOL = Object.freeze([
-    { key: 'gold', kind: 'gold', name: '金松果', gold: 200, weight: 30, value: 200 },
-    { key: 'angel_fruit', kind: 'prop', id: 47, count: 1, name: '天使果实', weight: 15, value: 200 },
-    { key: 'blue_shards', kind: 'prop', id: 26, count: 20, name: '蓝色碎片', weight: 20, value: 200 },
-    { key: 'skill_scrolls', kind: 'prop', id: 21, count: 25, name: '技能卷轴', weight: 10, value: 150 },
-    { key: 'weapon_scrolls', kind: 'prop', id: 22, count: 25, name: '武器卷轴', weight: 10, value: 150 },
-    { key: 'purple_gear', kind: 'gear', quality: 3, name: '紫色装备', weight: 10, value: 300 },
-    { key: 'random_pet', kind: 'pet', name: '幻兽', weight: 5, value: 400 },
-  ]);
-  const REWARD_WEIGHT = REWARD_POOL.reduce((sum, p) => sum + p.weight, 0);
+  // 每只首领的奖励表（按 2026-11 图片逐项落地）：一局仍从本表抽 3~5 份 `rollDatas`，
+  // 每份 4 个座位掷骰、点数最高者得。表内各项等概率，抽中后不重复。
+  // `setIds` 用 gearSetMap 的套装 id：仙鹤 17 / 熊猫 18 / 浣熊 19 / 犀牛 28 /
+  // 幕府 29 / 勇者 30 / 诅咒 31 / 机器猫 49 / 深海 48 / 狂战 51。
+  const PURPLE = (sets, affixMax, label) => ({ kind: 'gear', quality: 3, setIds: sets, affixMax, name: label, value: 300 });
+  const GEM = (level) => ({ kind: 'prop', id: 100 + Number(level), count: 1, name: level + '级宝石', value: Number(level) >= 4 ? 600 : 300 });
+  const SHARDS = (n) => ({ kind: 'prop', id: 26, count: n, name: '蓝色碎片', value: n * 10 });
+  const FRUIT = (id, name) => ({ kind: 'prop', id, count: 1, name, value: 200 });
+  const GOLD = (n) => ({ kind: 'gold', gold: n, name: '金松果', value: n });
+
+  const BOSS_REWARDS = {
+    1: [
+      { kind: 'pet_random', grade: 1, name: '任意1级1星幻兽', value: 400 },
+      { kind: 'pet', petId: 14, name: '1级哈哈小丑', value: 400 },
+      { kind: 'pet', petId: 29, name: '1级稻草人', value: 400 },
+      { kind: 'pet', petId: 28, name: '1级招财熊猫', value: 400 },
+      PURPLE([17, 18, 28], 2, '紫色装备（仙鹤/熊猫/犀牛）'),
+      GEM(3),
+      SHARDS(100),
+      GOLD(150),
+    ],
+    2: [
+      { kind: 'pet_random', grade: 1, name: '任意1级1星幻兽', value: 400 },
+      { kind: 'pet_random', grade: 2, name: '任意1级2星幻兽', value: 400 },
+      { kind: 'pet', petId: 18, name: '1级跳神娃娃', value: 400 },
+      { kind: 'pet', petId: 16, name: '1级百战鳄鱼', value: 400 },
+      { kind: 'pet', petId: 26, name: '1级铁嘴蜂', value: 400 },
+      PURPLE([29, 30], 3, '紫色装备（幕府/勇者）'),
+      PURPLE([31, 19], 3, '紫色装备（诅咒/浣熊）'),
+      GEM(3),
+      SHARDS(150),
+      GOLD(200),
+      FRUIT(47, '天使果实'),
+      FRUIT(48, '恶魔果实'),
+    ],
+    3: [
+      { kind: 'pet_random', grade: 3, name: '任意1级3星幻兽', value: 400 },
+      { kind: 'pet', petId: 25, name: '1级哇哇', value: 400 },
+      { kind: 'pet', petId: 27, name: '1级铃音海豚', value: 400 },
+      PURPLE([31, 19], 3, '紫色装备（诅咒/浣熊）'),
+      PURPLE([49, 48], 3, '紫色装备（机器猫/深海）'),
+      GEM(3),
+      SHARDS(200),
+      GOLD(250),
+      FRUIT(47, '天使果实'),
+      FRUIT(48, '恶魔果实'),
+    ],
+    4: [
+      { kind: 'pet_random', grade: 3, name: '任意1级3星幻兽', value: 400 },
+      { kind: 'pet', petId: 32, name: '1级仙玲', value: 400 },
+      { kind: 'pet', petId: 30, name: '1级酷法', value: 400 },
+      { kind: 'pet', petId: 31, name: '1级神灯', value: 400 },
+      PURPLE([31, 19], 3, '紫色装备（诅咒/浣熊）'),
+      PURPLE([49, 48], 3, '紫色装备（机器猫/深海）'),
+      PURPLE([51], 3, '紫色狂战装备'),
+      GEM(3),
+      GEM(4),
+      SHARDS(250),
+      GOLD(300),
+    ],
+  };
 
   const PET_PRIZE_FALLBACK = Object.freeze({
-    key: 'hatch_points', kind: 'hatch', name: '孵化点', count: 400, weight: 0, value: 400,
+    key: 'hatch_points', kind: 'hatch', name: '孵化点', count: 400, value: 400,
   });
-  const PET_DEFAULT = Object.freeze({ level: [7, 11], grades: [55, 28, 13, 4] });
 
   const BY_ID = Object.fromEntries(BOSSES.map((b) => [b.id, b]));
 
@@ -171,10 +213,6 @@
   }
 
 
-  function rewardRandom(seed, index) {
-    return mulberry32((Number(seed) ^ Math.imul(Number(index) + 1, 0x9E3779B9)) >>> 0)();
-  }
-
   function petTable() {
     const gd = (typeof GData !== 'undefined' && GData) ? GData : (globalThis && globalThis.GData);
     return gd && Array.isArray(gd.PETS) && gd.PETS.length ? gd : null;
@@ -186,50 +224,89 @@
   }
 
 
-  function randomPetPrize(boss, seed, index) {
+  function bossRewards(boss) {
+    const id = Number(boss && boss.bossId) || 1;
+    return BOSS_REWARDS[id] || BOSS_REWARDS[1];
+  }
+
+  function petDefOf(petId) {
     const gd = petTable();
     if (!gd) return null;
-    const conf = (boss && boss.pet) || PET_DEFAULT;
-    const rand = mulberry32((Number(seed) ^ Math.imul(Number(index) + 1, 0x9E3779B9) ^ 0x5F356495) >>> 0);
-    const weights = (Array.isArray(conf.grades) ? conf.grades : PET_DEFAULT.grades)
-      .slice(0, 4).map((n) => Math.max(0, Number(n) || 0));
-    const total = weights.reduce((n, w) => n + w, 0);
-    let grade = 1;
-    if (total > 0) {
-      let roll = rand() * total;
-      for (let i = 0; i < weights.length; i++) {
-        roll -= weights[i];
-        if (roll < 0) { grade = i + 1; break; }
-      }
-    }
-    const pool = gd.PETS.filter((p) => Number(p.grade) === grade);
-    const list = pool.length ? pool : gd.PETS;
-    const def = list[Math.floor(rand() * list.length)];
+    return gd.PETS.find((p) => Number(p.id) === Number(petId)) || null;
+  }
+
+  function petPrizeOf(petId, level) {
+    const def = petDefOf(petId);
     if (!def) return null;
-    const range = Array.isArray(conf.level) ? conf.level : PET_DEFAULT.level;
-    const lo = Math.max(1, Math.round(Number(range[0]) || 1));
-    const hi = Math.max(lo, Math.round(Number(range[1]) || lo));
-    const maxLevel = Math.max(1, Number(def.maxLevel) || 1);
-    const level = Math.max(1, Math.min(maxLevel, lo + Math.floor(rand() * (hi - lo + 1))));
+    const lv = Math.max(1, Math.min(Number(def.maxLevel) || 1, Number(level) || 1));
     return {
-      id: Number(def.id), name: String(def.name || '幻兽'), grade: Number(def.grade) || grade,
-      maxLevel, leadership: Number(def.leadership) || 0,
+      id: Number(def.id), name: String(def.name || '幻兽'), grade: Number(def.grade) || 1,
+      maxLevel: Math.max(1, Number(def.maxLevel) || 1), leadership: Number(def.leadership) || 0,
       skillId: Number(def.skillId) || 0, skillName: petSkillName(def.skillId),
-      level, exp: 0,
+      level: lv, exp: 0,
     };
   }
 
-  function pickReward(seed, index, boss) {
-    let roll = rewardRandom(seed, index) * REWARD_WEIGHT;
-    let prize = REWARD_POOL[REWARD_POOL.length - 1];
-    for (const entry of REWARD_POOL) {
-      roll -= entry.weight;
-      if (roll < 0) { prize = entry; break; }
+  function randomPetPrize(grade, seed, index) {
+    const gd = petTable();
+    if (!gd) return null;
+    const rand = mulberry32((Number(seed) ^ Math.imul(Number(index) + 1, 0x9E3779B9) ^ 0x5F356495) >>> 0);
+    const pool = gd.PETS.filter((p) => Number(p.grade) === Number(grade));
+    const list = pool.length ? pool : gd.PETS;
+    const def = list[Math.floor(rand() * list.length)];
+    return def ? petPrizeOf(def.id, 1) : null;
+  }
+
+  // 用种子把本首领奖励表洗一遍：一局抽 3~5 份且不重复，公开 rollDatas 可复算。
+  function rewardOrder(seed, n) {
+    const rand = mulberry32((Number(seed) ^ 0x85EBCA6B) >>> 0);
+    const list = Array.from({ length: Math.max(0, Number(n) || 0) }, (_, i) => i);
+    for (let i = list.length - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      const t = list[i]; list[i] = list[j]; list[j] = t;
     }
-    if (prize.kind !== 'pet') return prize;
-    const pet = randomPetPrize(boss, seed, index);
-    if (!pet) return PET_PRIZE_FALLBACK;
-    return Object.assign({}, prize, { pet });
+    return list;
+  }
+
+  // 紫装奖励：按 `setIds` + 随机部位先定下具体装备 id（分奖页图标与实发一致）；
+  // 词条在发奖时按 `affixMax` 掷 1~N 星。
+  function gearPrize(template, seed, index) {
+    const rand = mulberry32((Number(seed) ^ Math.imul(Number(index) + 1, 0x9E3779B9) ^ 0x2F6E2B1) >>> 0);
+    const part = Math.floor(rand() * 4);
+    const gmap = (typeof gearMap !== 'undefined' && gearMap) || (globalThis && globalThis.gearMap);
+    const smap = (typeof gearSetMap !== 'undefined' && gearSetMap) || (globalThis && globalThis.gearSetMap);
+    if (!gmap || !smap) return Object.assign({}, template);
+    const allow = new Set((template.setIds || []).map(Number));
+    const ids = [];
+    gmap.each((key, def) => {
+      if (!def || Number(def.type) !== part) return;
+      const setId = parseInt(def.setId, 10);
+      if (allow.size && !allow.has(setId)) return;
+      const set = smap.getValue(setId);
+      if (!set || Number(set.quality) !== 3) return;
+      ids.push(parseInt(key, 10));
+    });
+    if (!ids.length) return Object.assign({}, template);
+    ids.sort((a, b) => a - b);
+    return Object.assign({}, template, { gearId: ids[Math.floor(rand() * ids.length)] });
+  }
+
+  function pickReward(seed, index, boss) {
+    const pool = bossRewards(boss);
+    const order = rewardOrder(seed, pool.length);
+    const template = pool[order[index % order.length]];
+    if (template.kind === 'pet_random') {
+      const pet = randomPetPrize(template.grade, seed, index);
+      if (!pet) return PET_PRIZE_FALLBACK;
+      return Object.assign({}, template, { kind: 'pet', pet });
+    }
+    if (template.kind === 'pet' && template.petId) {
+      const pet = petPrizeOf(template.petId, 1);
+      if (!pet) return PET_PRIZE_FALLBACK;
+      return Object.assign({}, template, { pet });
+    }
+    if (template.kind === 'gear') return gearPrize(template, seed, index);
+    return Object.assign({}, template);
   }
 
   // 原版 `rollDatas`：一局 3~5 份奖品，每份 4 个座位各掷一次，点数最高者得。
@@ -241,7 +318,8 @@
       accountId: Number(s && s.accountId) || 0,
       kind: String((s && s.kind) || 'empty'),
     }));
-    const count = 3 + (Math.abs(Math.floor(Number(seed) || 0)) % 3);
+    const pool = bossRewards(boss);
+    const count = Math.min(pool.length, 3 + (Math.abs(Math.floor(Number(seed) || 0)) % 3));
     const prizes = [];
     for (let i = 0; i < count; i++) {
       const prize = pickReward(seed, i, boss);
@@ -268,7 +346,7 @@
   const api = {
     BOSSES, LOCKED_BOSS, BY_ID, bossList, bossFor, buildFoe, diceValue,
     TICKET_PROP, TICKET_SHOP_PRICE, PARTY_SIZE, MIN_LEVEL, ENTRY_CUP_COST,
-    REWARD_POOL, PET_PRIZE_FALLBACK, randomPetPrize, rewardPlan, rewardValue,
+    BOSS_REWARDS, bossRewards, PET_PRIZE_FALLBACK, randomPetPrize, rewardPlan, rewardValue,
   };
 
   if (typeof window !== 'undefined') window.CampaignData = api;
