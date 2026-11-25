@@ -785,12 +785,12 @@ test('对手等级封顶：随机挑战/擂台再抖也不会冒出 90 级以上
   }
 });
 
-test('魔法袋回到天梯商店：180 积分 + 2000 金杯 + 200 金松果，账号限 1 次', () => {
+test('魔法袋回到天梯商店：180 积分 + 1000 金杯 + 200 金松果，账号限 1 次', () => {
   const g = setup(), s = g.c.State.state();
-  s.level = 30; s.integral = 180; s.goldCup = 2000; s.goldPoint = 200;
+  s.level = 30; s.integral = 180; s.goldCup = 1000; s.goldPoint = 200;
   const goods = g.c.ClassicExtras.rankGoodsList().find((x) => String(x.id) === '19');
   assert.ok(goods, '天梯商店要补回原版的魔法袋（goods id 19）');
-  assert.deepEqual([goods.goodsId, goods.cup, goods.gold, goods.integral], ['79', '2000', '200', '180']);
+  assert.deepEqual([goods.goodsId, goods.cup, goods.gold, goods.integral], ['79', '1000', '200', '180']);
   const lim = g.c.ClassicExtras.rankLimitInfo(goods);
   assert.equal(lim.account, true, '账号级限购');
   assert.equal(lim.limit, 1);
@@ -798,7 +798,7 @@ test('魔法袋回到天梯商店：180 积分 + 2000 金杯 + 200 金松果，�
   assert.equal(s.props[79], 1, '兑换到 1 个魔法袋');
   assert.equal(s.goldCup, 0); assert.equal(s.goldPoint, 0);
   assert.equal(s.rankPurchaseTotals[19], 1, '记进账号累计账');
-  s.goldCup = 2000; s.goldPoint = 200;
+  s.goldCup = 1000; s.goldPoint = 200;
   g.c.ClassicExtras.rankBuy('19');
   assert.equal(s.props[79], 1, '第二次被账号上限拦住');
   assert.equal(s.rankPurchaseTotals[19], 1);

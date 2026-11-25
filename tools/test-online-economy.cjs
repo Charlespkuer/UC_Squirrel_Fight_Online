@@ -470,20 +470,22 @@ test('天梯金杯商店：23 件价格与积分门槛按 2026-11 口径，月�
   assert.strictEqual((s.gears[s.gears.length - 1].ext || []).length, 2, '第二套狂战同样带 2 条随机附加属性');
 });
 
-test('魔法袋改为每月限兑 1 次，跨月恢复', () => {
-  const s = freshSave({ level: 40, integral: 180, goldCup: 2000, goldPoint: 200,
+test('魔法袋改为每月限兑 1 次，价格 1000 杯 + 200 金松果，跨月恢复', () => {
+  const s = freshSave({ level: 40, integral: 180, goldCup: 1000, goldPoint: 200,
     rankPurchaseWeek: '', rankPurchases: {}, rankPurchaseTotals: {}, rankMonthPurchases: {}, rankPurchaseMonth: '' });
   const first = State.rankBuy(19);
   assert.strictEqual(first.ok, true, '本月第一次魔法袋应能兑换');
+  assert.strictEqual(s.goldCup, 0, '价格扣 1000 金杯');
+  assert.strictEqual(s.goldPoint, 0, '价格扣 200 金松果');
   assert.strictEqual(s.rankMonthPurchases['19'], 1, '记进本月账');
   assert.strictEqual(s.rankPurchaseTotals['19'], undefined, '不再走账号累计账');
-  s.goldCup = 2000; s.goldPoint = 200;
+  s.goldCup = 1000; s.goldPoint = 200;
   const again = State.rankBuy(19);
   assert.strictEqual(again.ok, false, '本月第二次被拦');
   assert.match(String(again.msg), /本月只能兑换/);
   s.rankPurchaseMonth = '2000-01';
   State.refreshRankShopDay();
-  s.goldCup = 2000; s.goldPoint = 200;
+  s.goldCup = 1000; s.goldPoint = 200;
   assert.strictEqual(State.rankBuy(19).ok, true, '跨月后恢复 1 次');
 });
 
