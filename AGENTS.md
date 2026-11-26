@@ -76,6 +76,16 @@ node server/index.js
 > 轻壳排查：设 `SSDZ_SHELL_LOG=1` 后启动，找目录的结果与每个请求的「状态 / 路径 / 字节数」都会
 > 追加写到 `%TEMP%\ssdz-online-shell.log`（改了文件但页面还是旧的，先看这里的字节数）。
 
+> **本机 QA / 出包验证不得污染玩家客户端**：任何会改 `localStorage['ssdz-online-base']`、登录测试号
+> 或重装客户端的本机测试，都必须用**隔离的 WebView2 配置目录**启动
+> （`$env:WEBVIEW2_USER_DATA_FOLDER = "$PWD\out\qa-webview-<任务>"`），并且只连测试库；
+> 否则会写进玩家自己的 `%LOCALAPPDATA%\com.ssdz.online\EBWebView`：正式服地址被换成已关闭的 QA 端口、
+> Charles 的会话被测试号顶掉 —— 现象就是「新窗口上传完，本地连不上服务器」。
+> 污染后：带 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=19224` 启动轻壳，
+> 用 CDP 删掉 `ssdz-online-base`、把 `ssdz-online-last-good` 指回 `http://140.143.142.110:5896`、
+> 清掉 `ssdz-online-account` / `ssdz-online-username` 后重新登录 Charles。
+> 本地开玩前先 `node tools/build-online-app.cjs --shell` 把轻壳刷到当前版本，旧壳会被 `minVersion` 锁在更新窗。
+
 > **构建只做一次验证**：`--web` 已经算过的快照指纹与逐文件 sha256 必须复用，不许构建完再
 > spawn 一次 `--check`（同一份 96 MB 源码再读一遍）；`.so` 的 ABI / 16 KiB 对齐只在最终 APK
 > 上验一次；签名 / badging / zipalign 各一次。`--check` 只用于单独检查已有快照。
