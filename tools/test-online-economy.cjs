@@ -471,13 +471,6 @@ test('天梯金杯商店：23 件价格与积分门槛按 2026-11 口径，月�
   const gear = State.rankBuy(11);
   assert.strictEqual(gear.ok, true, '狂战头盔应能兑换');
   assert.strictEqual(s.gears.length, 1, '装备类商品要真的进背包');
-  const first = State.rankBuy(7);
-  assert.strictEqual(first.ok, true, '力量永久+1 本月第一次应能兑换');
-  const second = State.rankBuy(7);
-  assert.strictEqual(second.ok, false, '永久属性丸本月限购 1 次');
-  s.rankPurchaseMonth = '2000-01';
-  State.refreshRankShopDay();
-  assert.strictEqual(State.rankBuy(7).ok, true, '跨月后应恢复 1 次');
   assert.strictEqual(State.rankBuy(5).ok, true, '技能卷轴本周第一次应能兑换');
   assert.strictEqual(State.rankBuy(5).ok, false, '普通商品是每周限兑 1 次');
   assert.match(String(goodsMap.getValue('20').remark), /随机生成两个较好的附加属性/, '第二套狂战说明必须保留随机附加属性');
@@ -488,22 +481,60 @@ test('天梯金杯商店：23 件价格与积分门槛按 2026-11 口径，月�
   assert.strictEqual((s.gears[s.gears.length - 1].ext || []).length, 2, '第二套狂战同样带 2 条随机附加属性');
 });
 
-test('魔法袋改为每月限兑 1 次，价格 1000 杯 + 200 金松果，跨月恢复', () => {
-  const s = freshSave({ level: 40, integral: 180, goldCup: 1000, goldPoint: 200,
+test('永久属性货改为开服累计额度：4 件共用每月 2 次，未兑累计、不设上限', () => {
+  const realNow = Date.now;
+  try {
+    Date.now = () => new Date(2026, 10, 26, 12).getTime();   // 2026-11：开服月
+    const s = freshSave({ level: 40, integral: 3000, goldCup: 9000, goldPoint: 9000,
+      rankPurchaseWeek: '', rankPurchases: {}, rankPurchaseTotals: {}, rankMonthPurchases: {}, rankPurchaseMonth: '' });
+    assert.strictEqual(State.rankLimitInfo(State.rankGoodsOf(7)).limit, 2, '开服月额度 2 次');
+    assert.strictEqual(State.rankBuy(7).ok, true, '第 1 次');
+    assert.strictEqual(State.rankBuy(9).ok, true, '第 2 次可换另一件（4 件共用额度）');
+    const third = State.rankBuy(8);
+    assert.strictEqual(third.ok, false, '本月第 3 次被共用额度拦住');
+    assert.match(String(third.msg), /累计次数已用完/);
+    assert.strictEqual(s.rankStatUsed, 2);
+    assert.strictEqual(State.rankLimitInfo(State.rankGoodsOf(8)).remaining, 0, '四件商品的剩余次数一起归零');
+
+    Date.now = () => new Date(2026, 11, 1, 12, 5).getTime();  // 2026-12
+    State.refreshRankShopDay();
+    assert.strictEqual(State.rankLimitInfo(State.rankGoodsOf(7)).limit, 4, '下月累计到 4 次');
+    assert.strictEqual(State.rankBuy(8).ok, true, '12 月第 1 次');
+    assert.strictEqual(State.rankBuy(10).ok, true, '12 月第 2 次');
+    assert.strictEqual(State.rankBuy(7).ok, false, '12 月第 3 次仍被拦（额度 4、已兑 4）');
+
+    Date.now = () => new Date(2027, 0, 15, 12).getTime();   // 2027-01
+    State.refreshRankShopDay();
+    assert.strictEqual(State.rankLimitInfo(State.rankGoodsOf(7)).limit, 6, '第 3 个月 6 次（不设上限）');
+    assert.strictEqual(State.rankLimitInfo(State.rankGoodsOf(7)).remaining, 2, '未兑换的次数继续累计');
+
+    Date.now = () => new Date(2026, 10, 26, 12).getTime();
+    const migrated = freshSave({ level: 40, integral: 3000, goldCup: 9000, goldPoint: 9000,
+      rankPurchaseWeek: '', rankPurchases: {}, rankPurchaseTotals: {}, rankMonthPurchases: { 7: 1 }, rankPurchaseMonth: '2026-11' });
+    State.refreshRankShopDay();
+    assert.strictEqual(migrated.rankStatUsed, 1, '改版前 11 月已兑的 1 次要计入累计');
+    assert.strictEqual(State.rankLimitInfo(State.rankGoodsOf(7)).remaining, 1, '开服月额度 2，迁移后剩 1');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('魔法袋改为每月限兑 1 次，价格 800 杯 + 200 金松果，跨月恢复', () => {
+  const s = freshSave({ level: 40, integral: 180, goldCup: 800, goldPoint: 200,
     rankPurchaseWeek: '', rankPurchases: {}, rankPurchaseTotals: {}, rankMonthPurchases: {}, rankPurchaseMonth: '' });
   const first = State.rankBuy(19);
   assert.strictEqual(first.ok, true, '本月第一次魔法袋应能兑换');
-  assert.strictEqual(s.goldCup, 0, '价格扣 1000 金杯');
+  assert.strictEqual(s.goldCup, 0, '价格扣 800 金杯');
   assert.strictEqual(s.goldPoint, 0, '价格扣 200 金松果');
   assert.strictEqual(s.rankMonthPurchases['19'], 1, '记进本月账');
   assert.strictEqual(s.rankPurchaseTotals['19'], undefined, '不再走账号累计账');
-  s.goldCup = 1000; s.goldPoint = 200;
+  s.goldCup = 800; s.goldPoint = 200;
   const again = State.rankBuy(19);
   assert.strictEqual(again.ok, false, '本月第二次被拦');
   assert.match(String(again.msg), /本月只能兑换/);
   s.rankPurchaseMonth = '2000-01';
   State.refreshRankShopDay();
-  s.goldCup = 1000; s.goldPoint = 200;
+  s.goldCup = 800; s.goldPoint = 200;
   assert.strictEqual(State.rankBuy(19).ok, true, '跨月后恢复 1 次');
 });
 
@@ -566,6 +597,31 @@ test('金杯商店两套狂战（11-14 / 20-23）每月限兑一次，跨月重�
   State.refreshRankShopDay();
   assert.strictEqual(State.rankBuy(11).ok, true, '跨月后第一套恢复 1 次');
   assert.strictEqual(State.rankBuy(20).ok, true, '跨月后第二套恢复 1 次');
+});
+
+test('竞技场打完一轮 3% 掉 1~2 级宝石（45 级起）', () => {
+  const s = freshSave({ level: 44, props: {} });
+  const realRandom = Math.random;
+  try {
+    Math.random = () => 0;
+    assert.strictEqual(State.rollGemDrop(3), null, '44 级不掷宝石');
+    s.level = 45;
+    const seq = [0, 0.9];
+    Math.random = () => seq.shift();
+    assert.deepStrictEqual(State.rollGemDrop(3), { id: 101, name: '一级宝石' }, '命中时 75% 发一级宝石');
+    assert.strictEqual(s.props[101], 1, '宝石真的进背包');
+    const seq2 = [0.02, 0.1];
+    Math.random = () => seq2.shift();
+    assert.strictEqual(State.rollGemDrop(3).id, 102, '二级宝石 25% 档');
+    Math.random = () => 0.99;
+    assert.strictEqual(State.rollGemDrop(3), null, '3% 之外不掉');
+  } finally {
+    Math.random = realRandom;
+  }
+  /* 联机竞技场的宝石只在服务端决赛/季军赛结算时掷，半决赛固定 null。 */
+  const src = require('node:fs').readFileSync(path.join(ROOT, 'server', 'game', 'fight.js'), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(src, /const gem = S\.rollGemDrop\(3\);/, 'arenaFight 的决赛分支要真的掷 3% 宝石');
+  assert.match(src, /rewards = \{ phase: 'semi', next: run\.phase, win, gem: null \}/, '半决赛不掷宝石');
 });
 
 test('联机复仇信息：费用 (n+1)*20、金杯 (n+1)*5+3，且只认天梯败绩', () => {

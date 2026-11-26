@@ -1111,7 +1111,9 @@ function arenaFight({ accountId, rev, idemKey }) {
         if (shards) s.props[26] = (Number(s.props[26]) || 0) + shards;
         if (hatch) s.hatchPoint = Math.max(0, (Number(s.hatchPoint) || 0) + hatch);
 
-        const gem = null;
+        // 45 级起：打完一轮（决赛/季军赛结算）额外 3% 掉 1~2 级宝石；半决赛不掷。
+        // 客户端 `js/online-battle.js` 会读 `rewards.gem` 显示「获得 X 宝石 ×1」。
+        const gem = S.rollGemDrop(3);
         if (baseExp) S.tickPropStates({ kind: 'exp' });
         s.classicArenaRun = null;
         rewards = {

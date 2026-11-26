@@ -488,7 +488,7 @@
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   }
   function refreshRankShopDay() {
-    // State 是唯一判定源：周账、月度账（永久属性丸）、账号累计账都在这里统一刷新。
+    // State 是唯一判定源：周账、月度账（魔法袋 / 狂战）、永久属性货累计额度、账号累计账都在这里统一刷新。
     if (State.refreshRankShopDay) return State.refreshRankShopDay();
     State.save();
   }
@@ -775,11 +775,13 @@
     if (Number(s.integral) < needIntegral) { alert('天梯积分尚未达到兑换要求。'); return; }
     if (Number(s.goldCup) < needCup || Number(s.goldPoint) < needGold) { alert('金杯或金松果不足。'); return; }
     if (lim.limit > 0 && lim.bought >= lim.limit) {
-      alert(lim.monthly
-        ? '该奖励本月只能兑换 ' + lim.limit + ' 次，下个月 1 号 0 点重置。'
-        : lim.account
-          ? '该奖励每个账号累计只能兑换 ' + lim.limit + ' 次，已经兑换完了。'
-          : '该奖励本周的兑换次数已用完，下周一重置后可再兑换。');
+      alert(lim.stat
+        ? '力/敏/速/血永久兑换的累计次数已用完（共 ' + lim.limit + ' 次），下个月 1 号 0 点再增加 2 次。'
+        : lim.monthly
+          ? '该奖励本月只能兑换 ' + lim.limit + ' 次，下个月 1 号 0 点重置。'
+          : lim.account
+            ? '该奖励每个账号累计只能兑换 ' + lim.limit + ' 次，已经兑换完了。'
+            : '该奖励本周的兑换次数已用完，下周一重置后可再兑换。');
       return;
     }
     const icon = item.type === '2' ? C().icon('gear', +item.goodsId) : C().icon('prop', +item.goodsId);
@@ -790,7 +792,9 @@
         '<p>' + esc(item.remark || '') + '</p>' +
         '<p>需要：<span class="rank-price rank-price-detail"><span class="rank-price-part"><b>' + needCup + '</b>' + C().icon('prop', 40) + '</span><span class="rank-price-part"><b>' + needGold + '</b>' + C().goldIcon() + '</span></span></p>' +
         '<p class="small-label">积分要求 ' + needIntegral +
-          (lim.limit > 0 ? ' · ' + (lim.monthly ? '每月限兑 ' : lim.account ? '账号限购 ' : '每周限兑 ') + lim.limit + ' 次（已' + (lim.account ? '购 ' : '兑 ') + lim.bought + '）' : '') + '</p>' +
+          (lim.limit > 0 ? ' · ' + (lim.stat
+            ? '力/敏/速/血共用累计额度 ' + lim.limit + ' 次（已兑 ' + lim.bought + '，剩 ' + lim.remaining + '）'
+            : (lim.monthly ? '每月限兑 ' : lim.account ? '账号限购 ' : '每周限兑 ') + lim.limit + ' 次（已' + (lim.account ? '购 ' : '兑 ') + lim.bought + '）') : '') + '</p>' +
       '</div></div>',
       [{ label: '返回', cls: 'muted' }, { label: '确认兑换', cls: 'gold', run: () => {
         if (redeemed || State.state() !== s) return;
@@ -829,7 +833,9 @@
     const selected = goods.slice(pg * 6, pg * 6 + 6);
     const limitOf = (item) => {
       const lim = rankLimitInfo(item);
-      return lim.limit > 0 ? (lim.monthly ? '每月限兑 ' : lim.account ? '账号限购 ' : '每周限兑 ') + lim.limit + ' 次（已' + (lim.account ? '购 ' : '兑 ') + lim.bought + '）' : '';
+      if (!(lim.limit > 0)) return '';
+      if (lim.stat) return '累计额度 ' + lim.limit + ' 次（已兑 ' + lim.bought + '，剩 ' + lim.remaining + '）';
+      return (lim.monthly ? '每月限兑 ' : lim.account ? '账号限购 ' : '每周限兑 ') + lim.limit + ' 次（已' + (lim.account ? '购 ' : '兑 ') + lim.bought + '）';
     };
     const p = C().page('bag', 'shop', '<div class="extra-shop-balance">\u91d1\u676f ' + s.goldCup + '\u3000\u91d1\u677e\u679c ' + s.goldPoint + '\u3000\u79ef\u5206 ' + s.integral + '</div><div class="extra-shop-grid">' + selected.map(item => '<button class="extra-shop-item" data-goods="' + item.id + '">' + (item.type === '2' ? image((C().gearIconSrc ? C().gearIconSrc(item.goodsId) : 'images/ui/icons/gear/gear-' + item.goodsId + '-classic.svg?v=5'), item.name) : C().icon('prop', +item.goodsId)) + '<b>' + esc(item.name) + '</b><span>' + item.cup + '\u91d1\u676f + ' + item.gold + '\u91d1\u677e\u679c</span><small>\u79ef\u5206\u9700 ' + item.integral + (limitOf(item) ? ' \u00b7 ' + limitOf(item) : '') + '</small></button>').join('') + '</div><div class="extra-pagination">' + button('\u4e0a\u4e00\u9875', 'rank-shop-prev', 'tiny muted') + '<span>' + (pg + 1) + '/' + total + '</span>' + button('\u4e0b\u4e00\u9875', 'rank-shop-next', 'tiny muted') + '</div>', { cls: 'extra-board extra-cup-shop' });
     back(p, rank, '\u8fd4\u56de\u5929\u68af\u8d5b');

@@ -83,14 +83,21 @@ function fail(msg) {
 }
 function info(msg) { console.log('— ' + msg); }
 function ok(msg) { console.log('✓ ' + msg); }
+/* TRAP: CocoaPods 1.11 on the Mac's system Ruby 2.6 treats the project path as
+ * ASCII-8BIT when LANG/LC_ALL are unset, then `pod install` dies on
+ * Unicode Normalization before it can read the Podfile. Force a UTF-8 locale for
+ * every child (tauri ios init -> pod install, xcodegen, cargo). */
+function childEnv() {
+  return { ...process.env, LANG: process.env.LANG || 'en_US.UTF-8', LC_ALL: process.env.LC_ALL || 'en_US.UTF-8' };
+}
 function run(cmd, argv, opts) {
   console.log('> ' + [cmd].concat(argv).join(' '));
-  const r = spawnSync(cmd, argv, Object.assign({ stdio: 'inherit', cwd: ROOT, env: process.env }, opts || {}));
+  const r = spawnSync(cmd, argv, Object.assign({ stdio: 'inherit', cwd: ROOT, env: childEnv() }, opts || {}));
   if (r.error) fail('执行失败：' + cmd + '（' + r.error.message + '）');
   if (r.status !== 0) process.exit(r.status || 1);
 }
 function capture(cmd, argv, opts) {
-  const r = spawnSync(cmd, argv, Object.assign({ encoding: 'utf8', cwd: ROOT, env: process.env }, opts || {}));
+  const r = spawnSync(cmd, argv, Object.assign({ encoding: 'utf8', cwd: ROOT, env: childEnv() }, opts || {}));
   return { ok: r.status === 0, out: (r.stdout || '') + (r.stderr || '') };
 }
 const mb = (n) => (n / 1048576).toFixed(1) + ' MB';

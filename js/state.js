@@ -248,6 +248,10 @@
       return out;
     })();
     next.rankPurchaseMonth = typeof raw.rankPurchaseMonth === 'string' ? raw.rankPurchaseMonth : '';
+    // 永久属性货的累计额度账：`rankStatUsed` 是四件商品合计已兑换次数，
+    // `rankStatMigrated` 保证月度旧账只搬一次（服务端读档不会重置它）。
+    next.rankStatUsed = Math.max(0, integer(raw.rankStatUsed, 0));
+    next.rankStatMigrated = raw.rankStatMigrated === true;
     // 一次性迁移标记：把改版前按周账里的狂战件数搬进月度账（只做一次）。
     next.rankBerserkMigrated = raw.rankBerserkMigrated === true;
     // 旧存档最多 12 个汉字，保留原样；新昵称在注册时已按 7 个字收口。
@@ -3517,14 +3521,19 @@
     save();
     return { ok: true, msg: `购买了${p.name}x${count}`, ...purchaseStatus(id) };
   }
-  // 原版 `rankgoodsMap` 的 15 件商品；价格（积分/金杯/金松果）与 `timesLimit`
-  // · 其余商品是每周限购，周一零点按服务端时区重置。
+  // 原版 `rankgoodsMap` 的 23 件商品；价格（积分/金杯/金松果）与 `timesLimit` 都在这里判，
+  // 限购分四类：每周 / 每月（魔法袋与狂战）/ 账号累计（仅离线）/ 开服以来累计额度（永久属性货）。
   // 这里做成 `State.rankBuy` 是为了让服务端动作和单机界面共用同一套判定；
   const RANK_ACCOUNT_LIMIT_GOODS = Object.freeze(ONLINE ? [] : [7, 8, 9, 10, 19]);
 
   const BERSERK_MONTHLY_GOODS = Object.freeze([11, 12, 13, 14, 20, 21, 22, 23]);
-  const RANK_MONTHLY_LIMIT_GOODS = Object.freeze(ONLINE ? [7, 8, 9, 10, 19].concat(BERSERK_MONTHLY_GOODS) : []);
+  const RANK_MONTHLY_LIMIT_GOODS = Object.freeze(ONLINE ? [19].concat(BERSERK_MONTHLY_GOODS) : []);
   const RANK_CONVERT_PILL_GOODS = Object.freeze([15, 16, 17, 18]);
+  // 联机版永久属性货（力/敏/速/血）共用一份额度：从开服月起每月 2 次，
+  // 未兑换的次数累计、不设上限；新号也从开服月补足，所有人的累计上限一致。
+  const RANK_STAT_GOODS = Object.freeze([7, 8, 9, 10]);
+  const RANK_STAT_OPEN_MONTH = '2026-11';
+  const RANK_STAT_PER_MONTH = 2;
   // 2026-11-30（下周一）起，力/敏/速/血转化丸从 30 杯 + 30 松果涨到 50 + 50。
   const RANK_CONVERT_PILL_PRICE_FROM = '2026-11-30';
   function rankConvertPillPrice(weekKey) {
@@ -3557,13 +3566,21 @@
     try {
       const parts = new Intl.DateTimeFormat('en-CA', {
         timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit',
-      }).formatToParts(new Date(Date.now()));
+      }).formatToParts(new Date(nowMs()));
       const get = (type) => (parts.find((p) => p.type === type) || {}).value || '';
       return get('year') + '-' + get('month');
     } catch (_) {
-      const d = new Date(Date.now() + 8 * 3600000);
+      const d = new Date(nowMs() + 8 * 3600000);
       return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0');
     }
+  }
+  // 永久属性货的总额度只由「开服月 → 当前月」决定，与注册时间无关：
+  // 晚注册的号拿到的累计次数与开服玩家相同，差额只体现在各自已兑换的次数上。
+  function rankStatQuota() {
+    const now = rankMonthKey().split('-').map(Number);
+    const open = RANK_STAT_OPEN_MONTH.split('-').map(Number);
+    const months = now[0] && now[1] ? (now[0] * 12 + now[1]) - (open[0] * 12 + open[1]) + 1 : 1;
+    return Math.max(1, months) * RANK_STAT_PER_MONTH;
   }
   function refreshRankShopDay() {
     if (!S) return;
@@ -3573,6 +3590,18 @@
     if (!object(S.rankPurchaseTotals) || Array.isArray(S.rankPurchaseTotals)) { S.rankPurchaseTotals = {}; dirty = true; }
     if (!object(S.rankPurchases) || Array.isArray(S.rankPurchases)) { S.rankPurchases = {}; dirty = true; }
     if (!object(S.rankMonthPurchases) || Array.isArray(S.rankMonthPurchases)) { S.rankMonthPurchases = {}; dirty = true; }
+    // 永久属性货改为累计额度后的一次性迁移：月度账里只剩「最后一次重置后」的次数，
+    // 只有记录月份 >= 开服月才计入累计；之后月度账继续给魔法袋 / 狂战用。
+    if (ONLINE && S.rankStatMigrated !== true) {
+      const savedMonth = String(S.rankPurchaseMonth || '');
+      let used = 0;
+      if (savedMonth >= RANK_STAT_OPEN_MONTH) {
+        for (const id of RANK_STAT_GOODS) used += Math.max(0, Math.floor(Number(S.rankMonthPurchases[id]) || 0));
+      }
+      S.rankStatUsed = Math.max(0, used);
+      S.rankStatMigrated = true;
+      dirty = true;
+    }
     if (ONLINE) {
 
       if (!S.rankPurchaseMonth) {
@@ -3641,14 +3670,17 @@
   }
   function rankLimitInfo(item) {
     const id = String(item && item.id);
+    const stat = ONLINE && RANK_STAT_GOODS.includes(Number(item && item.id));
     const account = RANK_ACCOUNT_LIMIT_GOODS.includes(Number(item && item.id));
     const monthly = RANK_MONTHLY_LIMIT_GOODS.includes(Number(item && item.id));
     const convertPill = RANK_CONVERT_PILL_GOODS.includes(Number(item && item.id));
     const baseLimit = Math.max(0, Math.floor(Number(item && item.timesLimit) || 0));
-    const limit = convertPill ? rankConvertPillWeeklyLimit(rankWeekKey()) : baseLimit;
-    const bag = monthly ? (S.rankMonthPurchases || {}) : account ? (S.rankPurchaseTotals || {}) : (S.rankPurchases || {});
-    const bought = Math.max(0, Math.floor(Number(bag[id]) || 0));
-    return { account, monthly, limit, bought, remaining: limit > 0 ? Math.max(0, limit - bought) : Infinity,
+    const limit = stat ? rankStatQuota() : convertPill ? rankConvertPillWeeklyLimit(rankWeekKey()) : baseLimit;
+    const bag = stat ? null : monthly ? (S.rankMonthPurchases || {}) : account ? (S.rankPurchaseTotals || {}) : (S.rankPurchases || {});
+    const bought = stat
+      ? Math.max(0, Math.floor(Number(S.rankStatUsed) || 0))
+      : Math.max(0, Math.floor(Number(bag[id]) || 0));
+    return { stat, account, monthly, limit, bought, remaining: limit > 0 ? Math.max(0, limit - bought) : Infinity,
       month: monthly ? String(S.rankPurchaseMonth || '') : '' };
   }
   function rankBuy(goodsId) {
@@ -3664,11 +3696,13 @@
     if (Number(S.integral) < needIntegral) return { ok: false, msg: '天梯积分尚未达到兑换要求。' };
     if (Number(S.goldCup) < needCup || Number(S.goldPoint) < needGold) return { ok: false, msg: '金杯或金松果不足。' };
     if (lim.limit > 0 && lim.bought >= lim.limit) {
-      return { ok: false, msg: lim.monthly
-        ? '该奖励本月只能兑换 ' + lim.limit + ' 次，下个月 1 号 0 点重置。'
-        : lim.account
-          ? '该奖励每个账号累计只能兑换 ' + lim.limit + ' 次，已经兑换完了。'
-          : '该奖励本周的兑换次数已用完，下周一重置后可再兑换。' };
+      return { ok: false, msg: lim.stat
+        ? '力/敏/速/血永久兑换的累计次数已用完（共 ' + lim.limit + ' 次），下个月 1 号 0 点再增加 ' + RANK_STAT_PER_MONTH + ' 次。'
+        : lim.monthly
+          ? '该奖励本月只能兑换 ' + lim.limit + ' 次，下个月 1 号 0 点重置。'
+          : lim.account
+            ? '该奖励每个账号累计只能兑换 ' + lim.limit + ' 次，已经兑换完了。'
+            : '该奖励本周的兑换次数已用完，下周一重置后可再兑换。' };
     }
     const count = Math.max(1, Math.floor(Number(item.count) || 1));
     const gearId = Number(item.goodsId);
@@ -3687,14 +3721,17 @@
     if (String(item.type) !== '2') {
       S.props[gearId] = (Number(S.props[gearId]) || 0) + count;
     }
-    const bag = lim.monthly ? S.rankMonthPurchases : lim.account ? S.rankPurchaseTotals : S.rankPurchases;
-    bag[String(item.id)] = Math.max(0, Math.floor(Number(bag[String(item.id)]) || 0)) + 1;
+    if (lim.stat) S.rankStatUsed = lim.bought + 1;
+    else {
+      const bag = lim.monthly ? S.rankMonthPurchases : lim.account ? S.rankPurchaseTotals : S.rankPurchases;
+      bag[String(item.id)] = Math.max(0, Math.floor(Number(bag[String(item.id)]) || 0)) + 1;
+    }
     save();
     return {
       ok: true, msg: '兑换成功：' + item.name,
       item: { id: String(item.id), name: String(item.name), type: String(item.type), goodsId: gearId },
       goldCup: S.goldCup, goldPoint: S.goldPoint, integral: S.integral,
-      bought: lim.bought + 1, limit: lim.limit, account: lim.account, monthly: lim.monthly, month: lim.month,
+      bought: lim.bought + 1, limit: lim.limit, stat: lim.stat, account: lim.account, monthly: lim.monthly, month: lim.month,
     };
   }
 
@@ -4670,7 +4707,7 @@
 
   function composeConvertPill() {
     // 属性碎片只换 10/11/12 的力量/敏捷/速度转化丸；永久属性只能从金杯商店
-    // goods 7-10 月度兑换，不能靠天梯碎片绕过限购。
+    // goods 7-10 按开服累计额度兑换，不能靠天梯碎片绕过限购。
     const need = GData.CONVERT_SHARD_COST;
     const shard = GData.CONVERT_SHARD_ID;
     if ((S.props[shard] || 0) < need) return { ok: false, msg: '需要 ' + need + ' 个' + GData.CONVERT_SHARD_NAME };

@@ -2139,6 +2139,7 @@
     const limitText = (g) => {
       const lim = CE.rankLimitInfo ? CE.rankLimitInfo(g) : { account: false, monthly: false, limit: Number(g.timesLimit) || 0, bought: Number((S.rankPurchases || {})[g.id]) || 0 };
       if (!(lim.limit > 0)) return '不限兑换次数';
+      if (lim.stat) return '力/敏/速/血共用累计额度 ' + lim.limit + ' 次（已兑 ' + lim.bought + '，剩 ' + lim.remaining + '）';
       return (lim.monthly ? '每月限兑 ' : lim.account ? '账号限购 ' : '本周限兑 ') + lim.limit + ' 次（已' + (lim.account ? '购 ' : '兑 ') + lim.bought + '）';
     };
     const detailMarkup = (g) => {
@@ -3060,7 +3061,7 @@
   function socketGemDialog(key) {
     const S=State.state();
     const gems=[101,102,103,104,105,106,107].filter(id=>(S.props[id]||0)>0);
-    if(!gems.length){notice(window.__SSDZ_ONLINE__ ? '背包里没有宝石。45级后通关关卡（整轮）有几率获得。' : '背包里没有宝石。45级后通关关卡或在竞技场获胜有几率获得。',[{label:'返回'}]);return;}
+    if(!gems.length){notice(window.__SSDZ_ONLINE__ ? '背包里没有宝石。45级后通关关卡（整轮）、竞技场打完一轮有几率获得。' : '背包里没有宝石。45级后通关关卡或在竞技场获胜有几率获得。',[{label:'返回'}]);return;}
     modal('选择宝石','<div class="gem-pick">'+gems.map(id=>'<button type="button" class="help-item" data-gem="'+id+'"><span class="item-icon">'+icon('prop',id)+'</span><span>'+esc(propMap.getValue(id).name)+' ×'+S.props[id]+'</span></button>').join('')+'</div><p class="small-label">镶嵌免费；卸下 5 金松果。附加属性总档随机分到各条词条（单条最多 12 档），可先卸下再镶嵌来重随。</p>',[{label:'返回',cls:'muted'}],{small:true});
     const overlays=$$('.classic-modal-overlay'),m=overlays[overlays.length-1];
     const callGem=(window.StateCall||((name,...args)=>Promise.resolve(State[name](...args))));
@@ -3391,8 +3392,8 @@
       ? '联机版 53、59、65 级各静默发 1 本（直接进背包，不占升级奖励卡）；使用后 8 点自由分配到力/敏/速。'
       : '离线版不随等级发放；旧库存仍可使用（8 点自由分配）。');
     if ([41, 42, 43, 44].includes(id)) lines.push('金杯商店（每天开放）：20 金杯 + 20 金松果，积分需 800，不限兑换次数');
-    if ([16, 17, 18, 19].includes(id)) lines.push('金杯商店：500 金杯 + 200 金松果，积分需 200，' +
-      (window.__SSDZ_ONLINE__ ? '本月限兑 1 次（每月 1 号 0 点重置）' : '账号限兑 1 次'));
+    if ([16, 17, 18, 19].includes(id)) lines.push('金杯商店：500 金杯 + 200 金松果，积分需 200；' +
+      (window.__SSDZ_ONLINE__ ? '力/敏/速/血四件共用额度，开服起每月 2 次，未兑换的次数累计、不设上限' : '账号限兑 1 次'));
     if ([21, 22].includes(id)) lines.push('金杯商店（每天开放）：100 金杯 + 100 金松果兑换 100 个，积分需 1200，每周限兑 1 次（每周一重置）');
     if (id === 40) lines.push('天梯赛：胜利 +3 杯、落败 +1 杯，获胜有 25% 概率额外夺得 3 杯（对手至少持有 3 杯时）');
     if (id === 51) lines.push('合成：属性碎片 ×10 + 50 金松果 → 随机 1 个力量/敏捷/速度转化丸');
@@ -3422,7 +3423,7 @@
       }
     }
     if (id === 79) {
-      lines.push('金杯商店：180 积分 + 1000 金杯 + 200 金松果，' + (window.__SSDZ_ONLINE__ ? '每月限兑 1 次（每月 1 号 0 点重置）' : '账号限兑 1 次') + '（原版天梯商店的魔法袋）');
+      lines.push('金杯商店：180 积分 + 800 金杯 + 200 金松果，' + (window.__SSDZ_ONLINE__ ? '每月限兑 1 次（每月 1 号 0 点重置）' : '账号限兑 1 次') + '（原版天梯商店的魔法袋）');
       lines.push('打开魔法袋（各档互斥）：6级宝石 3%、5级宝石 15%、蓝色碎片 15%（5~10）、召唤证 17%（1~2）、金松果 25%（300~500）、孵化点 25%（100）' + (State.blackGearEnabled() ? '；并额外获得黑色卡片 ×1' : ''));
     }
     if (id === 80) {
@@ -3459,8 +3460,8 @@
     if (id >= 101 && id <= 107) {
       const lv = id - 100;
       if (lv <= 2) lines.push(window.__SSDZ_ONLINE__
-        ? '45 级起：通关关卡（整轮）20% 几率获得（一级 75% / 二级 25%）'
-        : '45 级起：通关关卡 20%、竞技场（经验/碎片）获胜 15% 几率获得（一级 75% / 二级 25%）');
+        ? '45 级起：通关关卡（整轮）10%、竞技场打完一轮 3% 几率获得（一级 75% / 二级 25%）'
+        : '45 级起：通关关卡（整轮）与竞技场获胜各 10% 几率获得（一级 75% / 二级 25%）');
       if (lv < 7) lines.push('合成：3 个同级 + 10 金松果，成功率 ' + Math.round(State.gemMergeRate(lv) * 100) + '%（失败有 50% 几率一颗材料降 1 级，1级则碎裂）');
       lines.push('镶嵌：镶入橙色（3 件同品质紫装融合而来）或黑色装备，主属性 +' + State.gemPercent(lv) + '%（原版曲线 5×(n²−n+2)），附加属性总增幅 ' + State.gemAffixTotal(lv) + ' 档随机分到各条词条（单条最多 12 档，拆下重镶可重随）；每件限 1 颗，镶嵌免费、卸下 5 金松果');
     }
@@ -3490,7 +3491,7 @@
     { key: 'ladder', title: '天梯赛', text: '30 级开启，战斗中可拾取属性碎片；通过在天梯战斗来证明自己吧！' },
     { key: 'replay', title: '录像', text: '最近50场战斗保存在消息页，可通过回放进行查看。' },
     { key: 'gems', title: '宝石', text: window.__SSDZ_ONLINE__
-      ? '45 级后通关关卡（整轮）有 10% 掉落；关卡战斗中另有约 0.3% 掉落 1~2 级宝石（一级 75% / 二级 25%）；3 个同级宝石 + 10 金松果可合成高一级（可能失败）。宝石可镶入橙色或黑色装备，镶嵌免费、卸下 5 金松果。'
+      ? '45 级后通关关卡（整轮）有 10% 掉落；关卡战斗中另有约 0.3% 掉落 1~2 级宝石（一级 75% / 二级 25%）；45 级后打完一轮竞技场另有 3% 掉落 1~2 级宝石；3 个同级宝石 + 10 金松果可合成高一级（可能失败）。宝石可镶入橙色或黑色装备，镶嵌免费、卸下 5 金松果。'
       : '45 级后通关关卡（整轮）、关卡战斗或竞技场获胜有几率获得 1~2 级宝石（关卡战斗中约 0.3%）；3 个同级宝石 + 10 金松果可合成高一级（可能失败）。宝石可镶入橙色或黑色装备，镶嵌免费、卸下 5 金松果。' },
     { key: 'tower', title: '无尽塔', text: '村庄右上角的小径进入（20 级解锁）。免门票的 Roguelike 无尽模式，可从中获取抽奖卷道具。' },
     { key: 'fusion', title: '装备融合', text: '3 件同品质、未穿戴的装备可融合成 1 件更高品质装备，黑装可继续融合洗词条。' +
