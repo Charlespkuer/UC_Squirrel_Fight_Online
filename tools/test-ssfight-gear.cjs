@@ -45,6 +45,16 @@ test('经典装备矢量图标带 SVG 命名空间（缺 xmlns 时 <img> 整张�
   }
 });
 
+test('橙色狂战头盔/短靴与紫狂战取景框一致', () => {
+  const dir = path.join(ROOT, 'images/ui/icons/gear');
+  const vb = (name) => {
+    const head = fs.readFileSync(path.join(dir, name), 'utf8').slice(0, 300);
+    return (/\bviewBox="([^"]+)"/.exec(head) || [])[1];
+  };
+  assert.equal(vb('gear-205-classic.svg'), vb('gear-201-classic.svg'), '橙盔取景框应与紫盔一致');
+  assert.equal(vb('gear-208-classic.svg'), vb('gear-204-classic.svg'), '橙靴取景框应与紫靴一致');
+});
+
 test('无尽塔经典预告的 7232 挂点使用 showFace 的非 B 容器', () => {
   const src = read('js/tower-ui.js');
   const start = src.indexOf('async function loadClassicGear');

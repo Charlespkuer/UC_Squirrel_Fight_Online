@@ -5631,7 +5631,7 @@
       if (rate > 0 && Math.random() * 100 < rate) goldBuff = true;
     }
     addGold(gold * (goldBuff ? 2 : 1));
-    const gem = complete ? rollGemDrop(20) : null;
+    const gem = complete ? rollGemDrop(10) : null;
     // 金宝箱不再从超级关循环掉落：原版只在 71~90 级每级发 1 个，
     // 这里同样只保留升级产出，否则「总属性点」会重新变成无上限。
     // 返回值里的 `chest` 字段保留给界面/回归读（现在恒为 null）。
@@ -5644,6 +5644,13 @@
   function abandonStageRun(stageId) {
     if (!S.stageRuns || !S.stageRuns[stageId] || S.stageRuns[stageId].attempt) return false;
     delete S.stageRuns[stageId];
+    save();
+    return true;
+  }
+  // 弃赛只清赛事局面：报名费已在 arenaJoin 扣掉，这里不退也不结算。
+  function abandonArenaRun() {
+    if (!S.classicArenaRun) return false;
+    delete S.classicArenaRun;
     save();
     return true;
   }
@@ -5741,7 +5748,7 @@
     const idx = ((day % n) + n) % n;
     return Object.assign({ count: 1, index: idx, date: src }, DAILY_GIFT_EXTRAS[idx]);
   }
-  // 征战令发放口径按领取日切：2026-11-23 起周六/周日各 +1，之前仍是连续第 3/6/9 天。
+  // 征战令发放口径按领取日切：2026-11-23 起周五/周六/周日各 +1，之前仍是连续第 3/6/9 天。
   const TICKET_WEEKEND_FROM = '2026-11-23';
   function weekdayOf(date) {
     const [y, m, d] = String(date).split('-').map(Number);
@@ -5750,7 +5757,7 @@
   function dailyTicket(date, streak) {
     if (date < TICKET_WEEKEND_FROM) return streak % 3 === 0 ? 1 : 0;
     const day = weekdayOf(date);
-    return day === 0 || day === 6 ? 1 : 0;
+    return day === 5 || day === 0 || day === 6 ? 1 : 0;
   }
   function dailyStatus() {
     const date = localDate();
@@ -6540,7 +6547,7 @@
     MASTER_SKILL_ID, MASTER_SKILL_NAME,
     genAI, randomAIName, fitAIName, clipAIName, AI_NAME_MAX,
     RANDOM_FOE_SCALE, stageProgress, setStageProgress, npcOf, highestStageId, stageRun, stageAccess, stageReward,
-    beginStageBattle, finishStageBattle, interruptStageBattle, abandonStageRun, stagePrentice, stagePrenticeFighter, stagePrenticeLost,
+    beginStageBattle, finishStageBattle, interruptStageBattle, abandonStageRun, abandonArenaRun, stagePrentice, stagePrenticeFighter, stagePrenticeLost,
     localDate, goldCupToday, addGoldCup,
     dailyStatus, dailyGiftExtra, challengeDailyCount, noteChallengeClear, refreshDaily: syncDailyStats, claimDaily, syncLotteryDay, lotteryDraw, recordBattle, battleHistory, recordWoodBattle,
     // 「消息」红点的记账（落存档，见 normalizeSave 里 msgSeenAt 那段注释）。

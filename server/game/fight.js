@@ -33,7 +33,8 @@ function recordCombat(row) {
     && !(row.settlement && row.settlement.practice)) {
     // 50 级以上的天梯战斗才把黑装碎片放进拾取池；等级随战斗记录落库，领取时用同一份重算。
     const pickupLevel = Number(row.settlement && row.settlement.pickupLevel) || 0;
-    row.packet.pickups = globalThis.BattleDrops.plan(battle.mulberry32(row.seed ^ 0x751278ab), row.kind === 'rank' ? 'rank' : 'challenge', { level: pickupLevel });
+    const pickupKind = row.kind === 'rank' ? 'rank' : row.kind === 'stage' ? 'stage' : 'challenge';
+    row.packet.pickups = globalThis.BattleDrops.plan(battle.mulberry32(row.seed ^ 0x751278ab), pickupKind, { level: pickupLevel });
   }
   const saved = Object.assign({}, row.settlement || {});
   let repro = null;

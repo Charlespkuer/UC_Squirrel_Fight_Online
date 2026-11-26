@@ -25,8 +25,9 @@
     jueDuiTrueFirst: 24.5, jueDuiTrueSecond: 5, jueDuiTrueSecondStep: 5, jueDuiTrueSecondMax: 24, jueDuiTrueRepeat: 0.5,
     shellFirstBase: 20, shellFirstStep: 0.5, shellRepeat: 1,
     shellTrueFirst: 24.5,
-    // 龟甲术每场最多 2 次：真化 N% 只决定「第二次」是否接上，不是无限续挡。
-    shellMaxUses: 2,
+    // 龟甲术真化尾链：第 3 次起以 N%×0.30 起步，每次再乘 0.30；一场最多 6 次。
+    shellMaxUses: 6,
+    shellTailDecay: 0.30,
     xhSpeedShare: 0.35,
     skillCooldown: 2,
     // 题面·熔核·炽壳：每过一回合叠一层减伤（+10%/层），第 8 回合起封顶 70%。
@@ -185,7 +186,7 @@
       heroTrueBase: !!f.heroTrueBase,
       baseStats: Object.fromEntries(['power', 'agility', 'speed'].map((key) => [key, stat(f.baseStats?.[key], stat(f[key], 1))])),
       ap: 0, restNext: false, pendingWeapon: null, stun: 0, silence: 0, disarm: 0, shellCharges: 0,
-      mustHitNext: !!(mods && mods.mustHitFirst), stripTurns: 0, usedFakeDie: false, usedMaster: false, shellCount: 0, usedCosmos: false, jueDuiCount: 0,
+      mustHitNext: !!(mods && mods.mustHitFirst), stripTurns: 0, usedFakeDie: false, usedMaster: false, shellCount: 0, shellTail: 0, usedCosmos: false, jueDuiCount: 0,
 
       healMul: Number.isFinite(Number(f.healMul)) && Number(f.healMul) >= 0 ? Number(f.healMul) : 1,
 
@@ -596,10 +597,10 @@
     return Math.max(base, Math.min(out, n === 0 ? BOOSTED_FIRST_CAP : BOOSTED_AGAIN_CAP));
   }
 
-  // 真化 N% 只决定第二次是否接上；一场用满 shellMaxUses 次后不再触发。
+  // 只算第 1/2 次；第 3 次起走 shellTailChanceOf 的一次性尾链。
   function shellChanceOf(def, count) {
     const n = Math.max(0, Math.floor(Number(count) || 0));
-    if (n >= RULES.shellMaxUses) return 0;
+    if (n >= 2) return 0;
     const lv = Math.max(1, Math.floor(Number(def && def.skills && def.skills[7]) || 1));
     let base;
     if (lv <= 10) {
@@ -613,16 +614,37 @@
     return Math.max(base, Math.min(out, n === 0 ? BOOSTED_FIRST_CAP : BOOSTED_AGAIN_CAP));
   }
 
+  // 真化尾链起点：第 3 次 = 真化 N% × shellTailDecay；普通 1~10 级不启用。
+  function shellTailChanceOf(def) {
+    const lv = Math.max(1, Math.floor(Number(def && def.skills && def.skills[7]) || 1));
+    if (lv <= 10) return 0;
+    const base = trueVal(7, lv) * RULES.shellTailDecay;
+    const boost = passiveSkillBoost(def, 7);
+    const out = base * (1 + boost);
+    if (!boost) return out;
+    return Math.max(base, Math.min(out, BOOSTED_AGAIN_CAP));
+  }
+
   // 龟甲术一次出手只判一次：多段攻击（流星锤 / 螳螂大招 / 双击）沿用同一结果，
   // 否则每一段各掷一次会把首触 22.5% 抬到 50% 以上，并让 shellCount 一拍加多次。
+  // 第 3 次起是一次性尾链：第二次成功后只掷一次，失败即结束，不再每挨一下重试。
   function shellDecide(def) {
     if (!def || !def.skills || !def.skills[7]) return null;
     if (Number(def.silence) > 0) return null;
     const n = Math.max(0, Math.floor(Number(def.shellCount) || 0));
     if (n >= RULES.shellMaxUses) return 'miss';
+    if (n >= 2) {
+      if (!(def.shellTail > 0)) return 'miss';
+      if (!chance(def.shellTail * 100)) { def.shellTail = 0; return 'miss'; }
+      def.shellCount = n + 1;
+      // 第三次之后每层都按同一个衰减率续触：无条件概率 30%、9%、2.7%…
+      def.shellTail = RULES.shellTailDecay;
+      return 'block';
+    }
     if (!(def.shellCharges > 0) && !chance(shellChanceOf(def, n))) return 'miss';
     if (def.shellCharges > 0) def.shellCharges--;
     def.shellCount = n + 1;
+    if (n === 1) def.shellTail = shellTailChanceOf(def) / 100;
     return 'block';
   }
 
@@ -1997,7 +2019,7 @@
 
     coreReduceOf, coreMaxStacks,
 
-    jueDuiChanceOf, shellChanceOf, passiveSkillBoost,
+    jueDuiChanceOf, shellChanceOf, shellTailChanceOf, passiveSkillBoost,
 
     dmgReduce,
     // 敏捷减伤的唯一出口（面板 / 测试直接读，避免复制公式）。

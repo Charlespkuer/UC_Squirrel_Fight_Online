@@ -2086,6 +2086,119 @@
         if (mc === 'mc1' && (State.buildingTier ? State.buildingTier(b.level) : 1) !== 1) { blankDigits(numClip); continue; }
         showNumber(String(b.level), numClip, 0, 0, 'left', 2);
       }
+      // 数字画完后按实际字宽重排等级牌子（字宽会随 1/2 位数变化）。
+      try { centerAltarLabel(); } catch (e) {}
+      try { nudgeBeastLabel(); } catch (e) {}
+    };
+    // 等级牌子由「底板 / 祭坛字 / 内嵌 Lv / 数字」几件素材拼成，原版底板按两位等级留宽：
+    // 祭坛拿到 1 位数时整组字偏左。按底板与整组字的包围盒把字在框内居中（每次重画都重算）。
+    const labelBase = (node) => {
+      if (!node) return '';
+      if (node.__labelBase == null) node.__labelBase = node.getAttribute('transform') || '';
+      return node.__labelBase;
+    };
+    const moveLabelPart = (node, dx, dy, extra) => {
+      if (!node) return;
+      const base = labelBase(node);
+      node.setAttribute('transform', 'translate(' + dx + ',' + dy + ')' + (extra ? ' ' + extra : '') + (base ? ' ' + base : ''));
+    };
+    const resetLabelPart = (node) => { if (node) node.setAttribute('transform', labelBase(node)); };
+    const placementOf = (clip, id) => {
+      if (!clip || !clip.nodes) return null;
+      for (const rec of clip.nodes.values()) if (String(rec.id) === String(id)) return rec;
+      return null;
+    };
+    // 祭坛牌子是 homeMc 下的独立放置（7117 底板 / num1 数字 / 7118 祭坛字），
+    // 不在 mc1 里；按原深度顺序返回，稍后整组搬进 mc1 的 uc-pop 壳。
+    const altarSignNodes = () => {
+      const plateRec = placementOf(home, 7117);
+      const wordRec = placementOf(home, 7118);
+      const num = rel('num1');
+      return [
+        plateRec && (plateRec.wrap || plateRec.node),
+        num && num.g,
+        wordRec && (wordRec.wrap || wordRec.node),
+      ].filter(Boolean);
+    };
+    // 牌子原本按 homeMc 坐标摆放；搬进 mc1 后要先套一层 mc1 逆矩阵，
+    // 视觉位置才不变，之后才会跟本体一起缩放。
+    const bridgeAltarSign = () => {
+      const mc1 = rel('mc1');
+      const pop = mc1 && mc1.g && mc1.g.querySelector(':scope > g.uc-pop');
+      if (!pop) return false;
+      const base = String(mc1.g.__baseMa || '').split(',').map(Number);
+      if (base.length !== 6 || !base.every((v) => Number.isFinite(v))) return false;
+      const [a, b, c, d, e, f] = base;
+      const det = a * d - b * c;
+      if (!det) return false;
+      let bridge = pop.querySelector(':scope > g.sf-village-sign-bridge');
+      if (!bridge) {
+        bridge = el('g');
+        bridge.setAttribute('class', 'sf-village-sign-bridge');
+        bridge.setAttribute('transform', 'matrix(' + [d / det, -b / det, -c / det, a / det,
+          (c * f - d * e) / det, (b * e - a * f) / det].join(',') + ')');
+      }
+      // 永远把桥接组放到最后：mc1 切帧时新节点会追加到 pop 里，牌子不能被盖住。
+      pop.appendChild(bridge);
+      for (const node of altarSignNodes()) {
+        if (node.parentNode !== bridge) bridge.appendChild(node);
+        node.classList.add('sf-village-sign');
+        node.style.cursor = 'pointer';
+        node.style.pointerEvents = 'auto';
+      }
+      return true;
+    };
+    const centerAltarLabel = () => {
+      const plateRec = placementOf(home, 7117);
+      const wordRec = placementOf(home, 7118);
+      const numClip = rel('num1');
+      if (!plateRec || !wordRec || !numClip) return;
+      const plate = plateRec.wrap || plateRec.node;
+      const word = wordRec.wrap || wordRec.node;
+      const num = numClip.g || numClip;
+      if (!plate || !word || !num) return;
+      const frame = plate.getBoundingClientRect();
+      if (!(frame.width > 0)) return;
+      // 底板的两条大路径是框，其余小路径是内嵌的 Lv 字：按宽度区分，素材重导也不会认错。
+      const glyphs = [...plate.children].filter((node) => {
+        if (!node || String(node.tagName).toLowerCase() !== 'path') return false;
+        const r = node.getBoundingClientRect();
+        return r.width > 0 && r.width < frame.width * 0.5;
+      });
+      const parts = [word, num, ...glyphs];
+      parts.forEach(resetLabelPart);
+      const boxes = parts.map((node) => node.getBoundingClientRect());
+      const left = Math.min(...boxes.map((r) => r.left));
+      const right = Math.max(...boxes.map((r) => r.right));
+      const dxScreen = ((frame.left + frame.right) - (left + right)) / 2;
+      if (!(Math.abs(dxScreen) >= 0.5)) return;
+      const ctm = plate.getScreenCTM ? plate.getScreenCTM() : null;
+      const scale = ctm ? Math.hypot(ctm.a, ctm.b) : 0;
+      if (!(scale > 0)) return;
+      const dx = dxScreen / scale;
+      parts.forEach((node) => moveLabelPart(node, dx, 0));
+    };
+    // 幻兽牌子（mc4 第 1 帧的底板 + 数字）在原画里略偏右下且带约 1.2° 倾斜：
+    // 整体往左上挪，再以底板中心转回水平。位移是 mc4 内的局部单位（mc4 本身 0.32 缩放）。
+    const BEAST_LABEL_SHIFT = [-25, -17];
+    const BEAST_LABEL_TILT = 1.2;
+    const nudgeBeastLabel = () => {
+      const mc4 = rel('mc4');
+      if (!mc4) return;
+      const plateRec = placementOf(mc4, 7102);
+      const plate = plateRec && (plateRec.wrap || plateRec.node);
+      const num = mc4.byName ? mc4.byName('num') : null;
+      if (!plate || !num || !num.g) return;
+      let rot = '';
+      try {
+        const b = plate.getBBox();
+        if (b && b.width > 0) {
+          const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
+          rot = 'rotate(' + BEAST_LABEL_TILT + ',' + cx + ',' + cy + ')';
+        }
+      } catch (e) {}
+      moveLabelPart(plate, BEAST_LABEL_SHIFT[0], BEAST_LABEL_SHIFT[1], rot);
+      moveLabelPart(num.g, BEAST_LABEL_SHIFT[0], BEAST_LABEL_SHIFT[1], rot);
     };
     // 把一对位图数字留在末帧（空白档）（第 1 帧是数字 0，不能留）。
     const blankDigits = (numClip) => {
@@ -2168,7 +2281,13 @@
       try { paintBuildingNumbers(); paintBuildTimers(); } catch (e) {}
     }, 80);
 
-    if (already) { syncRepair(); return; }
+    if (already) {
+      // 升级后重绘可能把 mc1 的新节点插到牌子之后；把桥接组再放回最上，
+      // 保证牌子和本体仍按原深度盖在建筑上。
+      try { bridgeAltarSign(); } catch (e) {}
+      syncRepair();
+      return;
+    }
 
     try {
       const back = rel('mainButton');
@@ -2284,6 +2403,8 @@
         });
       } catch (e) {}
     }
+    // 祭坛牌子搬进 mc1 的 uc-pop 壳，和神迹/幻兽一样随本体一起缩放、点按。
+    try { bridgeAltarSign(); } catch (e) {}
     // ⚠ 关键：上面每一步 `measureFrameBoxes()` / `popWrap()` / 悬停切帧都会重建立绘子树，
     try { paintBuildingNumbers(); paintBuildTimers(); } catch (e) {}
 

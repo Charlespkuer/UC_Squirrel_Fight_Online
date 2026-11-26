@@ -77,6 +77,8 @@
   function activeArenaRun() {
     const s = State.state();
     if (arenaRun && arenaRun.owner !== s) arenaRun = null;
+    // 服务端清掉赛事（弃赛 / 另一台设备打完）后，本地缓存不能继续冒充“还没打完”。
+    if (arenaRun && !s.classicArenaRun) arenaRun = null;
     if (!arenaRun && s.classicArenaRun) {
       const saved = s.classicArenaRun;
       if ([0, 1, 2].includes(saved.kind) && ['semi', 'final', 'third'].includes(saved.phase) && saved.foe && saved.finalist && saved.consolation) {
@@ -90,6 +92,13 @@
   function clearArenaBusy() {
     if (arenaRun && arenaRun.busy) arenaRun.busy = false;
     return !!arenaRun;
+  }
+  // 弃赛：服务端只清赛事，不退报名费、不结算；离线兜底走同一个 State 动作。
+  function abandonArenaRun() {
+    arenaRun = null;
+    if (window.Online && Online.ready && Online.call) return Online.call('abandonArenaRun').then(() => true);
+    if (State.abandonArenaRun) State.abandonArenaRun();
+    return Promise.resolve(true);
   }
 
   function showHint(msg) {
@@ -397,7 +406,7 @@
       if (phase === 'semi') {
         const won = winner === 0;
         run.phase = won ? 'final' : 'third'; saveArenaRun(run);
-        const gem = won ? State.rollGemDrop(15) : null;
+        const gem = won ? State.rollGemDrop(10) : null;
         if (gem) State.save();
         const opponent = won ? run.finalist : run.consolation, title = won ? '\u664b\u7ea7\u51b3\u8d5b' : '\u4e89\u593a\u5b63\u519b';
         arena();
@@ -439,7 +448,7 @@
       const exp = boosted.exp;
       if (shards) addProp(26, shards);
       if (hatch) { const st = State.state(); st.hatchPoint = Math.max(0, (Number(st.hatchPoint) || 0) + hatch); }
-      const gem = winner === 0 ? State.rollGemDrop(15) : null;
+      const gem = winner === 0 ? State.rollGemDrop(10) : null;
       const ups = boosted.ups;
       if (baseExp) State.tickPropStates({ kind: 'exp' });
       const boostNote = boostPct ? '\uff08\u542b\u7ecf\u9a8c\u4e38 +' + boostPct + '%\uff09' : '';
@@ -822,7 +831,7 @@
       const lim = rankLimitInfo(item);
       return lim.limit > 0 ? (lim.monthly ? '每月限兑 ' : lim.account ? '账号限购 ' : '每周限兑 ') + lim.limit + ' 次（已' + (lim.account ? '购 ' : '兑 ') + lim.bought + '）' : '';
     };
-    const p = C().page('bag', 'shop', '<div class="extra-shop-balance">\u91d1\u676f ' + s.goldCup + '\u3000\u91d1\u677e\u679c ' + s.goldPoint + '\u3000\u79ef\u5206 ' + s.integral + '</div><div class="extra-shop-grid">' + selected.map(item => '<button class="extra-shop-item" data-goods="' + item.id + '">' + (item.type === '2' ? image((C().gearIconSrc ? C().gearIconSrc(item.goodsId) : 'images/ui/icons/gear/gear-' + item.goodsId + '-classic.svg?v=4'), item.name) : C().icon('prop', +item.goodsId)) + '<b>' + esc(item.name) + '</b><span>' + item.cup + '\u91d1\u676f + ' + item.gold + '\u91d1\u677e\u679c</span><small>\u79ef\u5206\u9700 ' + item.integral + (limitOf(item) ? ' \u00b7 ' + limitOf(item) : '') + '</small></button>').join('') + '</div><div class="extra-pagination">' + button('\u4e0a\u4e00\u9875', 'rank-shop-prev', 'tiny muted') + '<span>' + (pg + 1) + '/' + total + '</span>' + button('\u4e0b\u4e00\u9875', 'rank-shop-next', 'tiny muted') + '</div>', { cls: 'extra-board extra-cup-shop' });
+    const p = C().page('bag', 'shop', '<div class="extra-shop-balance">\u91d1\u676f ' + s.goldCup + '\u3000\u91d1\u677e\u679c ' + s.goldPoint + '\u3000\u79ef\u5206 ' + s.integral + '</div><div class="extra-shop-grid">' + selected.map(item => '<button class="extra-shop-item" data-goods="' + item.id + '">' + (item.type === '2' ? image((C().gearIconSrc ? C().gearIconSrc(item.goodsId) : 'images/ui/icons/gear/gear-' + item.goodsId + '-classic.svg?v=5'), item.name) : C().icon('prop', +item.goodsId)) + '<b>' + esc(item.name) + '</b><span>' + item.cup + '\u91d1\u676f + ' + item.gold + '\u91d1\u677e\u679c</span><small>\u79ef\u5206\u9700 ' + item.integral + (limitOf(item) ? ' \u00b7 ' + limitOf(item) : '') + '</small></button>').join('') + '</div><div class="extra-pagination">' + button('\u4e0a\u4e00\u9875', 'rank-shop-prev', 'tiny muted') + '<span>' + (pg + 1) + '/' + total + '</span>' + button('\u4e0b\u4e00\u9875', 'rank-shop-next', 'tiny muted') + '</div>', { cls: 'extra-board extra-cup-shop' });
     back(p, rank, '\u8fd4\u56de\u5929\u68af\u8d5b');
     on(p, 'rank-shop-prev', () => rankShop(Math.max(0, pg - 1)));
     on(p, 'rank-shop-next', () => rankShop(Math.min(total - 1, pg + 1)));
@@ -904,7 +913,22 @@
   }
   function lottery() {
     // 客户端只播放动画、展示服务端返回的结果。单机版仍在本地结算。
-    const online = !!(window.Online && window.Online.ready);
+    const onlineMode = !!window.__SSDZ_ONLINE__;
+    const onlineReady = () => !!(window.Online && window.Online.ready);
+    const requireOnline = () => {
+      if (!onlineMode || onlineReady()) return true;
+      const msg = '还没有连上服务器，请稍后重试。';
+      if (C().toast) C().toast(msg);
+      else alert(msg);
+      return false;
+    };
+    // 服务端已经入账后，把背包翻到这件奖品所在页：背包按道具 id 分页，
+    // 高级药丸落在后面几页时玩家会以为没到账。
+    const focusWonProp = (draws) => {
+      if (!C().focusBagProp) return;
+      const ids = (draws || []).map((d) => Number(d && d.icon)).filter((id) => id > 0 && id !== 8 && id !== 15);
+      if (ids.length) C().focusBagProp(ids[ids.length - 1]);
+    };
     const table = lotteryPrizeTable();
     const version = ++lotteryVersion;
     spinning = false;
@@ -1027,10 +1051,11 @@
     const spin = on(p, 'lottery-spin', async () => {
       if (version !== lotteryVersion || !p.isConnected || spinning) return;
       refreshLotteryDay();
+      if (!requireOnline()) return;
       if (!affordable(1)) { alert('\u91d1\u677e\u679c\u4e0d\u8db3' + lotteryPrice() + '\u4e14\u6ca1\u6709\u62bd\u5956\u5377\uff0c\u660e\u5929\u8fd8\u6709\u4e00\u6b21\u514d\u8d39\u673a\u4f1a\u3002'); return; }
       spinning = true; setBusy(true);
       let got;
-      if (online) {
+      if (onlineMode) {
         let out;
         try { out = await serverDraw(1); }
         catch (e) { spinning = false; setBusy(false); alert(window.Online.errText(e)); return; }
@@ -1038,9 +1063,11 @@
           spinning = false; setBusy(false); alert((out && out.msg) || '抽奖失败，请稍后再试。'); return;
         }
         got = out.draws[0];
+        focusWonProp(out.draws);
       } else {
         got = settleOne();
         State.save();
+        focusWonProp([got]);
       }
       if (version !== lotteryVersion || !p.isConnected) { spinning = false; return; }
       animateThen(20 + Number(got.selected || 0), () => {
@@ -1056,6 +1083,7 @@
     const spin10 = on(p, 'lottery-spin10', () => {
       if (version !== lotteryVersion || !p.isConnected || spinning || confirming) return;
       refreshLotteryDay();
+      if (!requireOnline()) return;
       if (!affordable(10)) {
         alert('\u8fde\u62bd 10 \u6b21\u9700\u8981 10 \u6b21\u7684\u8d44\u6e90\uff1a\u4eca\u65e5\u514d\u8d39 ' + Math.max(0, s.lotteryFree || 0) +
           ' \u6b21 + \u62bd\u5956\u5377 ' + Math.max(0, s.props[TICKET] || 0) + ' \u5f20 + \u91d1\u677e\u679c ' +
@@ -1082,9 +1110,10 @@
 
     const runTen = async () => {
       if (version !== lotteryVersion || !p.isConnected || spinning) return;
+      if (!requireOnline()) return;
       spinning = true; setBusy(true);
       let got = [];
-      if (online) {
+      if (onlineMode) {
         let out;
         try { out = await serverDraw(10); }
         catch (e) { spinning = false; setBusy(false); alert(window.Online.errText(e)); return; }
@@ -1092,10 +1121,12 @@
           spinning = false; setBusy(false); alert((out && out.msg) || '\u62bd\u5956\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002'); return;
         }
         got = out.draws;
+        focusWonProp(got);
         if (got.length < 10 && C().toast) C().toast('\u8d44\u6e90\u53ea\u591f\u62bd ' + got.length + ' \u6b21\u3002');
       } else {
         for (let i = 0; i < 10; i++) got.push(settleOne());
         State.save();
+        focusWonProp(got);
       }
       if (version !== lotteryVersion || !p.isConnected) { spinning = false; return; }
       animateThen(24, () => {
@@ -1693,5 +1724,6 @@
     arenaRun: () => activeArenaRun(), saveArenaRun, fightArena: (run) => fightArena(run || activeArenaRun()),
 
     clearArenaBusy,
+    abandonArenaRun,
     rankFoeLevel, rankFoeExpectLevel, claimRankCup };
 })();

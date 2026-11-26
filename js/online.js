@@ -609,7 +609,11 @@
     if (hit) return hit.value;
     let value;
     if (S.ready) value = Online.call(key, ...args);
-    else {
+    else if (window.__SSDZ_ONLINE__) {
+      // 联机版没连上服务器时必须拒绝：本地跑一遍只会让页面显示"已发放"，
+      // 服务端并不认这笔账，下一次同步就消失（抽奖/购买都踩过）。
+      return Promise.reject(Object.assign(new Error('还没有连上服务器，请重新登录后再试。'), { code: 'OFFLINE' }));
+    } else {
       const api = window.State;
       if (!api || typeof api[key] !== 'function') return Promise.reject(new Error('没有这个动作：' + key));
       try { value = Promise.resolve(api[key](...args)); } catch (e) { value = Promise.reject(e); }

@@ -200,16 +200,35 @@ test('天梯战用专属掉落表：飘出来的是属性碎片与恶魔果实�
   const shardPool=g.c.BattleDrops.poolFor('rank',50);
   assert.equal(shardPool.find(p=>p.id===77).weight,0.01,'黑凤凰碎片权重 0.01（两碎片每格合计约 0.02%）');
   assert.equal(shardPool.find(p=>p.id===78).weight,0.01,'黑圣熊碎片权重 0.01（两碎片每格合计约 0.02%）');
-  /* 属性碎片权重从 34 反算到 13.62：旧池 34/102.6 ≈ 33.1%，对半 ≈ 16.6%。 */
+  /* 属性碎片单格 0.5%；权重按其余条目反算，50 级加黑装碎片后仍约 0.5%。 */
   const ladderBase=g.c.BattleDrops.ladderPool;
   const ladderTotal=ladderBase.reduce((n,p)=>n+Number(p.weight||0),0);
-  assert.equal(ladderBase.find(p=>p.id===51).weight,13.62,'属性碎片权重 13.62');
-  assert.ok(Math.abs(ladderBase.find(p=>p.id===51).weight/ladderTotal-0.16565)<0.0001,
-    '属性碎片每卡概率应约为原来 33.1% 的一半（实际 '+(ladderBase.find(p=>p.id===51).weight/ladderTotal*100).toFixed(2)+'%）');
+  const ladderRate=ladderBase.find(p=>p.id===51).weight/ladderTotal;
+  assert.ok(Math.abs(ladderRate-0.005)<0.0001,
+    '属性碎片每卡概率应压到 0.5%（实际 '+(ladderRate*100).toFixed(3)+'%）');
+  const shardTotal=shardPool.reduce((n,p)=>n+Number(p.weight||0),0);
+  assert.ok(Math.abs(shardPool.find(p=>p.id===51).weight/shardTotal-0.005)<0.0001,
+    '50 级池加黑装碎片后属性碎片仍约 0.5%');
   const top=g.c.BattleDrops.plan(()=>0.999999,'rank',{level:50});
   same(top.map(x=>x.id),[78,78,78],'随机数落在池尾时三格都能刷出黑圣熊碎片');
   const lowTop=g.c.BattleDrops.plan(()=>0.999999,'rank',{level:49});
   same(lowTop.map(x=>x.id),[26,26,26],'49 级仍落在原天梯池尾（蓝色碎片）');
+});
+
+test('45 级后关卡战斗飘物池加入 1~2 级宝石，单格约 0.1%、一场约 0.3%',()=>{
+  const g=setup();
+  assert.equal(g.c.BattleDrops.poolFor('stage',44).some(p=>[101,102].includes(p.id)),false,'44 级不刷宝石');
+  const pool=g.c.BattleDrops.poolFor('stage',45);
+  assert.equal(pool.some(p=>p.id===101),true,'45 级关卡池含一级宝石');
+  assert.equal(pool.some(p=>p.id===102),true,'45 级关卡池含二级宝石');
+  assert.equal(g.c.BattleDrops.poolFor('challenge',45).some(p=>[101,102].includes(p.id)),false,'随机挑战不带关卡宝石');
+  const total=pool.reduce((n,p)=>n+Number(p.weight||0),0);
+  const gem=pool.filter(p=>[101,102].includes(p.id)).reduce((n,p)=>n+Number(p.weight||0),0);
+  const battleRate=1-Math.pow(1-gem/total,3);
+  assert.ok(Math.abs(battleRate-0.003)<1e-6,
+    '一场三格合计应约 0.3%（实际 '+(battleRate*100).toFixed(3)+'%）');
+  const top=g.c.BattleDrops.plan(()=>0.999999,'stage',{level:45});
+  assert.ok(top.every(x=>[101,102].includes(x.id)),'池尾应能抽到宝石');
 });
 
 test('天使/恶魔果实种子权重减半：普通池 3→1.5 / 1.5→0.75，天梯池 15→7.5',()=>{

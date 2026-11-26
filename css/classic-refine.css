@@ -157,6 +157,8 @@ g.sf-activity-btn.attention{animation:activity-attention 2.2s ease-in-out 2;
 
 .uc-pop.picked{animation:uc-pop-pick .46s cubic-bezier(.34,1.5,.5,1)}
 .uc-pop.pressed{animation:uc-pop-press .16s ease-out;transition:none}
+/* 祭坛牌子已并进 mc1 的 uc-pop 壳（见 ui-main.js 的 bridgeAltarSign），
+ * 缩放/悬停与其它建筑共用 .uc-pop，不再单独加滤镜。 */
 @keyframes uc-pop-pick{0%{transform:scale(1)}35%{transform:scale(1.085)}64%{transform:scale(.985)}100%{transform:scale(1.035)}}
 @keyframes uc-pop-press{0%{transform:scale(1.035)}45%{transform:scale(.962)}100%{transform:scale(1.035)}}
 @media (prefers-reduced-motion: reduce){

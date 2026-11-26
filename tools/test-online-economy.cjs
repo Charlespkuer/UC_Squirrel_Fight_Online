@@ -142,7 +142,7 @@ test('5 级新手装备只能由服务端发放一次', () => {
   assert.strictEqual(s.gears.length, 1);
 });
 
-test('真化武技按等级累加（龟甲第二次按原表，第三次起不再触发）', () => {
+test('真化武技按等级累加（龟甲第二次按原表，第三次起走 30% 递减尾链）', () => {
   assert.strictEqual(GData.trueWeaponBonus({id:4,level:15}, 'combo'),25);
   assert.strictEqual(GData.trueSkillValue(23,15),50);
   assert.strictEqual(GData.trueSkillValue(9,15),20);
@@ -151,6 +151,7 @@ test('真化武技按等级累加（龟甲第二次按原表，第三次起不�
   assert.strictEqual(globalThis.Sim.critChanceVs(attacker,defender),20);
   assert.strictEqual(globalThis.Sim.shellChanceOf({skills:{7:15},effects:{}},1),100);
   assert.strictEqual(globalThis.Sim.shellChanceOf({skills:{7:15},effects:{}},2),0);
+  assert.strictEqual(globalThis.Sim.shellTailChanceOf({skills:{7:15},effects:{}}),30);
 });
 
 test('联机碎片合成与单机同价：白30 / 绿40 / 蓝50', () => {
@@ -410,6 +411,23 @@ test('联机抽奖由 State 开奖：免费 → 抽奖卷 → 25 金松果', () 
     assert.strictEqual(d.ok, false, '没有免费/抽奖卷/25 金松果时必须拒绝');
     assert.strictEqual(d.price, 25, '失败结果也带当前单价');
     s.goldPoint = before;
+  } finally {
+    Math.random = realRandom;
+  }
+});
+
+test('联机抽奖的 5% 升格高级药丸：超级经验丸(44) 真的进背包', () => {
+  /* 固定随机流：0.85 选中第 9 格「随机药丸」→ 0.01 < 5% 升格 → 0.99 落到高级药丸表最后一个（44）。 */
+  const realRandom = Math.random;
+  const seq = [0.85, 0.01, 0.99];
+  Math.random = () => (seq.length ? seq.shift() : 0.5);
+  try {
+    const s = freshSave({ lotteryDate: '', lotteryFree: 1, props: {}, goldPoint: 0 });
+    const before = Number(s.props[44]) || 0;
+    const out = State.lotteryDraw(1);
+    assert.strictEqual(out.ok, true);
+    assert.match(String(out.draws[0].label), /超级经验丸/);
+    assert.strictEqual(Number(s.props[44]) || 0, before + 1, '抽到的超级经验丸必须落进 props');
   } finally {
     Math.random = realRandom;
   }

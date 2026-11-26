@@ -73,6 +73,9 @@
     return pa - pb || (Number(a && a.id) || 0) - (Number(b && b.id) || 0);
   };
   let selectedProp = 0;
+  // 抽奖等服务端发奖后，下一次打开背包要定位到的道具（消费一次）。
+  let bagFocusProp = 0;
+  function focusBagProp(id) { bagFocusProp = Number(id) || 0; }
   let selectedRankGood = 0;
 
   const ICON_DIRS = { gear: 'gear', weapon: 'weapon', skill: 'skill', prop: 'prop' };
@@ -227,7 +230,7 @@
   function gearIconSrc(id) {
     const n = Number(id) || 0;
     if (n < 1 || n > GEAR_ICON_MAX) return ICON_BLANK;
-    return 'images/ui/icons/gear/gear-' + n + '-classic.svg?v=4';
+    return 'images/ui/icons/gear/gear-' + n + '-classic.svg?v=5';
   }
   function atlasIcon(kind, id, locked) {
     // 图标按类型分了目录（`images/ui/icons/<类型>/<类型>-<id>[-locked].svg`），kind 是运行时
@@ -1922,6 +1925,13 @@
       }
       items.sort(bagSort);
     }
+    // 服务端发奖后背包按道具 id 分页：刚抽到的道具可能不在第一页。
+    // 消费一次定位请求，直接翻到它在的那一页并选中。
+    if (!shop && !exchange && bagFocusProp) {
+      const target = bagFocusProp; bagFocusProp = 0;
+      const index = items.findIndex((it) => it.id === target);
+      if (index >= 0) { bagPage = Math.floor(index / 6); selectedProp = target; }
+    }
     const total=Math.max(1,Math.ceil(items.length/6));bagPage=Math.min(bagPage,total-1);
     const shown=items.slice(bagPage*6,bagPage*6+6);
     if(!shown.some(it=>it.id===selectedProp))selectedProp=shown[0]?.id||0;
@@ -3480,8 +3490,8 @@
     { key: 'ladder', title: '天梯赛', text: '30 级开启，战斗中可拾取属性碎片；通过在天梯战斗来证明自己吧！' },
     { key: 'replay', title: '录像', text: '最近50场战斗保存在消息页，可通过回放进行查看。' },
     { key: 'gems', title: '宝石', text: window.__SSDZ_ONLINE__
-      ? '45 级后通关关卡（整轮）有几率获得 1~2 级宝石（20% 掉落，一级 75% / 二级 25%）；3 个同级宝石 + 10 金松果可合成高一级（可能失败）。宝石可镶入橙色或黑色装备，镶嵌免费、卸下 5 金松果。'
-      : '45 级后通关关卡或竞技场获胜有几率获得 1~2 级宝石；3 个同级宝石 + 10 金松果可合成高一级（可能失败）。宝石可镶入橙色或黑色装备，镶嵌免费、卸下 5 金松果。' },
+      ? '45 级后通关关卡（整轮）有 10% 掉落；关卡战斗中另有约 0.3% 掉落 1~2 级宝石（一级 75% / 二级 25%）；3 个同级宝石 + 10 金松果可合成高一级（可能失败）。宝石可镶入橙色或黑色装备，镶嵌免费、卸下 5 金松果。'
+      : '45 级后通关关卡（整轮）、关卡战斗或竞技场获胜有几率获得 1~2 级宝石（关卡战斗中约 0.3%）；3 个同级宝石 + 10 金松果可合成高一级（可能失败）。宝石可镶入橙色或黑色装备，镶嵌免费、卸下 5 金松果。' },
     { key: 'tower', title: '无尽塔', text: '村庄右上角的小径进入（20 级解锁）。免门票的 Roguelike 无尽模式，可从中获取抽奖卷道具。' },
     { key: 'fusion', title: '装备融合', text: '3 件同品质、未穿戴的装备可融合成 1 件更高品质装备，黑装可继续融合洗词条。' +
       (window.__SSDZ_ONLINE__
@@ -3711,7 +3721,7 @@
 
   window.UI={...legacy,renderHome,drawHomeHud,drawActor,runAction,currentScreen:()=>screen,refreshHome,renderNumbers,refreshHeader,openHeroPage,
     currentUiMode,applyUiMode,UI_MODE_LSKEY,layoutHeight,smokeSelectors,
-    classic:{page,modal,notice,btn,bind,inlineSvgIcon,icon,goldIcon,propIconSrc,gearIconSrc,statsHtml,portrait,resultModal,stageResult,home,toast,num,setNum,upgradeReward,upsHtml,pickupResult,promptLevelUpChoices,showLevelUps,wsChoiceDialog,openSupportModal,maybeSupportPrompt,supportPanelHtml,copyText,supportMeta,wireSystemFeedback,
+    classic:{page,modal,notice,btn,bind,inlineSvgIcon,icon,goldIcon,propIconSrc,gearIconSrc,statsHtml,portrait,resultModal,stageResult,home,toast,num,setNum,upgradeReward,upsHtml,pickupResult,promptLevelUpChoices,showLevelUps,wsChoiceDialog,openSupportModal,maybeSupportPrompt,supportPanelHtml,copyText,supportMeta,wireSystemFeedback,focusBagProp,
       // 帮助页的词条：`help('gems')` 直接开到那条并高亮；`helpTerm('gems')` 取文案/标题，
       // 别的地方要引用帮助内容时走这两个，不要再抄一份文字。
       help:openHelp,helpTerm,openHeroPage,

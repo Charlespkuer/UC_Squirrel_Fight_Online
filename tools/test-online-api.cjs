@@ -915,6 +915,24 @@ async function main() {
     { position: pillFinal.settlement && pillFinal.settlement.position, cup: pillFinal.settlement && pillFinal.settlement.goldCup,
       before: cupBefore, after: pillAfterState.save.goldCup });
 
+  /* 匹配中返回 = 弃赛：只清赛事局面，不退报名费、不结算。 */
+  db.tx(() => store.runOnSave(cid, ({ save }) => {
+    save.energy = 30; save.lastEnergyTs = Date.now(); delete save.props[36];
+  }, { snapshotSource: 'test-arena-quit' }));
+  const quitBefore = await call('GET', '/api/state', undefined, C.token);
+  const quitJoin = await call('POST', '/api/arena/join', { kind: 0, rev: quitBefore.rev }, C.token);
+  const quitJoined = await call('GET', '/api/state', undefined, C.token);
+  const quit = await call('POST', '/api/action', { name: 'abandonArenaRun', args: [], rev: quitJoined.rev }, C.token);
+  const quitAfter = await call('GET', '/api/state', undefined, C.token);
+  ok('竞技场匹配中弃赛：清掉赛事局面，不退报名费也不结算奖励',
+    quitJoin.paid.by === 'energy' && quit.ok && quit.result === true
+    && quit.patch && quit.patch.del.includes('classicArenaRun')
+    && !quitAfter.save.classicArenaRun
+    && Number(quitAfter.save.energy) <= Number(quitJoined.save.energy)
+    && same(quitAfter.save.exp, quitJoined.save.exp)
+    && same(quitAfter.save.goldCup, quitJoined.save.goldCup)
+    && same(quitAfter.save.props, quitJoined.save.props));
+
   db.tx(() => store.runOnSave(cid, ({ save }) => { save.level = 40; save.props[87] = 1; }, { snapshotSource: 'campaign-test' }));
   const campaigns = require('../server/game/campaign');
   const createdRoom = campaigns.create({ accountId: cid, bossId: 1 });

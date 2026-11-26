@@ -3038,6 +3038,7 @@ function checkVillageBuildings() {
   const fr = fs.readFileSync(path.join(ROOT, 'js/ssfight/ui-fight.js'), 'utf8').replace(/\r\n/g, '\n');
   assert.ok(
     /const altarNum = rel\('num1'\)/.test(main) && /blankNames: \[\]/.test(main) &&
+    /const bridgeAltarSign = \(\) =>/.test(main) && /altarSignNodes\(\)/.test(main) && /sf-village-sign-bridge/.test(main) &&
     /showBuildingLevel/.test(vil) && /function openHatch\(/.test(vil) && /function openTeam\(/.test(vil) &&
     /function openFeed\(/.test(vil) && /function openEvolve\(/.test(vil) &&
     /frame: 8, title: '幻兽牧场 · 孵化'/.test(vil) && /frame: 5, title: '幻兽牧场 · 喂养'/.test(vil) &&
@@ -3127,6 +3128,14 @@ function checkClassicTowerShell() {
     /setTimeout\(\(\) => \{[\s\S]{0,600}?promptLevelUpChoices\(\);/.test(cu) &&
     /if \(classic && !run\.busy && !run\.settled && arenaMatchPage\(\)\)/.test(ce),
     '幻兽左上信息不能被裁掉；经典征战塔不能带现代菜单条，并要用经典外壳/返回村庄征战；竞技赛事页展示 3 秒后自动进战斗，升级三选一/属性点没处理完时不能自动开下一场'
+  );
+  const shared = JSON.parse(fs.readFileSync(path.join(ROOT, 'shared/actions.json'), 'utf8'));
+  assert.ok(
+    /onFire: \(\) => leaveArenaMatch\(\)/.test(ch) &&
+    /function leaveArenaMatch\(\)[\s\S]{0,800}?cancelArenaAutoFight\(\);[\s\S]{0,1800}?openOriginalConfirm\(\{ label: '离开竞技场', text, accept, cancel: resumeArenaMatchCountdown, swapButtons: true, extraGap: 20 \}\)/.test(ch) &&
+    /function abandonArenaRun\(\)[\s\S]{0,260}?Online\.call\('abandonArenaRun'\)/.test(ce) &&
+    shared.actions.abandonArenaRun && shared.actions.abandonArenaRun.mode === 'sync',
+    '竞技场匹配页的返回必须走原版 4421 确认：打开时停掉自动开打、取消恢复倒计时，确定后清服务端赛事'
   );
   assert.ok(
     /async function mountVillage\(container\)[\s\S]{0,1400}?Main\.resizeLayout\(\)/.test(main) &&

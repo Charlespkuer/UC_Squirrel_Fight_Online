@@ -28,10 +28,13 @@
     { id: 26, name: '蓝色碎片', count: 1, weight: 1 * BLUE_MUL },
   ];
 
+  const LADDER_OTHER_WEIGHT = 7.5 + 22 + 18 + 8 + 8 + 6 * BLUE_MUL;
+  const LADDER_SHARD_RATE = 0.005;
+  const LADDER_SHARD_WEIGHT = LADDER_SHARD_RATE / (1 - LADDER_SHARD_RATE) * LADDER_OTHER_WEIGHT;
   const LADDER_POOL = [
-    // 原权重 34（旧池总权重 102.6 → 33.1%/卡）；这里按「概率对半」反算，
-    // 其余权重不动时 13.62 / (68.6 + 13.62) ≈ 16.6%，正好是原来的一半。
-    { id: 51, name: '属性碎片', count: 1, weight: 13.62 },
+    // 属性碎片单格 0.5%（一场三格约 1.5%）；权重按「其余条目 + 0.5%」反算，
+    // 不再写死旧值，改其它权重时这里仍保持 0.5%。
+    { id: 51, name: '属性碎片', count: 1, weight: LADDER_SHARD_WEIGHT },
     { id: 46, name: '恶魔果实种子', count: 1, weight: 7.5 },
     { id: 15, name: '经验', count: 5, weight: 22 },
     { id: 8, name: '金松果', count: 2, weight: 18 },
@@ -39,9 +42,28 @@
     { id: 22, name: '武器卷轴', count: 1, weight: 8 },
     { id: 26, name: '蓝色碎片', count: 1, weight: 6 * BLUE_MUL },
   ];
+  // 45 级后的关卡战斗额外把 1~2 级宝石塞进局内 3 格飘物池。
+  // 目标是一场（3 格）合计 0.3%，所以单格约 0.1%；宝石只进「stage」，随机挑战/天梯/竞技场不共享。
+  const STAGE_GEM_LEVEL = 45;
+  const STAGE_GEM_BATTLE_RATE = 0.003;
+  const STAGE_GEM_DROPS = Object.freeze([
+    { id: 101, name: '一级宝石', count: 1, share: 0.75 },
+    { id: 102, name: '二级宝石', count: 1, share: 0.25 },
+  ]);
+  function stagePool() {
+    const total = POOL.reduce((n, p) => n + Number(p.weight || 0), 0);
+    const perCard = 1 - Math.pow(1 - STAGE_GEM_BATTLE_RATE, 1 / 3);
+    const gemWeight = perCard * total / (1 - perCard);
+    return POOL.concat(STAGE_GEM_DROPS.map((g) => ({
+      id: g.id, name: g.name, count: g.count, weight: gemWeight * g.share,
+    })));
+  }
   function poolFor(kind, level) {
-    if (kind !== 'rank') return POOL;
-    return Number(level) >= RANK_BLACK_SHARD_LEVEL ? LADDER_POOL.concat(RANK_BLACK_SHARDS) : LADDER_POOL;
+    if (kind === 'rank') {
+      return Number(level) >= RANK_BLACK_SHARD_LEVEL ? LADDER_POOL.concat(RANK_BLACK_SHARDS) : LADDER_POOL;
+    }
+    if (kind === 'stage' && Number(level) >= STAGE_GEM_LEVEL) return stagePool();
+    return POOL;
   }
 
   function plan(random, kind, opts) {
@@ -66,8 +88,10 @@
   }
 
   function create(options) {
-    const opts = options || {}, drops = opts.plan || plan(opts.random, opts.kind, { level: opts.level }), collected = [], upgrades = [], awarded = new Set(), pending = [];
+    const opts = options || {};
     const owner = State.state();
+    const level = opts.level != null ? Number(opts.level) : Number(owner && owner.level) || 0;
+    const drops = opts.plan || plan(opts.random, opts.kind, { level }), collected = [], upgrades = [], awarded = new Set(), pending = [];
     const presenter = opts.presenter || null;
     let elapsed = 0, next = 0, active = null, closed = false, button = null, notice = null, noticeUntil = 0;
     const root = opts.root;

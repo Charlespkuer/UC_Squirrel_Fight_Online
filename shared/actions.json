@@ -54,6 +54,7 @@
     "confirmChest":       { "mode": "async", "args": [] },
 
     "abandonStageRun":    { "mode": "sync",  "args": ["int"] },
+    "abandonArenaRun":    { "mode": "sync",  "args": [] },
     "markMessagesSeen":   { "mode": "sync",  "args": [] },
 
     "setSettings":        { "mode": "local", "args": ["any"] },

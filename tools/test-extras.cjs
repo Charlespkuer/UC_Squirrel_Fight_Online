@@ -868,6 +868,19 @@ test('抽奖旧日期迁移不白送次数，新的一天仅恢复一次免费�
   assert.equal(s.goldPoint, 19); assert.equal(JSON.stringify(s.props), props);
 });
 
+test('联机版没连上服务器时抽奖拒绝开奖，不能只弹奖励却不入账', () => {
+  const g = setup(), s = g.c.State.state();
+  s.lotteryFree = 1; s.goldPoint = 5000;
+  g.c.__SSDZ_ONLINE__ = true;
+  g.c.Online = { ready: false, errText: (e) => String(e) };
+  const props0 = JSON.stringify(s.props), free0 = s.lotteryFree, gold0 = s.goldPoint;
+  g.c.ClassicExtras.lottery();
+  g.click('lottery-spin');
+  assert.equal(JSON.stringify(s.props), props0, '未连服务器时不能本地发奖');
+  assert.equal(s.lotteryFree, free0, '免费次数不能本地扣掉');
+  assert.equal(s.goldPoint, gold0, '金松果不能本地扣掉');
+});
+
 test('拜师后自动学会师父驾到，出师花20金松果且角色数据完整', () => {
   const g = setup(), s = g.c.State.state();
   s.level = 12; s.goldPoint = 100;

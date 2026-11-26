@@ -169,7 +169,7 @@
     if (kind === 'gear') {
       const classic = window.UI && window.UI.classic;
       if (classic && typeof classic.gearIconSrc === 'function') return classic.gearIconSrc(id);
-      return 'images/ui/icons/gear/gear-' + Number(id) + '-classic.svg?v=4';
+      return 'images/ui/icons/gear/gear-' + Number(id) + '-classic.svg?v=5';
     }
     // 道具：背包/商店同一张路径表（`UI.classic.propIconSrc`，全部是矢量图）。
     const classic = window.UI && window.UI.classic;

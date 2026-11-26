@@ -28,9 +28,14 @@ module.exports = {
       if (settlementMeta.practice || settlementMeta.revengeOf || settlementMeta.revenge)
         throw fail('NOT_FOUND', '这场战斗没有可领取的悬浮奖励');
       const battle = require('../game/battle');
-      // 与出战斗时同一份计划：等级取战斗记录里的出手等级，等级 50+ 的天梯池才含黑装碎片。
+      // 优先用战斗当时写入的同一份 plan：旧战斗换了池子/权重后，展示的三格和领取仍要一致。
+      // 没有存档 plan 的旧记录才按战斗类型重算；关卡要传 stage，才会带上 45 级后的宝石池。
       const level = Number(settlementMeta.pickupLevel) || 0;
-      const prize = globalThis.BattleDrops.plan(battle.mulberry32(Number(combat.seed) ^ 0x751278ab), combat.kind === 'rank' ? 'rank' : 'challenge', { level })[index];
+      const pickupKind = combat.kind === 'rank' ? 'rank' : combat.kind === 'stage' ? 'stage' : 'challenge';
+      const stored = settlementMeta && settlementMeta.__meta && Array.isArray(settlementMeta.__meta.pickups)
+        ? settlementMeta.__meta.pickups : null;
+      const storedPrize = stored && stored[index] && Number.isFinite(Number(stored[index].id)) ? stored[index] : null;
+      const prize = storedPrize || globalThis.BattleDrops.plan(battle.mulberry32(Number(combat.seed) ^ 0x751278ab), pickupKind, { level })[index];
       const exists = db.get('SELECT ups FROM combat_pickups WHERE combat_id=? AND pickup_index=?', id, index);
       let out = null;
       if (!exists) {

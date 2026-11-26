@@ -1498,7 +1498,7 @@
         .filter(Boolean).join(' · ');
       const gearSrc = (window.UI && UI.classic && UI.classic.gearIconSrc)
         ? UI.classic.gearIconSrc(gid)
-        : 'images/ui/icons/gear/gear-' + gid + '-classic.svg?v=4';
+        : 'images/ui/icons/gear/gear-' + gid + '-classic.svg?v=5';
       return '<li><span class="sf-fd-icon gear" data-img="' + gearSrc + '"></span>' +
         '<b' + (orange ? ' style="color:#c45a12"' : '') + '>' + esc(C && C.gearName ? C.gearName(gid) : ('装备' + gid)) + (orange ? '（橙）' : '') + '</b>' +
         '<i>' + esc(extra) + '</i></li>';
@@ -2198,7 +2198,7 @@
     if (!view) return;
     closeArenaHint();
     stopAt(view, ARENA.join);
-    wireClickable(clipOf(view, 'back'), { hover: 2, onFire: () => arenaGo('home') });
+    wireClickable(clipOf(view, 'back'), { hover: 2, onFire: () => leaveArenaMatch() });
     const run = (window.ClassicExtras && ClassicExtras.arenaRun) ? ClassicExtras.arenaRun() : null;
     paintArenaSeats(view, run);
     // 赛事页只亮 3 秒就自动开打：半决赛/决赛都不再弹「进入/开始」确认，和天梯一致。
@@ -2266,6 +2266,66 @@
 
   function closeArenaHint() {
     cancelArenaAutoFight();
+  }
+  // 匹配页的“返回菜单”不是普通导航：报名费在报名时已经扣掉，离开等于弃赛。
+  // 确认框复用原版 4421（与报名确认同一个框），不另做 DOM。
+  const ARENA_TICKET = ['英雄帖', '勇气徽章', '召唤证'];
+  const ARENA_LEAVE_TEXT = '返回上一界面会放弃本场比赛：\n报名消耗的30体力或入场券\n（{ticket}）不会退还，\n本场奖励也不会结算。\n确定要返回吗？';
+  let arenaLeavePending = false;
+  function arenaLeaveText(run) {
+    const ticket = ARENA_TICKET[Math.max(0, Math.min(2, Number(run && run.kind) || 0))];
+    return ARENA_LEAVE_TEXT.replace('{ticket}', ticket);
+  }
+  function resumeArenaMatchCountdown() {
+    if (!current || current.tab !== 'arena' || current.arenaPage !== 'match' || inBattle()) return;
+    const CE = window.ClassicExtras;
+    const run = CE && CE.arenaRun ? CE.arenaRun() : null;
+    if (run) scheduleArenaAutoFight(run);
+  }
+  function leaveArenaMatch() {
+    if (arenaLeavePending || !current) return;
+    const page = current;
+    const CE = window.ClassicExtras;
+    const run = CE && CE.arenaRun ? CE.arenaRun() : null;
+    if (!run) { arenaGo('home'); return; }
+    // 确认期间必须停掉自动开打，否则 3 秒一到会在弹窗背后开战。
+    cancelArenaAutoFight();
+    const stillHere = () => !!(page && current === page && current.tab === 'arena' && current.arenaPage === 'match');
+    const text = arenaLeaveText(run);
+    const accept = () => {
+      if (arenaLeavePending) return;
+      arenaLeavePending = true;
+      const done = () => {
+        arenaLeavePending = false;
+        if (stillHere()) arenaGo('home');
+      };
+      const failed = (e) => {
+        arenaLeavePending = false;
+        if (!stillHere()) return;
+        if (window.UI && UI.toast) {
+          UI.toast('放弃比赛失败：' + ((window.Online && Online.errText) ? Online.errText(e) : ((e && e.message) || '请重试')));
+        }
+        resumeArenaMatchCountdown();
+      };
+      if (!CE || !CE.abandonArenaRun) { failed(new Error('弃赛入口不可用')); return; }
+      let p;
+      try { p = CE.abandonArenaRun(); } catch (e) { failed(e); return; }
+      Promise.resolve(p).then(done, failed);
+    };
+    const fallback = () => {
+      if (!stillHere()) return;
+      const C = window.UI && UI.classic;
+      if (!C || !C.modal) { resumeArenaMatchCountdown(); return; }
+      C.modal('离开竞技场', '<p>' + esc(text).replace(/\n/g, '<br>') + '</p>', [
+        { label: '确定', run: accept },
+        { label: '返回', cls: 'muted', run: resumeArenaMatchCountdown },
+      ], { small: true });
+    };
+    try {
+      Promise.resolve(openOriginalConfirm({ label: '离开竞技场', text, accept, cancel: resumeArenaMatchCountdown, swapButtons: true, extraGap: 20 }))
+        .then((view) => { if (!view) fallback(); })
+        .catch(fallback);
+    } catch (e) { fallback(); }
   }
   // 竞技场赛事页的四个席位（原版 `showRacing2` 摆 `join1..4`，写 `name` / `level` / `cup.rate`）。
   // 所以只填"玩家 + 已确定的对手"，其余留空位 —— 不编服务端才会有的对手数据。
@@ -2666,7 +2726,7 @@
       setText(clipOf(view, 'info'), fitText(clipOf(view, 'info'), options.text || ''));
       const ok = clipOf(view, 'button1');
       const cancel = clipOf(view, 'button2');
-      // 竞技场报名确认：原版 4421 是「确定在左、取消在右」，用户要求调换。
+      // 竞技场报名 / 匹配页弃赛确认：原版 4421 是「确定在左、取消在右」，这里统一调换。
       // 必须在 wireClickable 之前换，热区才会按新位置量。其他确认框不传 swapButtons，保持原版。
       if (options.swapButtons && ok && cancel && ok.g && cancel.g) {
         const ma = (clip) => {
@@ -2685,7 +2745,7 @@
 
       const buttonSpec = { idle: 1, hover: 2, press: 2 };
       wireClickable(ok, Object.assign({}, buttonSpec, { onFire: () => { if (close() && options.accept) options.accept(); } }));
-      wireClickable(cancel, Object.assign({}, buttonSpec, { onFire: close }));
+      wireClickable(cancel, Object.assign({}, buttonSpec, { onFire: () => { if (close() && options.cancel) options.cancel(); } }));
     } });
   }
   function subHost() {

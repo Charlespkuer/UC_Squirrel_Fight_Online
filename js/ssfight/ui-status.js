@@ -2622,7 +2622,7 @@
       const gearImg = g
         ? ((window.UI && UI.classic && UI.classic.gearIconSrc)
           ? UI.classic.gearIconSrc(g.id)
-          : 'images/ui/icons/gear/gear-' + Number(g.id) + '-classic.svg?v=4')
+          : 'images/ui/icons/gear/gear-' + Number(g.id) + '-classic.svg?v=5')
         : '';
       return '<li class="' + (g ? '' : 'none') + '">' +
         '<span class="sf-fd-icon gear" data-img="' + gearImg + '"></span>' +
@@ -3282,8 +3282,8 @@
     const gems = [101, 102, 103, 104, 105, 106, 107].filter((id) => (save.props && save.props[id] > 0));
     if (!gems.length) {
       if (window.UI && UI.toast) UI.toast(window.__SSDZ_ONLINE__
-        ? '背包里没有宝石。45级后通关关卡（整轮）有几率获得。'
-        : '背包里没有宝石。45级后通关关卡或竞技场获胜有几率获得。');
+        ? '背包里没有宝石。45级后通关关卡（整轮）或关卡战斗中有几率获得。'
+        : '背包里没有宝石。45级后通关关卡、关卡战斗或竞技场获胜有几率获得。');
       return;
     }
     if (!C || !C.modal) return;

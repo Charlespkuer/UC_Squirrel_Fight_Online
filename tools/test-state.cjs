@@ -797,7 +797,7 @@ test('连续登录：第1天100，每多一天+10，200封顶；附加奖励按�
     '轮换池只能是挑战书/英雄帖/勇气徽章/召唤证/三种超级药丸');
 });
 
-test('每日签到征战令：2026-11-23 起只在周六、周日各送 1 个', () => {
+test('每日签到征战令：2026-11-23 起周五、周六、周日各送 1 个', () => {
   const g = game();
   const day = 24 * 60 * 60 * 1000;
   // harness 的时钟固定从 2026-09-23 23:55 起步，先跳到 11-18（周三）中午再逐日领取。
@@ -812,11 +812,11 @@ test('每日签到征战令：2026-11-23 起只在周六、周日各送 1 个', 
   assert.deepEqual(got, [
     ['2026-11-18', 0], ['2026-11-19', 0], ['2026-11-20', 1],
     ['2026-11-21', 0], ['2026-11-22', 0],
-    ['2026-11-23', 0], ['2026-11-24', 0], ['2026-11-25', 0], ['2026-11-26', 0], ['2026-11-27', 0],
+    ['2026-11-23', 0], ['2026-11-24', 0], ['2026-11-25', 0], ['2026-11-26', 0], ['2026-11-27', 1],
     ['2026-11-28', 1], ['2026-11-29', 1],
     ['2026-11-30', 0], ['2026-12-01', 0],
   ], '征战令只看领取日的星期，与连续天数无关；11-22 仍是老口径、11-23 起切新口径');
-  assert.equal(g.State.state().props[87], 3, '只入账 11-20、11-28、11-29 各 1 个');
+  assert.equal(g.State.state().props[87], 4, '只入账 11-20、11-27、11-28、11-29 各 1 个');
 });
 
 test('联机客户端按服务端时区算今天/本周：设备日期不同也不会重新点亮已领状态', () => {
@@ -2250,10 +2250,10 @@ test('出手权重新表：技能 5 / 普通武器 8 / 投掷前两次 100 / 徒
   const s7 = (lv, n) => S.shellChanceOf({ skills: { 7: lv }, effects: {}, skillBoost: {} }, n);
   assert.deepEqual([1, 5, 10].map((lv) => s7(lv, 0)), [20, 22, 24.5]);
   assert.deepEqual([11, 13, 15].map((lv) => s7(lv, 1)), [20, 60, 100]);
-  assert.equal(s7(10, 1), 1); assert.equal(s7(15, 2), 0, '第三次起不再触发');
-  const capped = { skills: { 7: 15 }, effects: {}, silence: 0, shellCount: 2, shellCharges: 0, mods: null, mech: [], side: 1 };
-  assert.equal(S.dmgReduce(capped, 100, {}).guiJia, 0, '用满两次后 dmgReduce 不再挡');
-  assert.equal(capped.shellCount, 2, '用满后计数不再增长');
+  assert.equal(s7(10, 1), 1); assert.equal(s7(15, 2), 0, 'shellChanceOf 只管前两次，第三次起走尾链');
+  const tail = (lv) => S.shellTailChanceOf({ skills: { 7: lv }, effects: {}, skillBoost: {} });
+  assert.deepEqual([11, 13, 15].map(tail), [6, 18, 30]);
+  assert.equal(tail(10), 0, '普通 10 级不启用尾链');
   /* 流星锤三连击：固定随机 0 必中 2% 那一下，一次行动打出 3 段。 */
   const meteor = fighter({ power: 100, weapons: [{ id: 10, level: 1 }], mods: { mustHitFirst: 1 }, hp: 100000 });
   const dummy = fighter({ power: 1, agility: 1, speed: 1, hp: 1000000, maxHp: 1000000 });
@@ -2294,18 +2294,48 @@ test('龟甲术一次出手只判一次：多段攻击共用 shellLock，不重�
   assert.equal(meteor.shellAbsorb, undefined, '首掷失败后三整段都不挡');
 });
 
-test('龟甲术真5 一场最多触发两次（不再无限续挡）', () => {
+test('龟甲术真化第三次起 30% 递减续触，一场最多六次', () => {
   const g = game(), S = g.Sim;
-  let maxUses = 0;
-  for (let seed = 0; seed < 200; seed++) {
+  const def = { skills: { 7: 15 }, effects: {}, silence: 0, shellCount: 2, shellTail: 0.30, shellCharges: 0, mods: null, mech: [], side: 1 };
+  const realRandom = g.math.random;
+  g.math.random = () => 0;
+  try {
+    assert.ok(S.dmgReduce(def, 100, {}).guiJia > 0, '第三次按 30% 命中');
+    assert.equal(def.shellCount, 3);
+    assert.ok(Math.abs(def.shellTail - 0.30) < 1e-9, '第三次后下一层仍按 30% 门槛');
+    g.math.random = () => 0.99;
+    assert.equal(S.dmgReduce(def, 100, {}).guiJia, 0, '尾链失败即结束');
+    assert.equal(def.shellCount, 3);
+    assert.equal(def.shellTail, 0, '失败后尾链清零');
+    def.shellTail = 0.30; def.shellCount = 2;
+    g.math.random = () => 0;
+    for (let i = 0; i < 4; i++) assert.ok(S.dmgReduce(def, 100, {}).guiJia > 0, '尾链第 ' + (i + 3) + ' 次命中');
+    assert.equal(def.shellCount, 6);
+    assert.equal(S.dmgReduce(def, 100, {}).guiJia, 0, '第六次后不再触发');
+  } finally { g.math.random = realRandom; }
+  let maxUses = 0, thirdPlus = 0;
+  for (let seed = 0; seed < 1000; seed++) {
     const battle = S.simulate(
       { name: 'A', level: 90, power: 1, agility: 1, speed: 999, hp: 100000, maxHp: 100000,
         weapons: [{ id: 2, level: 1 }], skills: [], effects: {}, pattern: ['weapon'] },
       { name: 'B', level: 90, power: 1, agility: 1, speed: 1, hp: 100000, maxHp: 100000,
         weapons: [], skills: [{ id: 7, level: 15 }], effects: {} });
-    maxUses = Math.max(maxUses, battle.rounds.filter((r) => r.guiJia > 0).length);
+    const n = battle.rounds.filter((r) => r.guiJia > 0).length;
+    maxUses = Math.max(maxUses, n);
+    if (n >= 3) thirdPlus++;
   }
-  assert.equal(maxUses, 2, '真5 龟甲术一场最多触发 2 次');
+  assert.ok(maxUses <= 6, '真5 一场最多 6 次');
+  assert.ok(thirdPlus > 0, '真5 应出现 3 次及以上');
+  let normalMax = 0;
+  for (let seed = 0; seed < 200; seed++) {
+    const battle = S.simulate(
+      { name: 'A', level: 90, power: 1, agility: 1, speed: 999, hp: 100000, maxHp: 100000,
+        weapons: [{ id: 2, level: 1 }], skills: [], effects: {}, pattern: ['weapon'] },
+      { name: 'B', level: 90, power: 1, agility: 1, speed: 1, hp: 100000, maxHp: 100000,
+        weapons: [], skills: [{ id: 7, level: 10 }], effects: {} });
+    normalMax = Math.max(normalMax, battle.rounds.filter((r) => r.guiJia > 0).length);
+  }
+  assert.equal(normalMax, 2, '普通 10 级仍最多 2 次');
 });
 
 test('全部原版武器、技能与 NPC 的事件流都能有限结束并维持合法血量', () => {

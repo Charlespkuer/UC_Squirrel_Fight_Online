@@ -76,7 +76,7 @@
     const classic = window.UI && window.UI.classic;
     const url = classic && typeof classic.gearIconSrc === 'function'
       ? classic.gearIconSrc(g.id)
-      : 'images/ui/icons/gear/gear-' + g.id + '-classic.svg?v=4';
+      : 'images/ui/icons/gear/gear-' + g.id + '-classic.svg?v=5';
     return imgTag(url, 'icon', size || 56);
   }
 

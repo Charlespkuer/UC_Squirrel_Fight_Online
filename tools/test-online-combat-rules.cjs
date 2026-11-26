@@ -11,9 +11,10 @@ assert.deepEqual([11, 13, 15].map((lv) => d16(lv, 1)), [5, 15, 24]);
 assert.equal(d16(10, 1), 0.5); assert.equal(d16(15, 2), 0.5);
 const s7 = (lv, n) => S.shellChanceOf({ skills: { 7: lv }, effects: {}, skillBoost: {} }, n);
 assert.deepEqual([1, 5, 10].map((lv) => s7(lv, 0)), [20, 22, 24.5]);
-/* 真化：首次仍是 24.5；「可多次使用」的 N% 只决定第二次，一场最多两次。 */
+/* 真化：首次仍是 24.5；「可多次使用」的 N% 只决定第二次，第三次起走 30% 递减尾链。 */
 assert.deepEqual([11, 13, 15].map((lv) => s7(lv, 1)), [20, 60, 100]);
-assert.equal(s7(10, 1), 1); assert.equal(s7(15, 2), 0, '第三次起不再触发');
+assert.equal(s7(10, 1), 1); assert.equal(s7(15, 2), 0, 'shellChanceOf 只管前两次');
+assert.equal(S.shellTailChanceOf({ skills: { 7: 15 }, effects: {}, skillBoost: {} }), 30);
 for (const lv of [1,15]) {
   for (const id of [1,2,3,4,7,10,11,12,15,16,17]) {
     for(let seed=0;seed<30;seed++) {
