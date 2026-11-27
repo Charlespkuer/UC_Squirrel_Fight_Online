@@ -836,7 +836,7 @@
     { id: 'bramble', name: '荆棘·蔓萝', mech: 'poison', type: '反击型', anim: 'xh', bias: { power: 0.95, agility: 1.00, speed: 0.95, hp: 1.15 },
       mechDesc: '毒藤缠绕：受击 30% 概率使攻击者中毒，每回合损失 3% 当前生命，持续 3 回合' },
     { id: 'frostmage', name: '冰法师·寒晶', mech: 'freeze', type: '控制型', anim: 'xh', bias: { power: 0.90, agility: 1.00, speed: 1.10, hp: 0.95 },
-      mechDesc: '寒冰禁锢：其每第 3 次行动前冻结玩家 1 回合' },
+      mechDesc: '寒冰禁锢：其每第 3 次行动命中后冻结玩家 1 回合' },
     { id: 'tamer', name: '驯兽师·铃音', mech: 'wolf', type: '召唤型', anim: 'tl', bias: { power: 0.90, agility: 0.95, speed: 1.00, hp: 1.05 },
       mechDesc: '唤狼协战：每 2 回合召唤小狼突袭，造成 0.5×力量的必中伤害（不占行动）' },
     { id: 'vampire', name: '吸血鬼·赤瞳', mech: 'lifesteal', type: '吸血型', anim: 'tl', bias: { power: 1.05, agility: 1.00, speed: 1.00, hp: 1.05 },
@@ -1172,7 +1172,7 @@
       castable: [23], pattern: ['weapon', 'skill', 'weapon', 'common'], mech: ['berserk', 'freeze'],
       patternDesc: '狡兔三窟：菜刀 → 幸运一击 → 菜刀 → 普攻（高速、高闪避）',
       mechDesc: '原版征战副本首领「暗御狡兔」：敏捷与速度极高，靠闪避与幸运一击打爆发；' +
-        '塔内追加狂战血性与寒冰禁锢（每第 3 次行动前冻结玩家 1 回合）。' },
+        '塔内追加狂战血性与寒冰禁锢（每第 3 次行动命中后冻结玩家 1 回合）。' },
     { id: 'campaign_wolf', bossId: 2, mcFrame: 2, name: '暗御狼王', bigName: '狼王', level: 40,
       type: '征战首领 · 狼王', region: 0,
       bias: { power: 3.00, agility: 1.00, speed: 1.00, hp: 1.30 },
@@ -1181,7 +1181,7 @@
       castable: [14], pattern: ['weapon', 'skill', 'weapon', 'common'], mech: ['berserk', 'freeze'],
       patternDesc: '狼王扑杀：狼牙棒 → 小宇宙爆发 → 狼牙棒 → 普攻（高力量）',
       mechDesc: '原版征战副本首领「暗御狼王」：力量最高，暴击与反击都很硬；' +
-        '塔内追加狂战血性与寒冰禁锢（每第 3 次行动前冻结玩家 1 回合）。' },
+        '塔内追加狂战血性与寒冰禁锢（每第 3 次行动命中后冻结玩家 1 回合）。' },
     { id: 'campaign_fox', bossId: 3, mcFrame: 3, name: '暗御妖狐', bigName: '妖狐', level: 50,
       type: '征战首领 · 妖狐', region: 0,
       bias: { power: 1.20, agility: 1.05, speed: 1.05, hp: 0.65 },

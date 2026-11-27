@@ -561,18 +561,27 @@
       closed = true;
       return restorePage(hold, o.target || { tab: 'arena', arenaPage: 'rules' });
     };
-    // 与单机版同一条：竞技场每场打完都先摆原版战果页（`fight` 第 2/3 帧，7772），
-    // 半决赛 / 碎片场 / 幻兽场不发经验，`rewardFor` 返回 null：否则原版 `maxlevel` 会停在
+    // 与单机版同一条：竞技场每场打完都先摆原版战果页（`fight` 第 2/3 帧，7772）。
+    // 半决赛 / 碎片场 / 幻兽场不发经验，`rewardFor` 返回 null；冠军金杯走奖励格
+    // （和飘到的物品同一排），不再写进底部正文。
     const battleReward = () => {
       const exp = Math.max(0, Math.round(Number(rw.exp) || 0));
-      return exp > 0 ? { exp, gold: 0, ups: rw.ups || [] } : null;
+      const cup = Math.max(0, Math.round(Number(rw.goldCup) || 0));
+      if (!(exp > 0 || cup > 0)) return null;
+      const out = {};
+      // 碎片 / 幻兽场本来就不发经验：不能传 `exp:0`，否则原版 `maxlevel` 会以为
+      // 「这一场经验是 0」并显示「本关经验已在上次掉线前获得」。
+      if (exp > 0) out.exp = exp;
+      out.gold = 0;
+      if (cup > 0) out.goldCup = cup;
+      out.ups = rw.ups || [];
+      return out;
     };
 
     const arenaParts = [];
     if (rw.phase !== 'semi') {
       if (rw.shards) arenaParts.push('蓝色碎片 +' + rw.shards);
       if (rw.hatch) arenaParts.push('孵化点 +' + rw.hatch);
-      if (rw.goldCup) arenaParts.push('金杯 +' + rw.goldCup);
     }
     const arenaNote = arenaParts.join('　');
     const played = await play(resp, {

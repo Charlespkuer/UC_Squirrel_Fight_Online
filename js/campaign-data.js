@@ -33,19 +33,19 @@
       castable: [23], pattern: ['weapon', 'skill', 'weapon', 'common'], mech: ['freeze'],
       type: '征战首领 · 狡兔',
       patternDesc: '狡兔三窟：菜刀 → 幸运一击 → 菜刀 → 普攻（高速、高闪避）',
-      desc: '敏捷与速度极高，靠闪避与幸运一击打爆发；每第 3 次行动前冻结对手 1 回合。',
+      desc: '敏捷与速度极高，靠闪避与幸运一击打爆发；每第 3 次行动命中后冻结对手 1 回合。',
     },
     {
       id: 'campaign_wolf', bossId: 2, mcFrame: 2, name: '暗御狼王', bigName: '狼王',
       level: 40, unlockLevel: 40, rewardExpRatio: 1.1,
 
-      bias: { power: 2.4, agility: 0.9, speed: 1.155, hp: 3.2 },
+      bias: { power: 2.4, agility: 0.9, speed: 1.155, hp: 3.45 },
       weapons: [{ id: 12, level: 11 }],
       skills: [{ id: 9, level: 11 }, { id: 10, level: 11 }, { id: 24, level: 11 }, { id: 14, level: 10 }],
       castable: [14], pattern: ['weapon', 'skill', 'weapon', 'common'], mech: ['freeze'],
       type: '征战首领 · 狼王',
       patternDesc: '狼王扑杀：狼牙棒 → 小宇宙爆发 → 狼牙棒 → 普攻（高力量）',
-      desc: '力量最高，暴击与反击都很硬；每第 3 次行动前冻结对手 1 回合。',
+      desc: '力量最高，暴击与反击都很硬；每第 3 次行动命中后冻结对手 1 回合。',
     },
     {
       id: 'campaign_fox', bossId: 3, mcFrame: 3, name: '暗御妖狐', bigName: '妖狐',
@@ -86,10 +86,15 @@
   const ENTRY_CUP_COST = 0;
 
   // 每只首领的奖励表（按 2026-11 图片逐项落地）：一局仍从本表抽 3~5 份 `rollDatas`，
-  // 每份 4 个座位掷骰、点数最高者得。表内各项等概率，抽中后不重复。
+  // 每份 4 个座位掷骰、点数最高者得。表内各项默认等概率；带 `weight` 的条目按权重抽
+  // （目前只有猿将狂战 weight 0.1），抽中后不重复。
   // `setIds` 用 gearSetMap 的套装 id：仙鹤 17 / 熊猫 18 / 浣熊 19 / 犀牛 28 /
   // 幕府 29 / 勇者 30 / 诅咒 31 / 机器猫 49 / 深海 48 / 狂战 51。
-  const PURPLE = (sets, affixMax, label) => ({ kind: 'gear', quality: 3, setIds: sets, affixMax, name: label, value: 300 });
+  const PURPLE = (sets, affixMax, label, weight) => {
+    const item = { kind: 'gear', quality: 3, setIds: sets, affixMax, name: label, value: 300 };
+    if (weight != null) item.weight = Number(weight);
+    return item;
+  };
   const GEM = (level) => ({ kind: 'prop', id: 100 + Number(level), count: 1, name: level + '级宝石', value: Number(level) >= 4 ? 600 : 300 });
   const SHARDS = (n) => ({ kind: 'prop', id: 26, count: n, name: '蓝色碎片', value: n * 10 });
   const FRUIT = (id, name) => ({ kind: 'prop', id, count: 1, name, value: 200 });
@@ -103,7 +108,7 @@
       { kind: 'pet', petId: 28, name: '1级招财熊猫', value: 400 },
       PURPLE([17, 18, 28], 2, '紫色装备（仙鹤/熊猫/犀牛）'),
       GEM(3),
-      SHARDS(100),
+      SHARDS(50),
       GOLD(150),
     ],
     2: [
@@ -115,7 +120,7 @@
       PURPLE([29, 30], 3, '紫色装备（幕府/勇者）'),
       PURPLE([31, 19], 3, '紫色装备（诅咒/浣熊）'),
       GEM(3),
-      SHARDS(150),
+      SHARDS(75),
       GOLD(200),
       FRUIT(47, '天使果实'),
       FRUIT(48, '恶魔果实'),
@@ -127,7 +132,7 @@
       PURPLE([31, 19], 3, '紫色装备（诅咒/浣熊）'),
       PURPLE([49, 48], 3, '紫色装备（机器猫/深海）'),
       GEM(3),
-      SHARDS(200),
+      SHARDS(100),
       GOLD(250),
       FRUIT(47, '天使果实'),
       FRUIT(48, '恶魔果实'),
@@ -139,10 +144,10 @@
       { kind: 'pet', petId: 31, name: '1级神灯', value: 400 },
       PURPLE([31, 19], 3, '紫色装备（诅咒/浣熊）'),
       PURPLE([49, 48], 3, '紫色装备（机器猫/深海）'),
-      PURPLE([51], 3, '紫色狂战装备'),
+      PURPLE([51], 3, '紫色狂战装备', 0.1),
       GEM(3),
       GEM(4),
-      SHARDS(250),
+      SHARDS(125),
       GOLD(300),
     ],
   };
@@ -258,14 +263,15 @@
   }
 
   // 用种子把本首领奖励表洗一遍：一局抽 3~5 份且不重复，公开 rollDatas 可复算。
-  function rewardOrder(seed, n) {
+  // 默认权重 1；带 `weight` 的条目用 Efraimidis-Spirakis 键做无放回加权抽样。
+  function rewardOrder(seed, pool) {
     const rand = mulberry32((Number(seed) ^ 0x85EBCA6B) >>> 0);
-    const list = Array.from({ length: Math.max(0, Number(n) || 0) }, (_, i) => i);
-    for (let i = list.length - 1; i > 0; i--) {
-      const j = Math.floor(rand() * (i + 1));
-      const t = list[i]; list[i] = list[j]; list[j] = t;
-    }
-    return list;
+    const keyed = pool.map((item, i) => {
+      const weight = Number(item && item.weight) > 0 ? Number(item.weight) : 1;
+      return { i, key: Math.pow(rand(), 1 / weight) };
+    });
+    keyed.sort((a, b) => b.key - a.key || a.i - b.i);
+    return keyed.map((x) => x.i);
   }
 
   // 紫装奖励：按 `setIds` + 随机部位先定下具体装备 id（分奖页图标与实发一致）；
@@ -293,7 +299,7 @@
 
   function pickReward(seed, index, boss) {
     const pool = bossRewards(boss);
-    const order = rewardOrder(seed, pool.length);
+    const order = rewardOrder(seed, pool);
     const template = pool[order[index % order.length]];
     if (template.kind === 'pet_random') {
       const pet = randomPetPrize(template.grade, seed, index);

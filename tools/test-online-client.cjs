@@ -302,14 +302,18 @@ const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),asse
   assert.equal(arenaSpec.player && arenaSpec.player.name,'甲','竞技战果左侧要填本人');
   assert.equal(arenaSpec.foe && arenaSpec.foe.name,'乙','竞技战果右侧要填对手');
   assert.equal(arenaSpec.arenaSubtitle,'','半决赛沿用原版「进入下一轮…」副标题');
-  await arenaFight({phase:'final',position:0,win:true,exp:150,ups:[],shards:0,hatch:0,gem:null,buffNote:'',title:'冠军'});
-  assert.equal(JSON.stringify(arenaOpts.rewardFor()),JSON.stringify({exp:150,gold:0,ups:[]}),'决赛经验要进原版战果页');
-  assert.equal(arenaOpts.resultNote,'','经验场已经有经验数字，不重复写文字');
+  await arenaFight({phase:'final',position:0,win:true,exp:150,ups:[],shards:0,hatch:0,goldCup:1,gem:null,buffNote:'',title:'冠军'});
+  assert.equal(JSON.stringify(arenaOpts.rewardFor()),JSON.stringify({exp:150,gold:0,goldCup:1,ups:[]}),
+    '决赛经验与冠军金杯都要进原版战果页');
+  assert.equal(arenaOpts.resultNote,'','经验场已经有经验数字，不重复写文字；金杯走奖励格');
   assert.equal(arenaSpec.arenaSubtitle,'获得冠军','决赛冠军不能再写「进入下一轮」');
   assert.ok(/经验 \+150/.test(arenaSpec.text) && !/获得冠军/.test(arenaSpec.text),'名次进副标题，正文不重复');
   /* 碎片 / 幻兽竞技场没有经验格：战果页用一行文字写名次奖励（用户 2026-11）。 */
-  await arenaFight({phase:'final',position:0,win:true,exp:0,ups:[],shards:8,hatch:0,gem:null,buffNote:'',title:'冠军'});
+  await arenaFight({phase:'final',position:0,win:true,exp:0,ups:[],shards:8,hatch:0,goldCup:1,gem:null,buffNote:'',title:'冠军'});
+  assert.equal(JSON.stringify(arenaOpts.rewardFor()),JSON.stringify({gold:0,goldCup:1,ups:[]}),
+    '碎片场的冠军金杯也要进奖励格（没有经验格时不能伪造 exp:0）');
   assert.equal(arenaOpts.resultNote,'蓝色碎片 +8','碎片竞技场要在战果页写清奖励');
+  assert.ok(!/金杯/.test(arenaOpts.resultNote),'金杯已进奖励格，不再写进底部正文');
   await arenaFight({phase:'final',position:1,win:false,exp:0,ups:[],shards:0,hatch:40,gem:null,buffNote:'',title:'亚军'});
   assert.equal(arenaOpts.resultNote,'孵化点 +40','幻兽竞技场要在战果页写清奖励');
   const fightSrc=fs.readFileSync(path.join(__dirname,'../js/ssfight/ui-fight.js'),'utf8');

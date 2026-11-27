@@ -1841,6 +1841,13 @@ async function checkClassicFight() {
     'SfFight 要在战果页出现前调用 rewardFor，并把结果交给 showResultPanel');
   assert.ok(/if \(Number\(item\.id\) === 8\) \{ gold \+= count; continue; \}/.test(uf),
     '战斗中飘到的金松果要与结算金松果合并到同一格');
+  /* ②d³ 竞技场冠军金杯：和战利品同格显示（金杯有背包矢量图 prop-40），
+   *   不再写进底部正文 —— 正文在经验数字下面会互相压住。 */
+  const ob = fs.readFileSync(path.join(ROOT, 'js/online-battle.js'), 'utf8').replace(/\r\n/g, '\n');
+  assert.ok(/const cup = Math\.max\(0, Math\.round\(Number\(reward && reward\.goldCup\)/.test(uf)
+    && /if \(Number\(item\.id\) === 40 && target\.attachImage\)/.test(uf)
+    && /out\.goldCup = cup/.test(ob) && !/arenaParts\.push\('金杯/.test(ob),
+    '竞技场冠军金杯要进奖励格（prop-40 矢量图），不能只写进底部正文压住经验数字');
   /* ②e 开宝箱那两步都要**等玩家**（选箱子 / 翻奖后的确定），且都要有回归入口。 */
   assert.ok(/pickChest: \(i\) =>/.test(uf) && /confirmChest: \(\) =>/.test(uf),
     '开宝箱的"选箱子"与"确定"都要留出入口，否则回归与探针走不到那一步');

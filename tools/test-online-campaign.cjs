@@ -145,13 +145,13 @@ try {
     return p.kind + ':' + p.id + ':' + p.count;
   };
   const requiredRewards = {
-    1: ['pet_random:1', 'pet:14', 'pet:29', 'pet:28', 'gear:17,18,28:2', 'prop:103:1', 'prop:26:100', 'gold:150'],
+    1: ['pet_random:1', 'pet:14', 'pet:29', 'pet:28', 'gear:17,18,28:2', 'prop:103:1', 'prop:26:50', 'gold:150'],
     2: ['pet_random:1', 'pet_random:2', 'pet:18', 'pet:16', 'pet:26', 'gear:29,30:3', 'gear:31,19:3',
-      'prop:103:1', 'prop:26:150', 'gold:200', 'prop:47:1', 'prop:48:1'],
+      'prop:103:1', 'prop:26:75', 'gold:200', 'prop:47:1', 'prop:48:1'],
     3: ['pet_random:3', 'pet:25', 'pet:27', 'gear:31,19:3', 'gear:49,48:3',
-      'prop:103:1', 'prop:26:200', 'gold:250', 'prop:47:1', 'prop:48:1'],
+      'prop:103:1', 'prop:26:100', 'gold:250', 'prop:47:1', 'prop:48:1'],
     4: ['pet_random:3', 'pet:32', 'pet:30', 'pet:31', 'gear:31,19:3', 'gear:49,48:3', 'gear:51:3',
-      'prop:103:1', 'prop:104:1', 'prop:26:250', 'gold:300'],
+      'prop:103:1', 'prop:104:1', 'prop:26:125', 'gold:300'],
   };
   for (const boss of CampaignData.BOSSES) {
     const want = new Set(requiredRewards[boss.bossId]);
@@ -182,6 +182,18 @@ try {
       }
     }
     assert.deepEqual([...seen].sort(), [...want].sort(), boss.name + ' 的奖励表必须能完整抽到');
+  }
+  {
+    /* 猿将狂战权重 0.1：每份出现率应远低于其余条目（旧 1/11≈9.09%）。 */
+    const boss = CampaignData.bossFor(4);
+    let packs = 0, berserk = 0;
+    for (let seed = 1; seed <= 500; seed++) {
+      const plan = CampaignData.rewardPlan(seed, seats, boss);
+      packs += plan.prizes.length;
+      berserk += plan.prizes.filter((p) => p.prize.kind === 'gear' && (p.prize.setIds || []).includes(51)).length;
+    }
+    assert.ok(berserk / packs <= 0.02,
+      '猿将狂战权重 0.1 后每份出现率应 ≤2%（实际 ' + (berserk / packs * 100).toFixed(2) + '%）');
   }
   /* 分奖页和结算必须是同一套口径：每份都是本份点数最高的一方，**没有保底改判**
    *（用户 2026-11-10 口径：去掉“第一份硬塞给真人”，严格按骰子点数发奖）。 */
@@ -278,6 +290,24 @@ try {
     campaign.ack({ accountId: F, code: forced.room.code });
   } finally {
     CampaignData.rewardPlan = originalPlan;
+  }
+
+  /* 4b-2) 奖励表的 setIds 必须真的作用到实发装备。旧版 State 漏导出 gearSetOf，
+   * applyPrize 的套装过滤整段失效，前三个首领也会从全部紫装池抽（线上出过狂战拳甲）。 */
+  {
+    assert.equal(typeof globalThis.State.gearSetOf, 'function', 'State.gearSetOf 必须导出（applyPrize 的套装过滤依赖它）');
+    const fakeS = {
+      state: () => ({ gears: [] }),
+      gearCapacity: () => 20,
+      gearIdsOf: (part, quality) => globalThis.State.gearIdsOf(part, quality),
+      randomExtForQuality: () => [],
+      addGear: (id) => ({ key: 'forced-gear-' + id, id, name: '装备', ext: [] }),
+      addGold: () => {},
+    };
+    const got = campaign.applyPrize(fakeS, { props: {}, gears: [] },
+      { kind: 'gear', quality: 3, setIds: [17, 18, 28], affixMax: 2, gearId: 65, name: '紫色装备' }, 123, 0);
+    assert.equal(got && got.item && Number(got.item.id), 65, '紫装必须按奖励表 gearId 实发，不能串到表外套装');
+    assert.equal(Number(globalThis.gearMap.getValue(got.item.id).setId), 17, '狡兔紫装必须落在 setIds 17/18/28');
   }
 
   /* 4c) 幻兽：奖池生成时就掷定种类与星级，全部为 1 级；中奖按同一结果入栏。 */

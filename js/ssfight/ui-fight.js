@@ -202,7 +202,15 @@
   function attachLootIcon(target, item) {
     if (!target || !target.attachChild || !item || item.id == null) return null;
     const hit = lootIcons && lootIcons[Number(item.id)];
-    if (!hit) return null;
+    if (!hit) {
+      // 金杯是货币，不在掉落池里（`loot-icons.json` 由掉落池生成）：借用背包那张矢量图。
+      if (Number(item.id) === 40 && target.attachImage) {
+        const C = window.UI && UI.classic;
+        const href = (C && typeof C.propIconSrc === 'function') ? C.propIconSrc(40) : 'images/ui/icons/prop/prop-40.svg';
+        return target.attachImage(href, { pad: 0.08 });
+      }
+      return null;
+    }
     if (hit.id) return target.attachChild(hit.id, 1, 'prize');
     // 联机自建道具（黑凤凰/黑圣熊碎片）没有原版 SWF 导出：走同一张背包矢量图。
     if (hit.svg && target.attachImage) {
@@ -3066,6 +3074,10 @@
       picks.push({ id: item.id, name: item.name, count });
     }
     const rewards = [];
+    // 竞技场冠军的金杯和飘到的战利品同格显示：金杯有背包矢量图，不再写进底部正文
+    // （正文在经验数字下面会互相压住，且只有文字没有图标）。
+    const cup = Math.max(0, Math.round(Number(reward && reward.goldCup) || 0));
+    if (cup > 0) rewards.push({ id: 40, name: '金杯', count: cup });
     if (gold > 0) rewards.push({ id: 8, name: '金松果', count: gold });
     rewards.push(...picks);
     const cells = [['c1', 'num'], ['c2', 'num1'], ['c3', 'num3']];

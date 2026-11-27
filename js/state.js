@@ -6576,7 +6576,7 @@
     settleBuildings, buildingBuffClaimed, claimBuildingBuff, activeBuildingBuff,
     buildingDoubleRate, miracleRecord, normalizeFoeGears,
     petLeadership, PET_UNLOCK_LEVEL, pets, petByKey, petTeam, hatchPet, grantPet, setPetTeam, feedPet, evolvePet, petBattleBonus, applyPetBonuses, randomPetLoadout, PETS, PET_SKILLS,
-    gearPart, gearPartQuality, gearIdsOf, autoEnergyPotion,
+    gearPart, gearPartQuality, gearIdsOf, gearSetOf, autoEnergyPotion,
     gearSetFamily, fusionFamilyInfo,
     apprenticeDailyExp, apprenticeDailyGold, apprenticeDailyTotal, apprenticeDailyStatus,
     apprenticeLevelSum, apprenticeTributeRatio, claimApprenticeExp, canKickToday, kickPrentice,

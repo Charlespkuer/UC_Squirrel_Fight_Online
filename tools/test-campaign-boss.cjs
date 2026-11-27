@@ -233,6 +233,34 @@ test('妖狐魅惑被先机预判闪避后不再卸甲', () => {
   assert.equal(hit.stripLeft[0], 0, '我方不应处于脱装备状态');
 });
 
+test('狡兔寒冰禁锢跟攻击命中走：被闪避不再眩晕，命中才冻一回合', () => {
+  const Sim = ctx.Sim;
+  const me = { name: '闪避者', level: 80, hp: 100000, maxHp: 100000, power: 100, agility: 100000, speed: 1,
+    weapons: [], skills: [], effects: {} };
+  const hare = { name: '暗御狡兔', level: 80, hp: 200000, maxHp: 200000, power: 100, agility: 100, speed: 500,
+    weapons: [], skills: [], pattern: ['common'], mech: ['freeze'], effects: {} };
+  const oldRandom = Math.random;
+  let dodged = null, hit = null;
+  try {
+    Math.random = () => 0;      // 闪避判定必成功
+    dodged = Sim.simulate(me, hare);
+    Math.random = () => 0.99;   // 闪避判定必失败
+    hit = Sim.simulate(Object.assign({}, me, { agility: 1 }), hare);
+  } finally { Math.random = oldRandom; }
+  const third = (res) => (res.rounds || []).filter((r) => r.attacker === 1 &&
+    (r.action === 'common' || r.action === 'weapon' || r.action === 'skill'))[2];
+  const round = third(dodged);
+  assert.ok(round && round.dodge, '狡兔第 3 次行动应被闪避');
+  assert.ok(!round.stunApplied, '闪避后不能再挂寒冰禁锢');
+  assert.ok(!(dodged.rounds || []).some((r) => r.attacker === 0 && r.action === 'stunned'),
+    '闪避后玩家不应被冻住一回合');
+  const landed = third(hit);
+  assert.ok(landed && !landed.dodge, '命中场第 3 次行动应打中');
+  assert.ok(landed.stunApplied, '命中后要挂寒冰禁锢并出眩晕标记');
+  assert.ok((hit.rounds || []).some((r) => r.attacker === 0 && r.action === 'stunned'),
+    '命中后玩家要被冻住一回合');
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try { fn(); console.log('  PASS  ' + name); }

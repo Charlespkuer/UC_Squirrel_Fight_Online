@@ -381,9 +381,16 @@ function applyPrize(S, save, prize, seed, index) {
       // 本首领奖励表限定套装范围（仙鹤/熊猫/犀牛…）；没有 setIds 的旧数据仍从全品质池抽。
       const allow = new Set((Array.isArray(prize.setIds) ? prize.setIds : []).map(Number));
       let ids = S.gearIdsOf ? S.gearIdsOf(part, quality) : [];
-      if (allow.size && S.gearSetOf) ids = ids.filter((id) => allow.has(Number(S.gearSetOf(id))));
+      // 旧版 State 漏导出 gearSetOf 时退回 gearMap 直读；否则 setIds 过滤整段失效，
+      // 前三个首领都会从全部紫装里抽（含狂战）。
+      const setOf = (id) => {
+        if (typeof S.gearSetOf === 'function') return Number(S.gearSetOf(id));
+        const def = globalThis.gearMap && globalThis.gearMap.getValue(id);
+        return def ? Number(def.setId) : -1;
+      };
+      if (allow.size) ids = ids.filter((id) => allow.has(setOf(id)));
       const planned = Number(prize.gearId) || 0;
-      if (planned && (!allow.size || allow.has(Number(S.gearSetOf ? S.gearSetOf(planned) : 0)))) ids = [planned];
+      if (planned && (!allow.size || allow.has(setOf(planned)))) ids = [planned];
       if (Array.isArray(ids) && ids.length) {
         const id = ids[Math.abs((Number(seed) + Number(index)) % ids.length)];
         // 图片口径：不同首领的紫装词条上限不同（狡兔 1-2 星，其余 1-3 星）。
@@ -871,5 +878,5 @@ function dailyStatus(accountId) {
 
 module.exports = {
   create, join, leave, list, status, enqueue, randomMatch, current, runRoom, ack, reap, pump,
-  roomView, roomOf, dailyStatus, resolveRoom, failRoom,
+  roomView, roomOf, dailyStatus, resolveRoom, failRoom, applyPrize,
 };

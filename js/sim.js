@@ -1241,10 +1241,9 @@
         att.buffFlat.power += att.power;
         att.pendingNote = (att.pendingNote ? att.pendingNote + '·' : '') + '血性狂暴';
       }
-      if (att.mech.includes('freeze') && (att.npcActs || 0) % 3 === 0) {
-        def.stun = Math.max(def.stun, 1);
-        att.pendingNote = (att.pendingNote ? att.pendingNote + '·' : '') + '寒冰禁锢';
-      }
+      // 寒冰禁锢要等这一拍真的命中才落（见 `freezeIfHit`）：只在这里挂起，
+      // 被闪避 / 先机预判 / 风影身法归零时不能把对手冻住。
+      if (att.mech.includes('freeze') && (att.npcActs || 0) % 3 === 0) att.freezePending = true;
 
       const acts = att.npcActs || 0;
 
@@ -1778,13 +1777,36 @@
       if (!ONLINE_COMBAT && actor.stripTurns > 0) actor.stripTurns--;
     }
 
+    // 寒冰禁锢：`npcMechTurnStart` 只挂起，等这一拍结算完再看有没有命中。
+    // 被闪避 / 先机预判 / 风影身法归零，以及准备武器 / 回血这类没出手的行动都不算命中。
+    function freezeIfHit(att, def, from) {
+      if (!att.freezePending) return;
+      att.freezePending = false;
+      if (att.hp <= 0 || def.hp <= 0) return;
+      const hits = rounds.slice(from).filter((r) => r && r.attacker === att.side &&
+        (r.action === 'weapon' || r.action === 'skill' || r.action === 'common') &&
+        r.noDmg !== true && !r.dodge && !r.firstDodge && !r.firstHitZero);
+      if (!hits.length) return;
+      def.stun = Math.max(def.stun, 1);
+      const hit = hits[hits.length - 1];
+      hit.stunApplied = true;
+      hit.noteText = (hit.noteText ? hit.noteText + '·' : '') + '寒冰禁锢';
+    }
+
     // 一拍的主行动（NPC / 玩家共用）。幻兽协战把对手打进装死时，这一半会被拆出来，
     // 等装死方行动完再由 resumeTurn 补上，不再重跑回合前摇（回复 / 持续伤害 / 协战）。
     function takeMainAction(unit, foe, continuation) {
-      if (unit.npcType) { npcAction(unit, foe); npcMechAfter(unit, foe); return; }
+      const from = rounds.length;
+      if (unit.npcType) {
+        npcAction(unit, foe);
+        npcMechAfter(unit, foe);
+        freezeIfHit(unit, foe, from);
+        return;
+      }
       if (unit.mech.length) { unit.npcActs = (unit.npcActs || 0) + 1; npcMechTurnStart(unit, foe); }
       playerLikeAction(unit, foe, continuation);
       if (unit.mech.length) npcMechAfter(unit, foe);
+      freezeIfHit(unit, foe, from);
       if (foe.mech.includes('trialErode') && unit.hp > 0) {
         const stacks = Math.min(RULES.erodeMax, foe.mechState.erode + 1);
         if (stacks > foe.mechState.erode) {
