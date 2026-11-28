@@ -208,7 +208,8 @@ module.exports = {
     const accountId = Number(ctx.account.id);
     // loadCombat 自己会取录像并核对攻击/防守/同房间旁观权限；这里不再先查一遍。
     const data = fight.loadCombat(ctx.params.id, accountId, String(ctx.query.as || ''));
-    const snap = data.snapshotId ? snapshots.snapshotById(data.snapshotId) : null;
+    // 快照只为 `me` 缺失时兜底（正常录像里 me 都在），不要每次回放都多读一次整行快照。
+    const snap = !data.me && data.snapshotId ? snapshots.snapshotById(data.snapshotId) : null;
     const mySide = data.attackerId === accountId ? 0 : 1;
     const asDefender = data.view === 'defender';
     return {

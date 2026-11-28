@@ -44,9 +44,13 @@
     dodgeCap: 55,
     // 暴击率最终上限（百分点，隐藏规则）：溢出的暴击率按 1:1 加进暴击伤害。
     critCap: 70,
-    // 敏捷减伤：floor 以下不生效（木桩 1 敏仍按旧数值），capAt 点封顶 cap。
+    // 敏捷减伤：floor 以上才生效，capAt 点封顶 cap。
     // 与闪避是两条独立曲线：闪避看双方敏捷差，减伤只看自己的敏捷。
-    agiDrFloor: 20, agiDrCapAt: 200, agiDrCap: 0.20,
+    // floor 留在 1 点：练功木桩与杂物的敏捷就是 1，让它们一口不吃减伤，取整/回放口径才稳定。
+    agiDrFloor: 1, agiDrCapAt: 250, agiDrCap: 0.30,
+    // 速度=行动条速率，而出手占比是零和的（你多一次=对手少一次）：线性速率会让 1 点速度
+    // 值 2~3 点生命/力量。这里按幂律压缩 rate = 100×(速度/100)^speedExp，p=1 才是线性。
+    speedExp: 0.36, apBase: 100,
   });
 
   const ACTIVE_SKILLS = [8, 12, 14, 15, 17, 18, 23];
@@ -383,6 +387,12 @@
     if (m > 0 && lowHpActive(c)) v *= 1 + m;
     return Math.max(1, Math.round(v));
   }
+  // 行动条速率的唯一出口：面板速度先做幂律压缩再进 AP 累积（speedExp 见 RULES）。
+  // 不改 effSpeed 本身：技能 / 面板 / 降速度词条仍按真实速度值结算。
+  function apRateOf(c) {
+    const s = (c && c.baseStats && c.debuffs) ? effSpeed(c) : Math.max(1, Number(c && c.speed) || 1);
+    return RULES.apBase * Math.pow(s / RULES.apBase, RULES.speedExp);
+  }
   function effect(c, id) { return stripped(c) ? 0 : Math.max(0, Number(c.effects[id]) || 0); }
   const trueVal = (id, level) => (window.GData && GData.trueSkillValue ? GData.trueSkillValue(id, level) : 0);
   const trueW = (w, key) => (window.GData && GData.trueWeaponBonus ? GData.trueWeaponBonus(w, key) : 0);
@@ -544,7 +554,7 @@
     if (att.mods && (att.mods.mustHitAll || att.mods.firstStrikeAll)) return 0;
     const wMust = att.mustHitNext;
     if (wMust) return 0;
-    let d = 6 + 26 * effAgility(def) / (effAgility(def) + effAgility(att) * 1.2 + 40);
+    let d = 9 + 36 * effAgility(def) / (effAgility(def) + effAgility(att) + 20);
     const shift = skill(def, 11)
       ? (5 + 2 * (Math.min(skill(def, 11), 10) - 1) + trueVal(11, skill(def, 11))) * (1 + effect(def, 35) / 100)
       : 0;
@@ -1484,8 +1494,8 @@
       att.weaponUseCount = att.weaponUseCount || {};
       att.weaponUseCount[w.id] = Math.max(0, Math.floor(Number(att.weaponUseCount[w.id]) || 0)) + 1;
       const throwNo = att.weaponUseCount[w.id];
-      // 流星锤（10）前两投必中，第三投才掷三连几率 —— 唯一能出手三次的武器。
-      // 每一投都是一次完整出手，闪避 / 暴击 / 龟甲各自按「一次出手只判一次」结算。
+      // 流星锤（10）前两投必定连投，第三投才掷三连几率 —— 唯一能出手三次的武器。
+      // 连投只保证「投得出」：每一投照常掷闪避 / 暴击 / 龟甲，不是必中（与武器 9 / 15 不同）。
       // 随机数只在 throwNo === 2 时消费，别把它藏进条件表达式。
       let needsExtraThrow = ONLINE_COMBAT && throwNo === 1 && DOUBLE_THROW_IDS.has(Number(w.id));
       if (ONLINE_COMBAT && Number(w.id) === 10) {
@@ -1901,8 +1911,8 @@
           actor = practice === A ? B : A;
         } else {
           if (A.ap < 100 && B.ap < 100) {
-            const elapsed = Math.min((100 - A.ap) / effSpeed(A), (100 - B.ap) / effSpeed(B));
-            A.ap += elapsed * effSpeed(A); B.ap += elapsed * effSpeed(B);
+            const elapsed = Math.min((100 - A.ap) / apRateOf(A), (100 - B.ap) / apRateOf(B));
+            A.ap += elapsed * apRateOf(A); B.ap += elapsed * apRateOf(B);
           }
           let pick = A.ap >= B.ap ? A : B;
 
@@ -1910,9 +1920,9 @@
             const other = pick === A ? B : A;
             const gap = Math.max(0, 100 - other.ap);
             if (gap > 0) {
-              const elapsed = gap / effSpeed(other);
-              other.ap += elapsed * effSpeed(other);
-              pick.ap += elapsed * effSpeed(pick);
+              const elapsed = gap / apRateOf(other);
+              other.ap += elapsed * apRateOf(other);
+              pick.ap += elapsed * apRateOf(pick);
             }
             other.ap = Math.max(other.ap, 100);
             if (pick.ap >= 100) pick.ap = 99;
@@ -2123,6 +2133,8 @@
     actionWeights: { skill: skillWeight, weapon: weaponWeight },
     // 三个「有效属性」的唯一出口（供测试/调参直接核对：终乘类加成到底乘在哪一层）。
     effStatsOf: (c) => ({ power: effPower(c), agility: effAgility(c), speed: effSpeed(c) }),
+    // 行动条速率（速度经 speedExp 压缩后的实际攒条速度），调平衡时按它核对出手比。
+    actionRateOf: (c) => apRateOf(c),
 
     _applyRoundAuras: applyRoundAuras,
     repeatRateOf, skillUseCountOf,

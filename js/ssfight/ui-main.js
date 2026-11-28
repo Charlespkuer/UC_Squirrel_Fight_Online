@@ -335,6 +335,16 @@
   }
 
 
+  // 新号没有穿戴中的装备时不必为 462 KB 的 tags-gear 付首页加载时间；
+  // 穿上装备后下次进主页走正常路径（slotPlan 仍会缓存）。读不到存档时按“有”处理。
+  function hasWornGear() {
+    try {
+      if (!window.State || typeof State.myGears !== 'function') return true;
+      for (const g of (State.myGears() || [])) if (g && g.used) return true;
+      return false;
+    } catch (e) { return true; }
+  }
+
   async function loadGearTables() {
     if (slotPlan) return slotPlan;
     await SfRender.loadExtra('tags-gear.json');
@@ -979,6 +989,7 @@
     }
 
     wireActivityButton(view);
+    warmActivityBundle();
   }
   // 「消息」红点（new）
   // 这个"看到哪了"记在存档里（`State.msgSeenAt`，见 js/state.js 的 normalizeSave）。
@@ -1692,7 +1703,7 @@
     container.classList.add('ssfight-home-page');
     // 装备表要在建树之前备好：挂点是在建树过程中实例化的，plan 必须那一刻就绪。
     let plan = null;
-    if (DRESS_ENABLED) {
+    if (DRESS_ENABLED && hasWornGear()) {
       try { plan = planWears(await loadGearTables()); }
       catch (e) { if (window.__errs) window.__errs.push('装备表加载失败：' + (e && e.message)); }
     }
@@ -1750,6 +1761,7 @@
 
     timer = setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return;
+      if (activityDialog) return; // 活动弹窗盖住主页时不必每秒重刷底下那层
       if (view.root.isConnected === false) { if (current === view) destroy(); return; }
       // refreshValues 内部已经调过 renderStateIcons；不要再每秒重排一次药丸。
       try { refreshValues(view); } catch (e) { if (window.__errs) window.__errs.push('ui-main tick: ' + (e && e.message)); }
@@ -1791,6 +1803,24 @@
   // 原版 `MainMovie.as:8586 showActivity()` 在服务端活动公告非空时：
   // 生成器（`gen-ssfight-ui.cjs --activity`）按原版 attachMovie 的语义补了一条
   const ACTIVITY_BTN = 'activityBtn';
+  // 4692 在 tags-fight-result.json 里：主页空闲时先放进来，点「活动」不再等 60KB 包。
+  const ACTIVITY_BUNDLE = 'tags-fight-result.json';
+  let activityWarmStarted = false;
+  function stopHomeWarm() {
+    try { if (window.Main && Main.cancelPageWarm) Main.cancelPageWarm(); } catch (e) {}
+  }
+  function warmActivityBundle() {
+    if (activityWarmStarted) return;
+    activityWarmStarted = true;
+    const run = () => {
+      if (!current || !current.root || current.root.isConnected === false) return;
+      try {
+        if (window.SfRender && SfRender.loadExtra) SfRender.loadExtra(ACTIVITY_BUNDLE).catch(() => {});
+      } catch (e) {}
+    };
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 400 });
+    else setTimeout(run, 250);
+  }
 
   function activityClip(view) {
     const main = view && view.byName ? view.byName('main') : null;
@@ -1865,6 +1895,12 @@
   // 「活动」弹窗：原版 `对话框`（4692）第 8 帧
   // 原版是服务端公告分页，这里只有一页，写当天的活动/奖励摘要。
   let activityDialog = null;
+  // `/api/state` 只做后台校准：打开面板先用本地镜像上屏，30 秒内不重复拉整档。
+  let activitySyncedAt = 0;
+  const ACTIVITY_SYNC_MS = 30 * 1000;
+  function activityDataSig(v) {
+    return v ? JSON.stringify([v.d, v.quests, v.tribute]) : '';
+  }
 
   function closeActivityDialog() {
     const d = activityDialog;
@@ -1874,6 +1910,8 @@
     if (d.onResize) { try { window.removeEventListener('resize', d.onResize); } catch (e) {} }
     if (d.view) { try { d.view.destroy(); } catch (e) {} }
     if (d.host && d.host.parentNode) d.host.parentNode.removeChild(d.host);
+    // 弹窗期间主页定时器暂停，关掉后补一帧，能量/经验不落后。
+    try { if (current && current.root && current.root.isConnected) refreshValues(current); } catch (e) {}
     if (d.prevFocus && d.prevFocus.isConnected) {
       try { d.prevFocus.focus({ preventScroll: true }); } catch (e) {}
     }
@@ -1913,6 +1951,7 @@
 
   async function openActivityDialog() {
     if (activityDialog) return;
+    stopHomeWarm();
     const ui = document.getElementById('ui');
     if (!ui || !window.SfRender || !SfRender.mountSymbol) return;
     const host = document.createElement('section');
@@ -1939,12 +1978,7 @@
     };
     document.addEventListener('keydown', dialog.onKey, true);
     try {
-      await SfRender.loadExtra('tags-fight-result.json');
-      // 联机版每日任务由服务端按天生成：打开面板先拉一次权威存档，
-      // 跨天/换号时拿到的是服务端今天的题面，不是本机残留的旧列表。
-      if (window.Online && Online.ready && Online.syncState) {
-        try { await Online.syncState(); } catch (e) {}
-      }
+      await SfRender.loadExtra(ACTIVITY_BUNDLE);
       if (activityDialog !== dialog || !host.isConnected) { closeActivityDialog(); return; }
       const view = await SfRender.mountSymbol(stage, '4692', { frame: 8, label: '活动' });
       if (activityDialog !== dialog || !host.isConnected) { view.destroy(); closeActivityDialog(); return; }
@@ -1977,6 +2011,19 @@
       }
 
       renderBody();
+
+      // 每日任务/日供以服务端当天题面为准：先渲染本地镜像，再后台校准；
+      // 数据没变就不重画，避免刚打开就闪一下。
+      if (window.Online && Online.ready && Online.syncState && Date.now() - activitySyncedAt >= ACTIVITY_SYNC_MS) {
+        activitySyncedAt = Date.now();
+        Online.syncState().then(() => {
+          if (activityDialog !== dialog || !dailyApi) return;
+          const next = dailyApi.dailyData();
+          if (activityDataSig(next) === activityDataSig(data)) return;
+          data = next;
+          renderBody();
+        }).catch(() => {});
+      }
 
       const back = view.byName('button1');
       if (back) wireActivityDialogButton(back, closeActivityDialog);

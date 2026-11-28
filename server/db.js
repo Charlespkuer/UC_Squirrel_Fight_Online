@@ -7,7 +7,7 @@ const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { config } = require('./config');
 
-const SCHEMA_VERSION = 22;
+const SCHEMA_VERSION = 23;
 
 let db = null;
 const stmtCache = new Map();
@@ -511,7 +511,14 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS ix_friend_messages_created ON friend_messages(created_at)`,
   `CREATE INDEX IF NOT EXISTS ix_friend_requests_created ON friend_requests(created_at)`,
   `CREATE INDEX IF NOT EXISTS ix_campaign_rooms_closed ON campaign_rooms(status, closed_at)`,
+  // 按账号找房间（activeRoom / current）：主键是 (room_id, account_id)，没有它只能扫全部 waiting/done 房。
+  `CREATE INDEX IF NOT EXISTS ix_campaign_members_account ON campaign_members(account_id)`,
   `CREATE INDEX IF NOT EXISTS ix_account_ips_seen ON account_ips(last_seen)`,
+  // 红点计数只数未读：部分索引比全表索引小一个量级，规划器也只在这种查询上选它。
+  `CREATE INDEX IF NOT EXISTS ix_messages_unread ON messages(account_id, kind) WHERE read_at IS NULL`,
+  `CREATE INDEX IF NOT EXISTS ix_sessions_expires ON sessions(expires_at)`,
+  `CREATE INDEX IF NOT EXISTS ix_rank_finals_created ON rank_finals(created_at)`,
+  `CREATE INDEX IF NOT EXISTS ix_rank_awards_created ON rank_awards(created_at)`,
 ];
 
 function open(opts) {
@@ -557,6 +564,7 @@ function migrate() {
     if (version < 20) migrateV20();
     if (version < 21) migrateV21();
     if (version < 22) migrateV22();
+    if (version < 23) migrateV23();
     db.exec('PRAGMA user_version = ' + SCHEMA_VERSION);
   });
 }
@@ -784,6 +792,9 @@ function migrateV21() {
 function migrateV22() {
   // rank_finals 由 SCHEMA 的 CREATE TABLE IF NOT EXISTS 建好；这里只占版本位。
 }
+
+// v23：补查询索引（红点未读、按账号找征战房、过期会话、周奖/名次按时间清理）。
+function migrateV23() {}
 
 function handle() {
   if (!db) open();

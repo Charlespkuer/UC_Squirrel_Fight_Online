@@ -423,9 +423,9 @@
       }
       run.settled = true; arenaRun = null;
       const position = phase === 'final' ? (winner === 0 ? 0 : 1) : (winner === 0 ? 2 : 3);
-      // 任一竞技场的冠军固定多给 1 个金杯（联机版同口径由服务端结算）。
+      // 任一竞技场的冠军固定多给 1 个金杯（联机版同口径由服务端结算），并计入席位「今日金杯」。
       const championCup = position === 0 ? 1 : 0;
-      if (championCup) State.addGoldCup(championCup);
+      if (championCup) State.awardArenaCup(championCup);
 
       const kind = Number(run.kind) || 0;
       let baseExp = kind === 0 ? ARENA_EXP[position] : 0;

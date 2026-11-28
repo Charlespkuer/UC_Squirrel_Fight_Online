@@ -172,8 +172,7 @@
     return out;
   }
 
-  async function syncState() {
-    const out = await Net.get('/api/state');
+  function adoptState(out) {
     S.rev = Number(out.rev) || 0;
     S.summary = out.summary || null;
     S.daily = out.daily || null;
@@ -184,6 +183,21 @@
     S.ready = true;
     emit('ready', out);
     return out;
+  }
+
+  async function syncState() {
+    return adoptState(await Net.get('/api/state'));
+  }
+
+  // 首页 SVG 的素材（timeline/tags/textfields）与登录后的 /api/state 互不依赖：
+  // 先发出去，等主页挂载时就只差装备包了。
+  function prefetchHomeBundle() {
+    try {
+      if (window.SfRender && SfRender.load) {
+        const p = SfRender.load();
+        if (p && p.catch) p.catch(() => {});
+      }
+    } catch (e) {}
   }
 
   let lastResyncAt = 0;
@@ -459,20 +473,27 @@
   }
 
 
-  async function bootMeta() {
-    // ⚠ 一定要先探测，不能看 `Net.baseUrl()` 有没有值就跳过：
-    // `net.js` 在加载时就会把安装包里的 `__SSDZ_ONLINE_API__`（通常是 https）填进 base，
-    // 而云防火墙可能只放行 80 —— 那一跳会让 https 直接超时。
-    if (!S.discovered) {
-      await Net.discover();
-      S.discovered = true;
-    }
-    S.meta = await Net.meta();
-    S.actions = S.meta.actions || {};
-    S.season = S.meta.season || '';
-    anchorServerTime(S.meta.serverTime);
-    emit('meta', S.meta);
-    return S.meta;
+  let metaTask = null;
+  function bootMeta() {
+    if (metaTask) return metaTask;
+    const task = (async () => {
+      // ⚠ 一定要先探测，不能看 `Net.baseUrl()` 有没有值就跳过：
+      // `net.js` 在加载时就会把安装包里的 `__SSDZ_ONLINE_API__`（通常是 https）填进 base，
+      // 而云防火墙可能只放行 80 —— 那一跳会让 https 直接超时。
+      if (!S.discovered) {
+        await Net.discover();
+        S.discovered = true;
+      }
+      const meta = await Net.meta();
+      S.meta = meta;
+      S.actions = meta.actions || {};
+      S.season = meta.season || '';
+      anchorServerTime(meta.serverTime);
+      emit('meta', meta);
+      return meta;
+    })();
+    metaTask = task.catch((e) => { metaTask = null; throw e; });
+    return metaTask;
   }
 
   async function login(name, password) {
@@ -503,6 +524,7 @@
     if (!S.meta) await bootMeta();
     installGuards();
     installErrorToast();
+    prefetchHomeBundle();
     const st = await syncState();
 
     startBadgeWatch();
@@ -515,10 +537,14 @@
     if (!Net.restoreToken()) return null;
     if (!S.meta) await bootMeta();
     installGuards();
+    prefetchHomeBundle();
     try {
-      const prof = await Net.get('/api/profile');
+      // profile 与整档互不依赖：并行发（只读接口不进全局串行队列），弱网下少一个 RTT。
+      const stateP = Net.get('/api/state', { parallel: true });
+      stateP.catch(() => {});
+      const prof = await Net.get('/api/profile', { parallel: true });
       Net.setAccount(prof.profile.account);
-      await syncState();
+      adoptState(await stateP);
       startBadgeWatch();
       emit('login', { profile: prof.profile });
       return prof.profile;

@@ -375,10 +375,11 @@ function divisionRows(division, viewerAccountId) {
   return rows;
 }
 
-function rankOf(accountId) {
-  const row = db.get('SELECT * FROM ratings WHERE account_id = ? AND season = ?', Number(accountId), weekKey());
+// `rating` / `level` 可传入调用方已经读到的行，避免同一请求里把 ratings / saves 各再查一次。
+function rankOf(accountId, rating, level) {
+  const row = rating || db.get('SELECT * FROM ratings WHERE account_id = ? AND season = ?', Number(accountId), weekKey());
   if (!row) return 0;
-  const div = divisionOfAccount(accountId);
+  const div = divisionOf(level != null ? level : levelOf(accountId));
   if (!div) return 0;
   const rows = divisionRows(div, accountId);
   const i = rows.findIndex((r) => !r.bot && r.accountId === Number(accountId));
@@ -625,12 +626,14 @@ function ladder(accountId, limit) {
   ensureBots();
   const week = weekKey();
   const mine = ensureRating(accountId, week);
-  const div = divisionOfAccount(accountId);
+  // 等级只查一次：divisionOfAccount / meBase 都要用，别为同一个数字反复读 saves。
+  const myLevel = levelOf(accountId);
+  const div = divisionOf(myLevel);
   const n = Math.max(1, Math.min(200, Number(limit) || 20));
   const hidden = visibility.hiddenInfo(accountId);
   const meBase = {
     score: Number(mine.score) || 0, wins: Number(mine.wins) || 0, losses: Number(mine.losses) || 0,
-    streak: Number(mine.streak) || 0, rank: 0, level: levelOf(accountId),
+    streak: Number(mine.streak) || 0, rank: 0, level: myLevel,
     hidden: !!hidden, hiddenUntil: hidden ? hidden.until : 0,
   };
   if (!div) {

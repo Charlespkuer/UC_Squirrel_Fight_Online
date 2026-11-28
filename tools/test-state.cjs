@@ -833,22 +833,25 @@ test('联机客户端按服务端时区算今天/本周：设备日期不同也�
   assert.equal(S.buildingBuffClaimed('altar'), true, '服务端已领的祭坛状态在设备时区不同时仍要算已领');
 });
 
-test('金杯当日累计：进账才累加，跨天归零，花掉不减', () => {
+test('竞技场席位「今日金杯」只记冠军进账：天梯金杯不算，跨天归零，花掉不减', () => {
   const g = game(), S = g.State, s = S.state();
   const day = 24 * 60 * 60 * 1000;
   s.goldCup = 10;
-  assert.equal(S.goldCupToday(), 0);
-  S.addGoldCup(3);
+  assert.equal(S.arenaCupToday(), 0);
+  S.addGoldCup(3);                        // 天梯胜利：总金杯 +3，不进竞技场当日累计
   assert.equal(s.goldCup, 13);
-  assert.equal(S.goldCupToday(), 3);
-  assert.equal(s.goldCupDate, S.localDate());
+  assert.equal(S.arenaCupToday(), 0);
+  S.awardArenaCup(1);                     // 竞技场冠军：+1 杯，也计入当日
+  assert.equal(s.goldCup, 14);
+  assert.equal(S.arenaCupToday(), 1);
+  assert.equal(s.arenaCupDate, S.localDate());
   s.goldCup -= 13;                        // 金杯商店花掉：当日累计只记进账，不减
-  assert.equal(S.goldCupToday(), 3);
+  assert.equal(S.arenaCupToday(), 1);
   g.advance(day);
-  assert.equal(S.goldCupToday(), 0, '跨天读取归零');
-  S.addGoldCup(1);
-  assert.equal(S.goldCupToday(), 1);
-  assert.equal(s.goldCup, 1);
+  assert.equal(S.arenaCupToday(), 0, '跨天读取归零');
+  S.awardArenaCup(1);
+  assert.equal(S.arenaCupToday(), 1);
+  assert.equal(s.goldCup, 2);
 });
 
 test('新号前三天每日礼包额外发 3 个大体力药剂 + 150 金松果，第 4 天停止', () => {
@@ -2123,11 +2126,14 @@ test('方天画戟在攻击前蓄力，武器升级伤害与原表一致', () =>
   assert.equal(g.State.weaponInst('2').harmLo, 12);
 });
 
-test('高速行动不会饿死较慢的一方，速度翻倍约行动两倍', () => {
+test('高速行动不会饿死较慢的一方，速度优势被压缩成不到两倍出手', () => {
   const g = game(); g.math.random = () => 0.8;
   const result = g.Sim.simulate(fighter({ speed: 200, hp: 100000 }), fighter({ speed: 100, hp: 100000 }));
   const counts = [0, 0]; result.rounds.forEach((r) => counts[r.attacker]++);
-  assert.equal(counts[0], 40); assert.equal(counts[1], 20);
+  assert.ok(counts[1] > 0, '慢的一方也必须有机会出手');
+  assert.ok(counts[0] > counts[1], '快的一方出手更多');
+  const ratio = counts[0] / counts[1];
+  assert.ok(ratio > 1.05 && ratio < 1.6, '速度翻倍只换来明显小于两倍的出手：' + ratio.toFixed(2));
 });
 
 test('无敌模式：玩家血量只增不减（残血进场也先顶满），超时不会按血量比例判负', () => {
@@ -2184,21 +2190,21 @@ test('空手用虚拟拳套：同级始终弱于中位武器，力量收益与�
 test('装备词条改变对应武器伤害与减伤，不只显示说明', () => {
   const g = game(); g.math.random = () => 0.3;
   const attacker = fighter({ weapons: ['2:1'], hp: 10000 });
-  const defender = fighter({ hp: 10000 });
+  const defender = fighter({ hp: 10000, agility: 1 });
   const plain = g.Sim.simulate(attacker, defender).rounds[0].dmg;
   const geared = g.Sim.simulate({ ...attacker, effects: { 6: 100, 13: 100 } }, defender).rounds[0].dmg;
   const reduced = g.Sim.simulate({ ...attacker, effects: { 6: 100, 13: 100 } }, { ...defender, effects: { 9: 50 } }).rounds[0].dmg;
   assert.equal(geared, plain * 3); assert.equal(reduced, Math.round(geared * 0.5));
 });
 
-test('敏捷减伤：20 点以下不生效，110 敏减 10%，200 敏封顶 20%', () => {
+test('敏捷减伤：1 敏（木桩）不生效，半程 15%，250 敏封顶 30%', () => {
   const g = game(), S = g.Sim;
   const mk = (agility) => ({ agility, skills: {}, effects: {}, shellCount: 0, shellCharges: 0, mods: null, mech: [], side: 1 });
-  assert.equal(S.agilityDROf(mk(20)), 0);
-  assert.ok(Math.abs(S.agilityDROf(mk(110)) - 0.10) < 1e-9);
-  assert.ok(Math.abs(S.agilityDROf(mk(200)) - S.rules.agiDrCap) < 1e-9);
+  assert.equal(S.agilityDROf(mk(1)), 0);
+  assert.ok(Math.abs(S.agilityDROf(mk(126)) - 0.15) < 1e-3, '半程（126 敏）约 15%');
+  assert.equal(S.agilityDROf(mk(250)), S.rules.agiDrCap);
   assert.equal(S.agilityDROf(mk(1000)), S.rules.agiDrCap);
-  assert.equal(S.dmgReduce(mk(110), 100, {}).dmg, 90);
+  assert.equal(S.dmgReduce(mk(126), 100, {}).dmg, 85);
 });
 
 test('徒手攻击的权重：基准 100，工具再多也让它的份额不低于 5%', () => {
@@ -3219,6 +3225,13 @@ test('速度行动条：同一方最多连续行动 5 次', () => {
   assert.ok(seq.includes(1), '慢的一方也必须有机会出手');
   assert.equal(maxRun, 5, '速度大幅领先时应当正好连续 5 次，实际 ' + maxRun);
   assert.ok(seq.length > 10, '60 手行动上限内应正常打多轮，实际 ' + seq.length);
+});
+
+test('速度进行动条按 speedExp 压缩：2 倍速度换不到 2 倍出手', () => {
+  const g = game(), S = g.Sim;
+  const rate = (speed) => S.actionRateOf({ speed, level: 50 });
+  assert.ok(rate(200) / rate(100) < 1.5, '2 倍速度的攒条倍率必须明显低于 2：' + (rate(200) / rate(100)).toFixed(3));
+  assert.ok(rate(100) / rate(50) > 1.05, '速度仍然影响出手，不能压缩成常数');
 });
 
 test('闪避类藏品再叠也不会超过 55%', () => {

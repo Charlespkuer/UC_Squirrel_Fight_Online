@@ -18,6 +18,16 @@
   let current = null;
   // 只缓存随机页那一批，和 `current.roster`（各 tab 共用）分开。
   let randomCache = null;
+  // 天梯榜换页/切页回来先用上一份占位，再后台刷新；只缓存 30 秒且等级必须一致。
+  let ladderCache = null;
+  // 好友名单同理：切回来立刻上屏，名单在后台补；超过 8 秒或存档变过才重取。
+  // 存在模块级而不是 `current` 上：从主页点「好友」会整页重挂，缓存必须跨页存活。
+  const FRIEND_ROSTER_REFRESH_MS = 8 * 1000;
+  let friendRosterCache = null;
+  function clearFriendRoster() {
+    friendRosterCache = null;
+    if (current) current.onlineFriends = null;
+  }
   function onlineAccountId() {
     try { return (window.Net && Net.account && Net.account()) ? String(Net.account().accountId || '') : ''; } catch (e) { return ''; }
   }
@@ -1158,7 +1168,7 @@
             .then((r) => {
               if (current !== page) return;
               closeSub();
-              current.onlineFriends = null;
+              clearFriendRoster();
               showTab(page.tab || 'friends');
               if (window.UI && UI.toast) UI.toast('已让【' + ((r && r.name) || foe.name) + '】离开师门');
             })
@@ -1243,7 +1253,7 @@
     // 好友档（relation 0）第四颗是「收为徒弟」，不能也落到加好友接口。
     if (window.Online && Online.ready && action === 'add' && window.OnlineUI && relOf(foe) === REL.stranger) {
       if (!OnlineUI.identity(foe).player) { Online.toast('AI对手不能添加为玩家好友。'); return; }
-      OnlineUI.addFriendPage(foe, () => { closeSub(); if (current) { current.onlineFriends = null; showTab(current.tab); } });
+      OnlineUI.addFriendPage(foe, () => { closeSub(); clearFriendRoster(); if (current) showTab(current.tab); });
       return;
     }
     switch (action) {
@@ -1266,6 +1276,8 @@
         if (foe.dummy) { closeSub(); return; }
         if (window.Online && window.Online.ready) {
           if (!onlineTargetId(foe)) { Online.toast('AI好友不能收为徒弟，只能收真人玩家。'); return; }
+          // 好友页每行都带 kind='friend'；随机/天梯残留在好友 tab 的行仍是 random/rank，不能进收徒。
+          if (foe.kind !== 'friend') { Online.toast('只能收好友为徒，请先加对方为好友。'); return; }
           openRecruitConfirm(foe);
           return;
         }
@@ -1309,7 +1321,7 @@
             .then(() => {
               if (!current) return;
               closeSub();
-              current.onlineFriends = null;
+              clearFriendRoster();
               showTab(current.tab);
               if (window.UI && UI.toast) UI.toast('已退出师门');
             })
@@ -1400,7 +1412,7 @@
     }).catch(() => foe);
   }
   function replaceFoeRow(page, before, after) {
-    for (const list of [page.rows, page.roster, page.onlineFriends && page.onlineFriends.roster]) {
+    for (const list of [page.rows, page.roster, friendRosterCache && friendRosterCache.roster]) {
       if (!Array.isArray(list)) continue;
       const at = list.indexOf(before);
       if (at >= 0) list[at] = after;
@@ -1755,8 +1767,6 @@
     // ⚠ `keepPage`：翻页箭头自己调 `showTab` 时不能再归位 —— 以前这里无条件写回 1，
     if (!keepPage) {
       current.page = 1;
-      // 每次进好友页都重取名单：好友/师徒可能刚换过装备，缓存只留给翻页。
-      if (key === 'friends') current.onlineFriends = null;
     }
     // 战斗正在播的时候不要重画（见 `goArenaPage` 的注释）：这一页的显示树是给
     if (inBattle()) { current.tab = key; return; }
@@ -1813,12 +1823,16 @@
     }
     hint.textContent = text;
   }
-  function loadOnlineRoster(kind, accept) {
+  function loadOnlineRoster(kind, accept, opts) {
     const page = current;
     if (!page || page.onlineLoading === kind) return;
+    const quiet = !!(opts && opts.quiet);
     const request = page.onlineRequest = (page.onlineRequest || 0) + 1;
-    page.onlineLoading = kind; page.roster = []; page.refreshRow = kind === 'random';
-    fillRows(page.view, [], 0, 0); showUserPic(page.view, null); onlineHint(page.view, '正在读取服务器对手…');
+    page.onlineLoading = kind;
+    if (!quiet) {
+      page.roster = []; page.refreshRow = kind === 'random';
+      fillRows(page.view, [], 0, 0); showUserPic(page.view, null); onlineHint(page.view, '正在读取服务器对手…');
+    }
     if (kind === 'random') {
       const refresh = clipOf(page.view, 'f4');
       wireClickable(refresh, { hover: 2, press: 2, idle: 1, onFire: () => { if (!page.onlineLoading) showRandom(); } });
@@ -1917,7 +1931,7 @@
   }
 
   function openAddFriendPage() {
-    if (window.Online && Online.ready && window.OnlineUI) { OnlineUI.addFriendPage(null, () => { if (current) { current.onlineFriends = null; showTab('friends'); } }); return; }
+    if (window.Online && Online.ready && window.OnlineUI) { OnlineUI.addFriendPage(null, () => { clearFriendRoster(); if (current) showTab('friends'); }); return; }
     const C = window.UI && UI.classic;
     if (!C || !C.modal) { if (window.UI && UI.toast) UI.toast('添加好友界面不可用'); return; }
     let cands = rollAddFriendCandidates(), selected = 0, added = new Set();
@@ -1966,13 +1980,8 @@
   }
 
 
-  function showFriends() {
+  function paintFriendRoster(all) {
     const view = current.view;
-    const online = window.Online && Online.ready && window.OnlineUI;
-    if (online && (!current.onlineFriends || current.onlineFriends.state !== S())) {
-      loadOnlineRoster('friends', data => { current.onlineFriends = { state: S(), roster: data.opponents, kin: data.kin || null }; }); return;
-    }
-    const all = online ? onlineFriendRoster(current.onlineFriends.roster, current.onlineFriends.kin) : friendRoster();
     const pages = Math.max(1, Math.ceil(all.length / 4));
     current.page = Math.min(Math.max(1, current.page || 1), pages);
     const slice = all.slice((current.page - 1) * 4, current.page * 4);
@@ -1995,6 +2004,30 @@
     if (!all.length) setText(clipOf(view, 'page'), '1/1');
     showUserPic(view, slice[current.sel || 0] || null);
     onlineHint(view, all.length ? '玩家为异步快照；AI 好友可免费切磋。' : '还没有好友，可输入玩家 ID 或随机添加 AI。');
+  }
+  function showFriends() {
+    const online = window.Online && Online.ready && window.OnlineUI;
+    if (online) {
+      const account = onlineAccountId();
+      if (friendRosterCache && String(friendRosterCache.account || '') !== String(account || '')) friendRosterCache = null;
+      if (current) current.onlineFriends = friendRosterCache;
+      const cache = friendRosterCache;
+      if (cache && Array.isArray(cache.roster)) {
+        paintFriendRoster(onlineFriendRoster(cache.roster, cache.kin));
+        const stale = Date.now() - (Number(cache.at) || 0) > FRIEND_ROSTER_REFRESH_MS || cache.state !== S();
+        if (stale) loadOnlineRoster('friends', (data) => {
+          friendRosterCache = { account: account, state: S(), roster: data.opponents, kin: data.kin || null, at: Date.now() };
+          if (current) current.onlineFriends = friendRosterCache;
+        }, { quiet: true });
+        return;
+      }
+      loadOnlineRoster('friends', (data) => {
+        friendRosterCache = { account: account, state: S(), roster: data.opponents, kin: data.kin || null, at: Date.now() };
+        if (current) current.onlineFriends = friendRosterCache;
+      });
+      return;
+    }
+    paintFriendRoster(friendRoster());
   }
 
   // 关卡（`showGate` :1015 / `MainMovie.as:23267`）—— 一级页 = fubenSub 的 3 个门
@@ -2308,8 +2341,8 @@
       }
     }
   }
-  function selfCupToday() {
-    try { return Math.max(0, Number(State.goldCupToday && State.goldCupToday()) || 0); } catch (e) { return 0; }
+  function selfArenaCupToday() {
+    try { return Math.max(0, Number(State.arenaCupToday && State.arenaCupToday()) || 0); } catch (e) { return 0; }
   }
   function paintArenaSeats(view, run) {
     const s = S() || {};
@@ -2336,9 +2369,9 @@
       if (!who) { setVisible(cup, false); continue; }
       setArenaSeatName(clipOf(card, 'name'), who.name);
       setText(clipOf(card, 'level'), String(who.level == null ? '' : who.level));
-      // 今日金杯：本人读账号当日累计；AI 补位统一 0。真人快照对手只能由服务端带 `cupToday`，
-      // 不能拿快照里的旧值。
-      const cups = i === 0 ? selfCupToday() : Math.max(0, Math.floor(Number(who.cupToday) || 0));
+      // 今日金杯（原版 `goalCount`）= 今天在这四个座位的竞技场里夺冠得到的杯子（冠军 +1）。
+      // 本人读账号当日累计；AI 补位统一 0。真人快照对手只能由服务端带 `arenaCupToday`，不能拿快照旧值。
+      const cups = i === 0 ? selfArenaCupToday() : Math.max(0, Math.floor(Number(who.arenaCupToday) || 0));
       if (!cup) continue;
       stopAt(cup, 1);
       setVisible(cup, true);
@@ -2468,11 +2501,25 @@
   function startLadderMatch() {
     const CE = window.ClassicExtras;
     if (!CE) { arenaGo('ladder'); return; }
+    ladderCache = null;
     // 原版 `alertRank`（:23720）→ 二次确认 → `rank()` → `beforeRank`（:18149）的
     // 「战斗准备中」3 秒 → 开打；`startRankFlow` 就是这套流程的经典页入口。
     if (CE.startRankFlow) CE.startRankFlow(() => goArenaPage('menu'));
     else if (CE.rankMatch) CE.rankMatch(() => { arenaGo('menu'); });
     else arenaGo('ladder');
+  }
+  // 天梯奖励弹窗：确认键用原版 4399「确定」（tags-social-dialog），不再自绘 DOM 键。
+  // 素材或公共件缺失时 `mountVectorButton` 自己会退回同文案按钮，弹窗不会变成没键可点。
+  function rankAwardDialog(body) {
+    const C = window.UI && UI.classic;
+    if (!C || !C.modal) return null;
+    const vector = typeof C.mountVectorButton === 'function';
+    const m = C.modal('天梯奖励', body, vector ? [] : [{ label: '确定', cls: 'gold' }], { small: true });
+    if (vector && m && m.element) {
+      const footer = m.element.querySelector('.modal-buttons');
+      if (footer) C.mountVectorButton(footer, '4399', '确定', () => m.close(), 'gold');
+    }
+    return m;
   }
   // 天梯榜（`showRank` → 帧 8）：本赛区榜。
   // 原版 `rankList.do` 不带参数，服务端按玩家等级回 `type`（1..6 帧 = 30-39 … 80-90）；
@@ -2484,6 +2531,10 @@
     setVisible(clipOf(view, 'left'), false);
     setVisible(clipOf(view, 'right'), false);
     const online = !!(window.Online && window.Online.ready);
+    const account = onlineAccountId();
+    const cache = (online && ladderCache && Date.now() - ladderCache.at < 30000
+      && String(ladderCache.account || '') === String(account || '')
+      && Number(ladderCache.level) === Number(s.level)) ? ladderCache : null;
     let ladderTop = [], ladderPage = 0, ladderScore = s.integral, ladderRank = 0;
 
     const paintRows = (rows, myScore, myRank) => {
@@ -2526,9 +2577,12 @@
     if (!online) {
       localRows();
     } else {
-      // 先摆一份占位，等服务器回来再填；请求返回时页面可能已经切走，必须核对身份。
-      paintRows([], s.integral, 0);
-      let awardState = null;
+      // 有缓存先摆上一份，请求回来再覆盖；请求返回时页面可能已经切走，必须核对身份。
+      let awardState = cache ? cache.award : null;
+      if (cache) {
+        if (cache.frame > 0) stopAt(clipOf(view, 'type'), cache.frame);
+        renderRows(cache.top, cache.score, cache.rank);
+      } else paintRows([], s.integral, 0);
 
       const showAwardNotice = (info) => {
         const C = window.UI && UI.classic;
@@ -2550,20 +2604,26 @@
             ? '按上周日 23:59 的最终排名结算（下周一 0 点换周）；赛区前30名、且至少超过一个人机，可领取 50 金杯。'
             : '每周一 0 点积分减半（人机回到 300 分）；赛区前30名、且至少超过一个人机，才能领取 50 金杯。') + '</p>' +
           '</div>';
-        C.modal('天梯奖励', body, [{ label: '知道了', cls: 'gold' }], { small: true });
+        rankAwardDialog(body);
       };
-      const load = () => Promise.all([
-        Online.get('/api/ladder?limit=200'),
-        Online.get('/api/ladder/award'),
-      ]).then(([ladder, award]) => {
+      // `/api/ladder` 已经带回 `award`：首屏不再多发一条重复的领奖状态请求。
+      // 只有老服务端缺这个字段时才回补一次，且不阻塞榜单上屏。
+      const load = () => Online.get('/api/ladder?limit=200').then((ladder) => {
         if (!current || current.view !== view) return null;
-        awardState = award;
-        ladderPage = 0;
         // 赛区帧由服务端给（1..6 = 30-39 … 80-90）；不在赛区（<30 级）时保持第 1 帧。
         const frame = Math.max(0, Math.min(6, Number(ladder && ladder.frame) || 0));
         if (frame > 0) stopAt(clipOf(view, 'type'), frame);
-        renderRows(ladder.top || [], ladder.me && ladder.me.score, ladder.me && ladder.me.rank);
-        return { ladder, award };
+        const top = ladder.top || [];
+        const score = ladder.me && ladder.me.score;
+        const rank = ladder.me && ladder.me.rank;
+        ladderCache = { top, score, rank, frame, award: ladder.award || null, at: Date.now(), level: Number(s.level) || 0, account: account };
+        awardState = ladderCache.award;
+        renderRows(top, score, rank);
+        if (ladderCache.award) return { ladder, award: ladderCache.award };
+        return Online.get('/api/ladder/award').then((award) => {
+          if (current && current.view === view) { awardState = award; ladderCache.award = award; }
+          return { ladder, award };
+        }, () => ({ ladder, award: null }));
       }).catch((e) => {
         if (current && current.view === view && window.UI && UI.toast) UI.toast(window.Online.errText(e));
         return null;
@@ -2625,7 +2685,7 @@
               : '<p class="rank-claim-note">' + esc(r.msg) + '</p>') +
             '<p class="small-label">' + (r.ok ? '每周一 0 点积分减半；赛区前30名且超过至少一个人机即可领取50金杯。' : '每周结算后赛区前30名可领取一次（需要先超过一个人机）。') + '</p>' +
             '</div>';
-          C.modal('天梯奖励', body, [{ label: '知道了', cls: 'gold' }], { small: true });
+          rankAwardDialog(body);
         },
       });
     }
@@ -2971,7 +3031,7 @@
       current.gateSel = n;
       guard(openGate(n));
     },
-    resetRoster: () => { randomCache = null; if (current) { current.roster = null; current.sel = 0; current.arenaPage = 'home'; } },
+    resetRoster: () => { randomCache = null; ladderCache = null; if (current) { current.roster = null; current.sel = 0; current.arenaPage = 'home'; } },
     // 打开某一行的动作菜单（探针 / 外部入口用；等价于点那一行）。
     openFriendMenu: (i) => openFriendMenu(Number(i) || 0),
     openAddFriendPage,

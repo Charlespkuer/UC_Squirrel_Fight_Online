@@ -25,7 +25,8 @@ function profileOf(account) {
     week,
     rating: {
       score: Number(rating.score), wins: Number(rating.wins), losses: Number(rating.losses),
-      streak: Number(rating.streak), rank: settlement.rankOf(account.id),
+      // 天梯积分以 ratings 为唯一真值：`rating` 就是刚读到的本周行，不再二次查询。
+      streak: Number(rating.streak), rank: settlement.rankOf(account.id, rating, save ? Number(save.level) : null),
     },
     hidden: visibility.isHidden(account.id),
     hiddenUntil: visibility.hiddenUntil(account.id),

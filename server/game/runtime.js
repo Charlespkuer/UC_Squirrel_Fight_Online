@@ -241,19 +241,41 @@ function withState(raw, fn, opts) {
   }
   const value = fn({ api: State, save: State.state() });
 
-  const text = State.exportPayload();
+  // `savePayload()` 直接给可序列化对象：省掉 exportPayload 的 stringify 再立刻 parse 回来
+  // （每个写请求一次，存档越大越贵）。旧内核没有这个导出时退回字符串往返。
   let payload = null;
-  try { payload = normalizeSlotPayload(JSON.parse(text)); } catch (_) { payload = null; }
+  try {
+    payload = normalizeSlotPayload(typeof State.savePayload === 'function' ? State.savePayload() : JSON.parse(State.exportPayload()));
+  } catch (_) { payload = null; }
   return { value, payload };
 }
 
+// 只读：装填存档 → 执行 fn → 返回 fn 的结果，不 export / 不 parse 回来。
+// 只取面板字段（师徒、对手预览）的调用方用这个，别走 withState 的写回路径。
+function withStateRead(raw, fn, opts) {
+  const State = globalThis.State;
+  const slot = normalizeSlotPayload(raw);
+  globalThis.localStorage.setItem('ssdz_ui_mode', SLOT_MODE);
+  if (slot && Object.keys(slot).length) {
+    const ok = State.restorePayload(slot, opts && opts.deferSettle ? { deferSettle: true } : undefined);
+    if (!ok) throw badSave('存档结构不合法');
+  } else {
+    State.newGame('小松鼠', { uiMode: SLOT_MODE });
+  }
+  return fn({ api: State, save: State.state() });
+}
+
 // 规范化一个槽位：删掉双槽字段，uiMode 固定 classic。
+// ⚠ 用「跳过键」而不是 assign 后再 delete：delete 会把对象打成字典模式，
+// 紧接着的 JSON.stringify 明显变慢（每次写存档都要走这条路）。
+const DUAL_KEYS = new Set(['__dualMode', '__dualOther', '__dualSaves']);
 function normalizeSlotPayload(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const out = Object.assign({}, raw);
-  delete out.__dualMode;
-  delete out.__dualOther;
-  delete out.__dualSaves;
+  const out = {};
+  for (const key of Object.keys(raw)) {
+    if (DUAL_KEYS.has(key)) continue;
+    out[key] = raw[key];
+  }
   out.settings = Object.assign({}, out.settings || {}, { uiMode: SLOT_MODE });
   return out;
 }
@@ -264,4 +286,4 @@ function badSave(msg) {
   return e;
 }
 
-module.exports = { boot, withState, normalizeSlotPayload, GAME_ROOT, SLOT_MODE, badSave };
+module.exports = { boot, withState, withStateRead, normalizeSlotPayload, GAME_ROOT, SLOT_MODE, badSave };

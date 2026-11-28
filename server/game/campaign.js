@@ -208,8 +208,10 @@ function freeSeat(roomId) {
 }
 
 function activeRoom(accountId) {
+  // 从成员表驱动（ix_campaign_members_account），只碰这个账号的 1~2 行；
+  // 反过来以 rooms 驱动会把该 status 的全部房间扫一遍再逐个探测成员。
   return db.get(
-    `SELECT r.* FROM campaign_rooms r JOIN campaign_members m ON m.room_id = r.id
+    `SELECT r.* FROM campaign_members m JOIN campaign_rooms r ON r.id = m.room_id
       WHERE m.account_id = ? AND (r.status = 'waiting' OR (r.status IN ('done','failed') AND m.acked = 0))
       ORDER BY r.created_at DESC LIMIT 1`,
     Number(accountId)
@@ -412,17 +414,20 @@ function applyPrize(S, save, prize, seed, index) {
 
 function failRoom(room, reason) {
   if (!room || String(room.status) !== 'waiting') return null;
-  db.run(
-    "UPDATE campaign_rooms SET status = 'failed', failed_reason = ?, closed_at = ? WHERE id = ? AND status = 'waiting'",
-    String(reason || 'timeout'), now(), String(room.id)
-  );
   const text = reason === 'timeout'
     ? '征战匹配超时（5 分钟），没有凑齐 4 名真人；本局未扣除征战令和每日次数。'
     : '征战队伍已解散，本局未扣除征战令和每日次数。';
-  for (const m of membersOf(room.id)) {
-    if (Number(m.acked)) continue;
-    message(m.account_id, text, { code: String(room.code), reason: String(reason || 'timeout') });
-  }
+  // 状态与通知同一次提交：否则中途失败会留下「房已 failed、部分人没收到」的半截状态。
+  db.tx(() => {
+    db.run(
+      "UPDATE campaign_rooms SET status = 'failed', failed_reason = ?, closed_at = ? WHERE id = ? AND status = 'waiting'",
+      String(reason || 'timeout'), now(), String(room.id)
+    );
+    for (const m of membersOf(room.id)) {
+      if (Number(m.acked)) continue;
+      message(m.account_id, text, { code: String(room.code), reason: String(reason || 'timeout') });
+    }
+  });
   return roomOf(room.id);
 }
 
@@ -732,6 +737,8 @@ function resolveRoomTx(roomId) {
 // 20 个满员房会让单个 GET 阻塞上百毫秒。每轮最多结算 2 个，调用方自己的房间优先，
 // 其余留给下一次 tick（resolveRoom 只认 status='waiting'，重复调用幂等）。
 const PUMP_SETTLE_MAX = 2;
+// 同一满员房反复结算失败（坏存档等）不能无限重试，记数到 3 判失败。
+const roomFailures = new Map();
 
 function pump(opts) {
   reap(false);
@@ -759,8 +766,34 @@ function pump(opts) {
     if (at > 0) ready.unshift(ready.splice(at, 1)[0]);
   }
   for (const room of ready.slice(0, PUMP_SETTLE_MAX)) {
-    try { resolveRoom(room.id); } catch (e) {}
+    const key = String(room.id);
+    try {
+      resolveRoom(key);
+      roomFailures.delete(key);
+    } catch (e) {
+      const n = (roomFailures.get(key) || 0) + 1;
+      if (roomFailures.size > 500) roomFailures.clear();
+      roomFailures.set(key, n);
+      console.warn('[campaign] 房间结算失败 ' + key + '（第 ' + n + ' 次）：' + ((e && e.message) || e));
+      // 连坏三次就判失败：否则这个满员房每 5 秒被整房重算一次，永不结束。
+      if (n >= 3) { roomFailures.delete(key); try { failRoom(room, 'error'); } catch (_) {} }
+    }
   }
+}
+
+// 结算完全靠 GET 触发时，谁先轮询谁承担整房结算（几十毫秒）。定时器做同一件幂等的事，
+// 让轮询只负责读；触发口径不变（join/enqueue/current 仍会调 pump）。
+let pumpTimer = null;
+function startScheduler() {
+  if (pumpTimer) return pumpTimer;
+  pumpTimer = setInterval(() => { try { pump({}); } catch (_) {} }, 1000);
+  if (typeof pumpTimer.unref === 'function') pumpTimer.unref();
+  return pumpTimer;
+}
+function stopScheduler() {
+  if (!pumpTimer) return;
+  clearInterval(pumpTimer);
+  pumpTimer = null;
 }
 
 let lastReapAt = 0;
@@ -849,6 +882,11 @@ function join({ accountId, code }) {
   if (memberRow(room.id, accountId)) return { ok: true, already: true, room: roomView(room, accountId) };
   ensureEligible(accountId, room.boss_id);
   db.tx(() => {
+    // 已经在别的等待房里就不能再进这一间：否则两间都能结算，等于一次报名扣两次票 / 领两份奖。
+    const active = activeRoom(accountId);
+    if (active && String(active.id) !== String(room.id)) {
+      const e = new Error('已经报名其他征战房间，请先离开再进新房间'); e.code = 'CONFLICT'; throw e;
+    }
     if (countReal(room.id) >= partySize()) { const e = new Error('房间已满'); e.code = 'CONFLICT'; throw e; }
     db.run(
       'INSERT INTO campaign_members (room_id, account_id, seat, snapshot_id, joined_at, missed) VALUES (?,?,?,?,?,0)',
@@ -875,5 +913,5 @@ function dailyStatus(accountId) {
 
 module.exports = {
   create, join, leave, list, status, enqueue, randomMatch, current, runRoom, ack, reap, pump,
-  roomView, roomOf, dailyStatus, resolveRoom, failRoom, applyPrize,
+  roomView, roomOf, dailyStatus, resolveRoom, failRoom, applyPrize, startScheduler, stopScheduler,
 };

@@ -47,19 +47,27 @@ function seedWords() {
 
 function seedFounder() {
   const hasAdmin = !!db.get('SELECT 1 AS x FROM forum_admins LIMIT 1');
-  if (hasAdmin && db.metaGet('forum.founder.seeded') === '1') return;
+  if (hasAdmin && db.metaGet('forum.founder.seeded') === '1') return true;
   for (const playerId of config.forumFounderPlayerIds) {
     const row = db.get('SELECT account_id FROM player_ids WHERE player_id = ?', Number(playerId));
     if (!row) continue;
     db.run('INSERT OR IGNORE INTO forum_admins (account_id,role,created_at,created_by,note) VALUES (?,?,?,?,?)',
       Number(row.account_id), 'admin', Date.now(), 0, '创始管理员（玩家编号 ' + playerId + '）');
     db.metaSet('forum.founder.seeded', '1');
-    return;
+    return true;
   }
+  // 创始号还没注册：不能记成已完成，否则首个注册的 100000 永远拿不到管理员。
+  return false;
 }
 
+// 两个种子各自只跑成功一次：seedWords 一次就永久生效；seedFounder 要等创始号真的存在。
+let wordsReady = false;
+let founderReady = false;
 function bootstrap() {
-  try { seedWords(); seedFounder(); } catch (e) {
+  try {
+    if (!wordsReady) { seedWords(); wordsReady = true; }
+    if (!founderReady) founderReady = seedFounder();
+  } catch (e) {
     console.warn('[forum] bootstrap failed:', e && e.message);
   }
 }
@@ -215,7 +223,9 @@ function consumeQuota(accountId, kind) {
 
 function stats(force) {
   const now = Date.now();
-  if (!force && statsCache.value && now - statsCache.at < 2000) return statsCache.value;
+  // 写路径（发帖/删帖/回复）都显式 invalidateStats，这里的 TTL 只防读放大：
+  // 容量统计要全表 SUM(LENGTH(body))，2 秒一次等于每两秒把全站正文扫一遍（万帖级 ≈ 6 ms 同步阻塞）。
+  if (!force && statsCache.value && now - statsCache.at < 60000) return statsCache.value;
   const posts = db.get(`SELECT COUNT(*) AS n,
       COALESCE(SUM(LENGTH(CAST(title AS BLOB)) + LENGTH(CAST(body AS BLOB))),0) AS bytes,
       MIN(created_at) AS oldest, MAX(created_at) AS newest FROM forum_posts`);

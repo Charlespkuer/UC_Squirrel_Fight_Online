@@ -94,6 +94,10 @@ function templateList() {
 // 重新读取模板（改了 `TEMPLATES` / 开关后让缓存生效；正常运行时模板是静态常量，不必调用）。
 function reload() { prepared = null; return templateList(); }
 
+// 进程内「本进程已确认投递」：模板是常量，同一账号同一模板投过一次就不必每次轮询再查 messages。
+// `deliver()` 被红点轮询（每 60 秒/人）和每次拉整档调用，这里省掉的是一条 SELECT。
+const confirmed = new Set();
+
 // 给一个账号补投所有「已启用且等级已到」的模板邮件（幂等）。
 // @param {number} level 当前等级（调用方已从存档/存档行读到，省一次查询）
 function deliver(accountId, level) {
@@ -111,13 +115,17 @@ function deliver(accountId, level) {
       if (Number(account.created_at) < tpl.registeredAfter) continue;
     }
     const messageId = 'servermail:' + tpl.id + ':' + id;
-
-    if (db.get('SELECT 1 AS hit FROM messages WHERE id = ?', messageId)) continue;
+    if (confirmed.has(messageId)) continue;
+    if (db.get('SELECT 1 AS hit FROM messages WHERE id = ?', messageId)) {
+      if (confirmed.size < 50000) confirmed.add(messageId);
+      continue;
+    }
     const res = db.run(
       'INSERT OR IGNORE INTO messages (id, account_id, kind, text, payload, created_at) VALUES (?,?,?,?,?,?)',
       messageId, id, tpl.kind, tpl.message, JSON.stringify(tpl.payload), Date.now()
     );
     inserted += Number((res && res.changes) || 0);
+    if (confirmed.size < 50000) confirmed.add(messageId);
   }
   return inserted;
 }

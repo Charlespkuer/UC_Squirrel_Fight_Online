@@ -667,12 +667,13 @@
       if (typeof document !== 'undefined' && document.hidden) return;
       try {
         if (window.SfRender && SfRender.prefetch) {
-          // 战斗核心包优先：页面素材等它下完再预热，别让 status/challenge 和核心包抢带宽。
-          const core = (window.SfFight && SfFight.preloadCore) ? SfFight.preloadCore() : Promise.resolve();
-          Promise.resolve(core).then(() => {
-            if (gen !== pageWarmGen) return;
-            SfRender.prefetch(['tags-status.json', 'tags-challenge.json', 'tags-home.json', 'tags-homeland.json']);
-          }, () => {});
+          // 页面素材与战斗核心包同时起步：核心包 ~589 KB，等它下完再预热页面会让
+          // 进主页后的第一次「状态 / 挑战」多等几秒。两者都是后台预热，不挡界面。
+          SfRender.prefetch(['tags-status.json', 'tags-challenge.json', 'tags-home.json', 'tags-homeland.json']);
+          if (window.SfFight && SfFight.preloadCore) {
+            const core = SfFight.preloadCore();
+            if (core && core.catch) core.catch(() => {});
+          }
         }
       } catch (e) {}
     };
@@ -698,6 +699,31 @@
     try { if (window.SfRender && SfRender.cancelPrefetch) SfRender.cancelPrefetch(); } catch (e) {}
   }
 
+  // 动画帧表 1.86 MB（gzip 后 ~257 KB）：进游戏即预热会和首页 SVG 素材抢带宽，
+  // 首页落定后再空闲加载；真正开战时 `Engine.anim()` 仍会自己等同一个 Promise。
+  let animWarmGen = 0;
+  function scheduleAnimWarm() {
+    const gen = ++animWarmGen;
+    const conn = (window.navigator && navigator.connection) || {};
+    if (conn.saveData || /(^|-)2g/.test(String(conn.effectiveType || ''))) return false;
+    let tries = 0;
+    const run = () => {
+      if (gen !== animWarmGen) return;
+      if (typeof document !== 'undefined' && document.hidden) return;
+      const box = document.querySelector('#ui .ssfight-home');
+      const shown = box && box.style.visibility !== 'hidden' && !!box.querySelector('svg');
+      if (!shown && !document.querySelector('#ui .classic-home:not(.ssfight-home)')) {
+        if (tries++ < 40) { setTimeout(run, 250); return; }
+      }
+      const load = () => { if (gen === animWarmGen) { try { Engine.warmAnim(); } catch (e) {} } };
+      if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(load, { timeout: 8000 });
+      else setTimeout(load, 1500);
+    };
+    // 排在页面素材预热之后：首点「状态 / 挑战」比首场战斗更早发生。
+    setTimeout(run, 1500);
+    return true;
+  }
+
   async function boot() {
     const setStatus = (m) => {
       try { document.title = m; } catch (e) {}
@@ -712,6 +738,13 @@
     playBgm('main');
     drawLoading(0.05, '松鼠大战 · 怀旧复刻版');
     setStatus('加载背景…');
+
+    // 先把 /api/meta 探出去：和首页底图/进度条并行，启动少一个串行 RTT。
+    if (window.__SSDZ_ONLINE__ && window.Online && Online.bootMeta) Online.bootMeta().catch(() => {});
+    // 会话/整档也不依赖底图与进度条：与素材并行，登录成功可以直接进主页。
+    const resumeTask = (window.__SSDZ_ONLINE__ && window.Online)
+      ? Online.resume().then((profile) => ({ profile }), (error) => ({ error }))
+      : null;
 
     const assetUrl = (p) => (window.SfRender && SfRender.assetUrl) ? SfRender.assetUrl(p) : p;
     const [mainImg, ssfImg] = await Promise.all([
@@ -745,19 +778,21 @@
     drawLoading(0.95, '准备完成');
     setStatus(window.__SSDZ_ONLINE__ ? '松鼠大战 Online' : '松鼠大战 · 怀旧单机版');
     UI.installFavicon();
-    await new Promise((r) => setTimeout(r, 150));
+    // 联机版的 95% 已经在等脚本下载时停过；这里再硬等只会推迟进主页。
+    if (!window.__SSDZ_ONLINE__) await new Promise((r) => setTimeout(r, 150));
     if (window.__SSDZ_ONLINE__) {
 // Installed clients have local assets, but their progress comes only from the API.
       bootDone = true;
       const note = document.getElementById('boot-note');
       if (note) note.style.display = 'none';
-      try {
-        const profile = await Online.resume();
-        if (profile) await OnlineUI.enterGame();
-        else await OnlineUI.showLogin('login');
-      } catch (e) {
+      const resumed = await resumeTask;
+      if (resumed.error) {
         await OnlineUI.showLogin('login');
-        if (UI.toast) UI.toast(Online.errText(e));
+        if (UI.toast) UI.toast(Online.errText(resumed.error));
+      } else if (resumed.profile) {
+        await OnlineUI.enterGame();
+      } else {
+        await OnlineUI.showLogin('login');
       }
       return;
     }
@@ -1188,6 +1223,7 @@
     scheduleBattleAssets();
     scheduleClassicFightCore();
     scheduleClassicPageWarm();
+    scheduleAnimWarm();
     if (window.SfGuide) { try { SfGuide.onHome(); } catch (e) { if (window.__errs) window.__errs.push('SfGuide home: ' + (e && e.message)); } }
   }
   // 恢复钩子：只有确实停在首页、且主界面循环已经退出时，才重新起一次 canvas 场景。
@@ -1527,7 +1563,7 @@
     isFullscreen: () => !!document.fullscreenElement,
 
     preloadBattleAssets, pinBattleAssets, battleAssetsReady: () => !!battleAssetsPromise,
-    cancelPageWarm,
+    cancelPageWarm, scheduleAnimWarm,
 
     SUPPORT, openExternal, openSupport };
 

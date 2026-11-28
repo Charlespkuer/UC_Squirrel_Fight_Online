@@ -73,6 +73,13 @@ async function setStats(token, accountId, stats) {
   await call('POST', '/api/snapshot/sync', {}, token);
 }
 
+/** 好友：一方发申请、另一方回加即互加成功（与玩家在好友页的操作同路径）。 */
+async function befriend(a, b) {
+  const aId = a.profile.account.accountId, bId = b.profile.account.accountId;
+  await call('POST', '/api/friends', { accountId: bId }, a.token);
+  await call('POST', '/api/friends', { accountId: aId }, b.token);
+}
+
 async function main() {
   const server = await start(0);
   running = server.server;
@@ -110,11 +117,21 @@ async function main() {
   assert.equal((await ap(A.token)).master, null);
   await expectError(() => call('POST', '/api/apprentice/leave', { rev: afterLeave.rev }, A.token), 409, '没有师父时出师');
 
-  /* 3. 收真人徒弟：丙先收乙（乙没有师父，直接打乙本人）；甲再收乙时要先打乙的师父丙。 */
+  /* 3. 收真人徒弟：只对好友开放；丙先收乙（乙没有师父，直接打乙本人），甲再收乙时要先打乙的师父丙。 */
   await levelUp(C.token, idC, 60, 0);
   await setStats(C.token, idC, { power: 500, agility: 50, speed: 50, hp: 255 });
   await levelUp(B.token, idB, 20, 0);
   await levelUp(A.token, idA, 20, 0);
+  /* 非好友的收徒战在扣费与开打之前被拒：不写存档、不扣金松果/体力、不建师徒关系。 */
+  const stNoFriend = await state(C.token);
+  await expectError(() => call('POST', '/api/apprentice/recruit', { targetAccountId: idB, rev: stNoFriend.rev }, C.token),
+    403, '非好友不能发起收徒战斗');
+  const stNoFriendAfter = await state(C.token);
+  assert.equal(stNoFriendAfter.rev, stNoFriend.rev, '被拒的收徒不写存档');
+  assert.equal(stNoFriendAfter.save.goldPoint, stNoFriend.save.goldPoint, '被拒的收徒不扣金松果');
+  assert.equal(stNoFriendAfter.save.energy, stNoFriend.save.energy, '被拒的收徒不扣体力');
+  assert.equal((await state(B.token)).save.master, null, '被拒的收徒不建立师徒关系');
+  await befriend(C, B);
   const stC = await state(C.token);
   const cRecruit = await call('POST', '/api/apprentice/recruit', { targetAccountId: idB, rev: stC.rev }, C.token);
   assert.equal(cRecruit.ok, true);
@@ -131,7 +148,8 @@ async function main() {
   assert.equal(refreshed.master && refreshed.master.level, 55, '刷新接口应返回师父当前等级');
   assert.equal((await state(B.token)).save.master.level, 55, '徒弟存档的师父等级要立即更新');
 
-  /* 候选列表要能看到「有师父的乙」，并标出要先打丙。 */
+  /* 候选列表只列好友：甲与乙成为好友后，才能在候选里看到「有师父的乙」并标出要先打丙。 */
+  await befriend(A, B);
   const candsA = await cands(A.token);
   const bCand = candsA.prentices.find((p) => p.accountId === idB);
   assert.ok(bCand, '有师父的乙也应出现在可收服候选里');
@@ -335,7 +353,7 @@ async function main() {
   assert.equal(listC.oiling.count, 1, '新师父收到这条加油');
   assert.equal((await ap(A.token)).oiling.count, 0, '旧师父失去这条加油');
 
-  console.log('PASS 联机师徒：拜师人机 / 打师父收徒 / 真人日供 10%+10% 且每人每日上限 1000+300 / 逐出 / 出师 / 徒弟加油 5% / 高等级徒弟关卡先上阵');
+  console.log('PASS 联机师徒：仅好友可收徒 / 拜师人机 / 打师父收徒 / 真人日供 10%+10% 且每人每日上限 1000+300 / 逐出 / 出师 / 徒弟加油 5% / 高等级徒弟关卡先上阵');
 }
 
 main().then(() => { cleanup(); }, (e) => { console.error(e); cleanup(); process.exitCode = 1; });

@@ -52,7 +52,14 @@ function sweep(nowMs) {
       combatCut
     ).changes || 0);
     // 其余消息（含未读）统一按 messageRetentionDays 删除，不再单独延长到一年。
-    changes += Number(db.run('DELETE FROM messages WHERE created_at < ?', messageCut).changes || 0);
+    // ⚠ 服务端模板邮件 / 全服公告不能按保留期删：`servermail.deliver()` 的幂等键就是这行 id，
+    // 领取状态也只在它的 payload 里 —— 删掉后下一次轮询会重新投一封可领取的邮件（重复发奖）。
+    changes += Number(db.run(
+      `DELETE FROM messages WHERE created_at < ?
+         AND id NOT LIKE 'servermail:%' AND id NOT LIKE 'broadcast:%'
+         AND kind NOT IN ('welcome', 'opening_gift', 'announcement')`,
+      messageCut
+    ).changes || 0);
 
     changes += Number(db.run('DELETE FROM daily_counts WHERE date < ?', dailyCut).changes || 0);
 

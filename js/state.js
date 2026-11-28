@@ -216,8 +216,10 @@
     next.energy = Math.min(ENERGY_HARD_CAP, next.energy);
     next.integral = next.integral == null ? null : integer(next.integral, 0);
     next.rankCupClaimWeek = typeof raw.rankCupClaimWeek === 'string' ? raw.rankCupClaimWeek : '';
-    next.goldCupToday = Math.max(0, integer(next.goldCupToday, 0, 0));
-    next.goldCupDate = validLocalDate(next.goldCupDate) ? next.goldCupDate : '';
+    next.arenaCupToday = Math.max(0, integer(next.arenaCupToday, 0, 0));
+    next.arenaCupDate = validLocalDate(next.arenaCupDate) ? next.arenaCupDate : '';
+    delete next.goldCupToday;
+    delete next.goldCupDate;
 
     next.rankPurchases = (() => {
       const src = object(raw.rankPurchases) ? raw.rankPurchases : {};
@@ -745,10 +747,13 @@
     return slot;
   }
   function stripDualFields(raw) {
-    const out = Object.assign({}, object(raw) ? raw : {});
-    delete out.__dualMode;
-    delete out.__dualOther;
-    delete out.__dualSaves;
+    // 跳过键而不是 copy 后 delete：delete 会把对象打成字典模式，后续读档/序列化都会变慢。
+    const src = object(raw) ? raw : {};
+    const out = {};
+    for (const key of Object.keys(src)) {
+      if (key === '__dualMode' || key === '__dualOther' || key === '__dualSaves') continue;
+      out[key] = src[key];
+    }
     return out;
   }
   function normalizeSlot(raw) {
@@ -858,10 +863,12 @@
     const mode = rememberUiMode();
     S.settings = normalizeSettings(S.settings);
     S.settings.uiMode = mode;
-    const out = Object.assign({}, S);
-    delete out.__dualMode;
-    delete out.__dualOther;
-    delete out.__dualSaves;
+    // 跳过双槽键而不是 copy 后 delete：delete 会把对象打成字典模式，紧接着的序列化会变慢。
+    const out = {};
+    for (const key of Object.keys(S)) {
+      if (key === '__dualMode' || key === '__dualOther' || key === '__dualSaves') continue;
+      out[key] = S[key];
+    }
     out.__dualMode = mode;
     if (otherSlot) {
       otherSlot.settings = normalizeSettings(otherSlot.settings);
@@ -4533,19 +4540,25 @@
     return n;
   }
 
-  // 金杯的当日累计（竞技场席位「今日金杯」）：只记进账，花掉不减。
+  // 竞技场席位「今日金杯」：只数当天竞技场冠军的进账（原版 `checkArena` 的 `goalCount`）。
+  // 天梯 / 周奖励 / 邮件金杯只走 `addGoldCup`，不进这个数，否则会和今日冠军次数对不上。
   // 跨天在读取/进账时按本地日期归零；字段随存档走，服务端与离线共用。
-  function goldCupToday() {
+  function arenaCupToday() {
     if (!S) return 0;
-    return S.goldCupDate === localDate() ? Math.max(0, integer(S.goldCupToday, 0, 0)) : 0;
+    return S.arenaCupDate === localDate() ? Math.max(0, integer(S.arenaCupToday, 0, 0)) : 0;
   }
   function addGoldCup(n) {
     const amount = Math.floor(Number(n) || 0);
     if (!S || !(amount > 0)) return 0;
     S.goldCup = Math.max(0, Number(S.goldCup) || 0) + amount;
+    return amount;
+  }
+  function awardArenaCup(n) {
+    const amount = addGoldCup(n);
+    if (!amount) return 0;
     const date = localDate();
-    if (S.goldCupDate !== date) { S.goldCupDate = date; S.goldCupToday = 0; }
-    S.goldCupToday = Math.max(0, integer(S.goldCupToday, 0) + amount);
+    if (S.arenaCupDate !== date) { S.arenaCupDate = date; S.arenaCupToday = 0; }
+    S.arenaCupToday = Math.max(0, integer(S.arenaCupToday, 0) + amount);
     return amount;
   }
 
@@ -6528,7 +6541,7 @@
   window.State = {
     saveKey: SAVE_KEY, uiModeKey: UI_MODE_KEY, testMode: !!testMode, rememberUiMode,
     save, load, newGame, state, switchMode, activeUiMode, hasModeSave, tickEnergy, energyCountdown,
-    fileProbe, fileLoad, fileWrite, fileWriteNow, fileInfo, storageMode, flushFileWrite, setSaveTransport, hasFileTransport, readFileRaw, importFileRaw, exportPayload, restorePayload, prepareImport, verifyImport, importFingerprint, syncFormatTime: fmtTime, markLocalFresh: () => { fileState.freshLocal = true; },
+    fileProbe, fileLoad, fileWrite, fileWriteNow, fileInfo, storageMode, flushFileWrite, setSaveTransport, hasFileTransport, readFileRaw, importFileRaw, exportPayload, savePayload, restorePayload, prepareImport, verifyImport, importFingerprint, syncFormatTime: fmtTime, markLocalFresh: () => { fileState.freshLocal = true; },
     hasLocalSave, localSaveMeta, fileLoadedThisBoot,
     // 调试所得账本：快照/记录/摘要/回收（系统页「调试所得」与 debug.js 用）。
     debugSnapshot, debugRecordDiff, debugForgetWS, debugLedgerSummary, clearDebugGains,
@@ -6585,7 +6598,7 @@
     genAI, randomAIName, fitAIName, clipAIName, AI_NAME_MAX,
     RANDOM_FOE_SCALE, stageProgress, setStageProgress, npcOf, highestStageId, stageRun, stageAccess, stageReward,
     beginStageBattle, finishStageBattle, interruptStageBattle, abandonStageRun, abandonArenaRun, stagePrentice, stagePrenticeFighter, stagePrenticeLost,
-    localDate, goldCupToday, addGoldCup,
+    localDate, arenaCupToday, addGoldCup, awardArenaCup,
     dailyStatus, dailyGiftExtra, challengeDailyCount, noteChallengeClear, refreshDaily: syncDailyStats, claimDaily, syncLotteryDay, lotteryDraw, recordBattle, battleHistory, recordWoodBattle,
     // 「消息」红点的记账（落存档，见 normalizeSave 里 msgSeenAt 那段注释）。
     msgSeenAt, markMessagesSeen,

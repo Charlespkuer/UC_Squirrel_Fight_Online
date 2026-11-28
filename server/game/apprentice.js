@@ -86,8 +86,8 @@ function liveFighterOfAccount(accountId, save) {
   const data = save || store.peek(accountId);
   if (!data) return fighterOfAccount(accountId);
   try {
-    const out = runtime.withState(data, () => fighterFromState({ useProps: false }));
-    return out && out.value ? out.value : fighterOfAccount(accountId);
+    // 只取面板：不要走 withState 的 export/parse（整档序列化，师徒页一次要算好几个）。
+    return runtime.withStateRead(data, () => fighterFromState({ useProps: false })) || fighterOfAccount(accountId);
   } catch (_) {
     return fighterOfAccount(accountId);
   }
@@ -305,6 +305,17 @@ function sameDevice(accountId, otherAccountId) {
   return hashes.some((hash) => !!db.get('SELECT 1 AS x FROM account_devices WHERE device_hash = ? AND account_id = ?', hash, b));
 }
 
+// 收徒只在好友之间开放：`friendships` 正常是双向两行，老数据可能只有一侧，两行任一存在都算好友。
+function areFriends(a, b) {
+  const x = Number(a), y = Number(b);
+  if (!(x > 0) || !(y > 0) || x === y) return false;
+  return !!db.get(
+    `SELECT 1 AS x FROM friendships
+      WHERE (account_id = ? AND friend_id = ?) OR (account_id = ? AND friend_id = ?)`,
+    x, y, y, x
+  );
+}
+
 function recruitCandidates(accountId, save) {
   const level = Math.max(1, Math.min(90, Number(save.level) || 1));
   const mine = accountOf(accountId);
@@ -318,8 +329,9 @@ function recruitCandidates(accountId, save) {
   }
   const masterRow = rowFor(accountId);
   const params = [Number(accountId), Math.max(1, level - 3), Math.min(90, level + 3),
-    Date.now() - config.opponentIdleDays * 86400000, Number(accountId), level];
+    Date.now() - config.opponentIdleDays * 86400000, Number(accountId), Number(accountId), Number(accountId), level];
 
+  // 候选只列好友：`runRecruit` 按同一份双向好友关系拦截，旧客户端也拿不到陌生人名单。
   const rows = db.all(
     `SELECT a.id, a.name, a.tag, s.level,
             (SELECT ap.master_id FROM apprenticeships ap WHERE ap.prentice_id = a.id AND ap.status = 'active') AS master_id,
@@ -327,6 +339,8 @@ function recruitCandidates(accountId, save) {
      FROM accounts a JOIN saves s ON s.account_id = a.id AND s.mode = 'classic'
      WHERE a.id <> ? AND a.banned = 0 AND s.level BETWEEN ? AND ?
        AND a.last_seen >= ?
+       AND EXISTS (SELECT 1 FROM friendships f
+                   WHERE (f.account_id = ? AND f.friend_id = a.id) OR (f.account_id = a.id AND f.friend_id = ?))
        AND NOT EXISTS (SELECT 1 FROM apprenticeships ap
                        WHERE ap.prentice_id = a.id AND ap.status = 'active' AND ap.master_id = ?)
      ORDER BY ABS(s.level - ?), a.last_seen DESC, a.id LIMIT 24`,
@@ -665,13 +679,14 @@ function currentMasterLevel(prenticeId, save) {
         if (f && Number(f.level) > 0) return Math.max(1, Number(f.level));
       } catch (_) {}
     } else if (Number(row.master_id) > 0) {
-      const m = store.peek(row.master_id);
+      // 只要等级：直接读 saves.level 列，别为了一个数字解码师父整份存档。
+      const m = db.get('SELECT level FROM saves WHERE account_id = ? AND mode = ?', Number(row.master_id), store.MODE);
       if (m) return Math.max(1, Number(m.level) || 1);
     }
   }
   const masterAccountId = Math.max(0, Number(save && save.master && save.master.accountId) || 0);
   if (masterAccountId > 0) {
-    const m = store.peek(masterAccountId);
+    const m = db.get('SELECT level FROM saves WHERE account_id = ? AND mode = ?', masterAccountId, store.MODE);
     if (m) return Math.max(1, Number(m.level) || 1);
   }
   return Math.max(0, Number(save && save.master && save.master.level) || 0);
@@ -707,7 +722,7 @@ module.exports = {
   rowFor, rowsForMaster, masterView, tributeOf, prenticeView,
   list, candidates, botMasterCandidates, recruitCandidates,
   setBotMaster, recruitFoe, targetStats, commitRecruit, sameDevice,
-  ensureFriendship, backfillFriendships,
+  areFriends, ensureFriendship, backfillFriendships,
   leaveMaster, kickPrentice, claimTribute, cheerMaster, displayStats, fighterOfAccount,
   liveFighterOfAccount, livePrenticeStats, applyPrenticeStatsInto,
   refreshMasterLevel, refreshMasterLevelInto,

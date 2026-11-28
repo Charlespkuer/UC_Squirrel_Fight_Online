@@ -18,9 +18,15 @@ const OWNER_LIMIT = Math.max(24, config.opponentsPerRefresh * 8);
 function error(code, text) { const e = new Error(text); e.code = code; return e; }
 function prune(owner) {
   const now = Date.now();
-  for (const [id, value] of offers) if (value.expiresAt <= now) offers.delete(id);
-  const mine = [...offers].filter(([, value]) => value.owner === owner);
-  for (const [id] of mine.slice(0, Math.max(0, mine.length - OWNER_LIMIT))) offers.delete(id);
+  // 一次遍历：顺手把本 owner 的票据收集起来。别再用 `[...offers]` 复制整张表
+  // （两万张票据时每次刷新都白分配两万个数组元素）。
+  let mineCount = 0;
+  const mine = [];
+  for (const [id, value] of offers) {
+    if (value.expiresAt <= now) { offers.delete(id); continue; }
+    if (value.owner === owner) { mineCount++; mine.push(id); }
+  }
+  if (mineCount > OWNER_LIMIT) for (const id of mine.slice(0, mineCount - OWNER_LIMIT)) offers.delete(id);
   while (offers.size > 20000) offers.delete(offers.keys().next().value);
 }
 

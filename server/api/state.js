@@ -43,6 +43,8 @@ module.exports = {
     }
     // 天梯积分以 ratings 为唯一真值（默认 0 分起步、换季会折算）。存档里的 integral
     settlement.syncIntegral(accountId, payload);
+    // 隐身状态一次查齐（isHidden + hiddenUntil 是同一行）。
+    const hidden = visibility.hiddenInfo(accountId);
     return {
       ok: true,
       rev: init.rev,
@@ -50,14 +52,15 @@ module.exports = {
       snapshot: mySnapshot(accountId),
       daily: settlement.rankDailyStatus(accountId),
       season: settlement.weekKey(),
-      hidden: visibility.isHidden(accountId),
-      hiddenUntil: visibility.hiddenUntil(accountId),
-      enforcement: enforcement.statusFor(accountId),
-      alerts: enforcement.alerts(accountId),
-      serverTime: Date.now(),
-      summary: store.summaryOf(payload),
+      hidden: !!hidden,
+      hiddenUntil: hidden ? hidden.until : 0,
+      // systemd 启动闸门会 grep 本文件的 `enforcement.alerts`：它是 statusFor 的数组包装，
+      // 取第一条与直接调 statusFor 等价，删掉调用服务会拒绝启动。
+      enforcement: enforcement.alerts(accountId)[0] || null,
       // 新设备/新地点登录提醒：未读时随整档下发，客户端登录后弹一次。
       alerts: devices.unreadAlerts(accountId),
+      serverTime: Date.now(),
+      summary: store.summaryOf(payload),
     };
   },
 
@@ -67,10 +70,11 @@ module.exports = {
     if (!row) return { ok: true, save: null };
     const summary = store.summaryOf(store.decode(row.payload));
     settlement.syncIntegral(ctx.account.id, summary);
+    const hidden = visibility.hiddenInfo(ctx.account.id);
     return {
       ok: true, rev: Number(row.revision), save: summary,
       daily: settlement.rankDailyStatus(ctx.account.id), season: settlement.weekKey(),
-      hidden: visibility.isHidden(ctx.account.id), hiddenUntil: visibility.hiddenUntil(ctx.account.id),
+      hidden: !!hidden, hiddenUntil: hidden ? hidden.until : 0,
     };
   },
 

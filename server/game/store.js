@@ -126,38 +126,39 @@ function runOnSave(accountId, fn, opts) {
     throw e;
   }
   const before = decode(row.payload);
-  let value;
-  let after;
-  try {
-    const out = runtime.withState(before, (ctx) => {
-      housekeeping();
-      return fn(ctx);
-    }, { deferSettle: !!o.deferSettle });
-    value = out.value;
-    after = out.payload;
-  } catch (e) {
-    throw e;
-  }
-  return commit(accountId, mode, row, before, after, value, o);
+  const out = runtime.withState(before, (ctx) => {
+    housekeeping();
+    return fn(ctx);
+  }, { deferSettle: !!o.deferSettle });
+  return commit(accountId, mode, row, before, out.payload, out.value, o);
+}
+
+// 读档时 restorePayload 会把整份存档重建成新对象，所以 `before`/`after` 里同一个值永远是
+// 两个引用：逐键深比较等于把整份存档走一遍。先比序列化后的字节，没变就整条跳过（读多写少）。
+function samePayload(stored, buf) {
+  if (stored == null) return false;
+  const a = Buffer.isBuffer(stored) ? stored : toBuffer(stored);
+  return a.length === buf.length && a.equals(buf);
 }
 
 function commit(accountId, mode, row, before, after, value, o) {
-  const patch = diffPayload(before, after);
-  const changed = Object.keys(patch.set).length > 0 || patch.del.length > 0;
   const summary = summaryOf(after);
+  const afterBuf = encode(after);
   let rev = Number(row.revision);
-  if (changed) {
+  if (!samePayload(row.payload, afterBuf)) {
+    const patch = diffPayload(before, after);
     rev = Number(row.revision) + 1;
     db.run(
       `UPDATE saves SET revision = ?, payload = ?, level = ?, name = ?, power = ?, agility = ?, speed = ?, hp = ?,
         gold = ?, gold_cup = ?, integral = ?, vip_level = ?, vip_until = ?, updated_at = ? WHERE account_id = ? AND mode = ?`,
-      rev, encode(after), summary.level, summary.name, summary.power, summary.agility, summary.speed, summary.hp,
+      rev, afterBuf, summary.level, summary.name, summary.power, summary.agility, summary.speed, summary.hp,
       summary.gold, summary.goldCup, summary.integral, summary.vipLevel, summary.vipUntil, Date.now(),
       Number(accountId), mode
     );
     if (o.snapshotSource) snapshots.ensureCurrent(accountId, mode, o.snapshotSource);
+    return { value, patch, rev, payload: after, summary, changed: true };
   }
-  return { value, patch: changed ? patch : null, rev, payload: after, summary, changed };
+  return { value, patch: null, rev, payload: after, summary, changed: false };
 }
 
 // 新建账号时的初始存档。

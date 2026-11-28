@@ -35,16 +35,21 @@ class ApiError extends Error {
 
 const fail = (code, msg, extra) => new ApiError(code, msg, extra);
 
+// 允许来源在进程启动时拆一次：这个函数每个请求都要跑，别再每请求 split 一遍配置串。
+const ALLOW_ANY_ORIGIN = config.allowOrigin === '*';
+const ALLOW_ORIGIN_LIST = ALLOW_ANY_ORIGIN
+  ? []
+  : String(config.allowOrigin || '').split(',').map((s) => s.trim()).filter(Boolean);
+
 function corsHeaders(req) {
-  const allow = config.allowOrigin;
   const origin = req.headers.origin;
   const headers = {
     'access-control-allow-methods': 'GET,POST,PUT,DELETE,OPTIONS',
     'access-control-allow-headers': 'authorization,content-type,idempotency-key,x-client-version,x-device-id,x-device-platform,x-device-provider',
     'access-control-max-age': '600',
   };
-  if (allow === '*') headers['access-control-allow-origin'] = '*';
-  else if (origin && allow.split(',').map((s) => s.trim()).includes(origin)) {
+  if (ALLOW_ANY_ORIGIN) headers['access-control-allow-origin'] = '*';
+  else if (origin && ALLOW_ORIGIN_LIST.includes(origin)) {
     headers['access-control-allow-origin'] = origin;
     headers['vary'] = 'Origin';
   }

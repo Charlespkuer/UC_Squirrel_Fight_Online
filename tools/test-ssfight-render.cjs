@@ -35,6 +35,26 @@ function loadRender() {
 const SfRender = loadRender();
 const { buildFrames } = SfRender;
 
+/* ---------- 0. 素材 URL：逐文件 hash 优先，缺表回退整包构建号 ---------- */
+{
+  const sandbox = {
+    window: {
+      __SSDZ_WEB_VERSION__: '1.0.94-global',
+      __SSDZ_ASSET_VERSIONS__: { 'tags-challenge.json': 'abc123def456' },
+    },
+    console,
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'js/ssfight/render.js'), 'utf8'), sandbox);
+  const r = sandbox.window.SfRender;
+  assert.equal(r.assetUrl('images/ssfight/ui/tags-challenge.json'),
+    'images/ssfight/ui/tags-challenge.json?v=abc123def456',
+    '未改动素材要按自己的内容 hash 走缓存，不能跟着整包构建号一起换 URL');
+  assert.equal(r.assetUrl('images/ssfight/ui/bitmap/new.png'),
+    'images/ssfight/ui/bitmap/new.png?v=1.0.94-global',
+    '表里没有的素材回退整包构建号');
+}
+
 /* ---------- 1. 合成流：切帧 / 携带 / rp 语义 ---------- */
 {
   const Sf = [
@@ -2376,7 +2396,7 @@ function checkClassicArenaPicker() {
   assert.ok(/stopAt\(statu, run\.matching \? 1 : 2\)/.test(uf)
     && !/keepIds: \['7570'\]/.test(uf) && !/dot\.clip\.playing = true/.test(uf),
     '4 人赛事页保持静态：不再放行 7570 省略号动画（整页大 SVG 每帧重建会在 WebView 上卡顿）');
-  assert.ok(/State\.goldCupToday\(\)/.test(uf) && /stopAt\(cup, 1\)/.test(uf)
+  assert.ok(/State\.arenaCupToday\(\)/.test(uf) && /stopAt\(cup, 1\)/.test(uf)
     && /setArenaSeatName\(clipOf\(card, 'name'\), who\.name\)/.test(uf)
     && /const ARENA_NAME_SIZE = 11/.test(uf) && /const ARENA_NAME_DX = 2\.5/.test(uf),
     '竞技席位要填「今日金杯」，昵称缩到 11 并右移 2.5 避开左侧头像');
@@ -2559,6 +2579,12 @@ function checkClassicActivityButton() {
     && /\.sf-activity-stage/.test(css) && /\.sf-activity-body/.test(css)
     && !/\.sf-activity-lottery/.test(css),
     '活动按钮用 SVG 光晕提示，活动面板用 320:196 舞台层 + 单页内嵌内容区承载');
+  const act = main.slice(main.indexOf('async function openActivityDialog'),
+    main.indexOf('// 真正的村庄页'));
+  assert.ok(/function warmActivityBundle\(\)/.test(main) && /warmActivityBundle\(\)/.test(main)
+    && /loadExtra\(ACTIVITY_BUNDLE\)/.test(act)
+    && !/await Online\.syncState/.test(act) && /Online\.syncState\(\)\.then/.test(act),
+    '活动面板先上屏本地镜像，4692 素材包在主页空闲预热，整档同步放后台');
 }
 
   const dailyUi = fs.readFileSync(path.join(ROOT, 'js/classic-ui.js'), 'utf8').replace(/\r\n/g, '\n');
@@ -2664,7 +2690,7 @@ function checkFriendViewPolish() {
   assert.match(ofd, /if \(!current && window\.UI && UI\.runAction\) UI\.runAction\('challenge'\)/,
     '挑战页还在时返回不重开挑战页（敌人名单不刷新）');
   assert.ok(/O\.get\('\/api\/apprentice'\)/.test(soc)
-    && /onlineFriendRoster\(current\.onlineFriends\.roster, current\.onlineFriends\.kin\)/.test(ch)
+    && /friendRosterCache[\s\S]{0,500}?onlineFriendRoster\(cache\.roster, cache\.kin\)/.test(ch)
     && /function freshOnlineFoe\(foe, opts\)[\s\S]{0,700}?frozen[\s\S]{0,700}?Online\.get\(url/.test(ch)
     && /await freshOnlineFoe\(foe, \{ frozen: tab !== 'friends' \}\)/.test(ofd),
     '好友页名单与「查看」都要取服务端当前快照；随机页按行里的 snapshotId 取回抽到的快照');

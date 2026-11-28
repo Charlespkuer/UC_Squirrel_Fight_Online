@@ -78,6 +78,16 @@ function messageRow(row, accountId) {
   };
 }
 
+// 多路径 json_extract 返回 JSON 数组文本 → battleStatsOfRow 需要的列名。
+function battleStatsColumns(row) {
+  const raw = row && row.battle_stats;
+  if (typeof raw !== 'string') return {};
+  let arr = null;
+  try { arr = JSON.parse(raw); } catch (_) { return {}; }
+  if (!Array.isArray(arr)) return {};
+  return { daily_wins: arr[0], daily_fails: arr[1], all_wins: arr[2], all_fails: arr[3], daily_stats_date: arr[4] };
+}
+
 // 好友列表一次取齐快照 / 积分，避免每个好友各查 3 条（50 好友 ≈ 150 次查询）。
 function friendRows(rows) {
   const ids = rows.map((row) => Number(row.friend_id)).filter((id) => id > 0);
@@ -115,7 +125,7 @@ function friendRows(rows) {
       lastSeen,
       snapshotId: snap ? snap.id : '',
       online: lastSeen > 0 && now - lastSeen < 5 * 60 * 1000,
-      ...store.battleStatsOfRow(row),
+      ...store.battleStatsOfRow(battleStatsColumns(row)),
     };
   });
 }
@@ -295,14 +305,12 @@ module.exports = {
 
 
   friends(ctx) {
+    // ⚠ 一次多路径 json_extract：逐字段写 5 条会让同一份 payload 被整解析 10 遍（50 好友 ≈ 5 ms）。
     const rows = db.all(
       `SELECT f.friend_id, a.name, a.tag, a.last_seen, s.level AS save_level, s.name AS save_name,
               s.vip_level AS vip_level, s.vip_until AS vip_until,
-              CASE WHEN json_valid(s.payload) THEN json_extract(s.payload, '$.dailyWins') END AS daily_wins,
-              CASE WHEN json_valid(s.payload) THEN json_extract(s.payload, '$.dailyFails') END AS daily_fails,
-              CASE WHEN json_valid(s.payload) THEN json_extract(s.payload, '$.allWins') END AS all_wins,
-              CASE WHEN json_valid(s.payload) THEN json_extract(s.payload, '$.allFails') END AS all_fails,
-              CASE WHEN json_valid(s.payload) THEN json_extract(s.payload, '$.dailyStatsDate') END AS daily_stats_date
+              CASE WHEN json_valid(s.payload) THEN json_extract(s.payload,
+                '$.dailyWins', '$.dailyFails', '$.allWins', '$.allFails', '$.dailyStatsDate') END AS battle_stats
          FROM friendships f
          JOIN accounts a ON a.id = f.friend_id
          LEFT JOIN saves s ON s.account_id = f.friend_id AND s.mode = ?

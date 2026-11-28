@@ -304,6 +304,18 @@
       document.addEventListener('touchstart', onDown, { capture: true, passive: true });
     }, 80);
   }
+  // 等主页 SVG 真的挂上（最多 maxMs）：引导要按已挂好的页面算高亮位置。
+  function homePainted(maxMs) {
+    return new Promise((resolve) => {
+      const t0 = Date.now();
+      const step = () => {
+        const home = document.querySelector('#ui .ssfight-home svg') || document.querySelector('#ui .classic-home');
+        if (home || Date.now() - t0 >= maxMs) { resolve(); return; }
+        setTimeout(step, 60);
+      };
+      step();
+    });
+  }
   function show(stepNo, ctx) {
     if (!classic()) { hide(); return; }
     const spec = STEPS[stepNo];
@@ -328,6 +340,8 @@
     current = { seq, host, view: null, timer: 0, step: stepNo, ctx, dismiss: null };
     const mine = seq;
     Promise.resolve()
+      // 首页引导是覆盖层：等主页 SVG 落定再拉 194 KB 的 tags-guide，别和首页素材抢带宽。
+      .then(() => (ctx === 'home' ? homePainted(1200) : null))
       .then(() => SfRender.load())
       .then(() => SfRender.loadExtra(GUIDE_FILE))
       .then(() => {

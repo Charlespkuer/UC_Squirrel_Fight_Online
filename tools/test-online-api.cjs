@@ -887,7 +887,7 @@ async function main() {
   const pillSemiState = await call('GET', '/api/state', undefined, C.token);
   const pillSemi = pillSemiState.save.propsStates || {};
   const cupBefore = Number(pillSemiState.save.goldCup) || 0;
-  const cupTodayBefore = Number(pillSemiState.save.goldCupToday) || 0;
+  const cupTodayBefore = Number(pillSemiState.save.arenaCupToday) || 0;
   const powerBefore = pillSemiState.save.power;
   db.tx(() => store.runOnSave(cid, ({ save }) => {
     if (!save.classicArenaRun) throw new Error('missing arena run');
@@ -910,8 +910,8 @@ async function main() {
     pillFinal.ok && pillFinal.settlement && pillFinal.settlement.position === 0
     && pillFinal.settlement.goldCup === 1 && pillFinal.arena && pillFinal.arena.rewards && pillFinal.arena.rewards.goldCup === 1
     && (Number(pillAfterState.save.goldCup) || 0) === cupBefore + 1
-    && (pillAfterState.save.goldCupDate !== pillSemiState.save.goldCupDate
-      || (Number(pillAfterState.save.goldCupToday) || 0) === cupTodayBefore + 1),
+    && (pillAfterState.save.arenaCupDate !== pillSemiState.save.arenaCupDate
+      || (Number(pillAfterState.save.arenaCupToday) || 0) === cupTodayBefore + 1),
     { position: pillFinal.settlement && pillFinal.settlement.position, cup: pillFinal.settlement && pillFinal.settlement.goldCup,
       before: cupBefore, after: pillAfterState.save.goldCup });
 
@@ -987,6 +987,14 @@ async function main() {
   /* 14. 静态资源入口 */
   const pageRes = await fetch(BASE + '/');
   ok('static index served or 404-with-json', pageRes.status === 200 || pageRes.status === 404);
+  const pageHtml = pageRes.status === 200 ? await pageRes.text() : '';
+  const uiVersions = (/window\.__SSDZ_ASSET_VERSIONS__=(\{[^<]*\})/.exec(pageHtml) || [])[1];
+  let uiVersionMap = null;
+  try { uiVersionMap = uiVersions ? JSON.parse(uiVersions) : null; } catch (_) {}
+  const uiManifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'server', 'web-manifest.json'), 'utf8'));
+  const challengeFile = (uiManifest.files || []).find((f) => f.path === 'images/ssfight/ui/tags-challenge.json');
+  ok('入口注入逐文件素材版本：未改动的 tags-challenge 不再被整包构建号顶掉',
+    !!(uiVersionMap && challengeFile && uiVersionMap['tags-challenge.json'] === challengeFile.sha256.slice(0, 12)));
   const traversalRes = await fetch(BASE + '/foo/%5c..%5cserver/config.js');
   ok('static deny prefix cannot be bypassed with encoded backslash', traversalRes.status === 404);
 

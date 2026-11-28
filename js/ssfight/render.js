@@ -17,15 +17,21 @@
   const releaseTimers = new Map();
 
 
-  // 网页端把构建号带在 URL 上：服务端注入 __SSDZ_WEB_VERSION__ 后，
-  // UI JSON / 内嵌位图都能用一年缓存；原生包没有这个变量，保持原路径。
+  // 网页端把版本带在 URL 上：服务端注入逐文件 hash 后，未改动的素材跨版本继续命中
+  // 一年缓存；原生包没有这些变量，保持原路径。
   function webVersion() {
     try { return String(window.__SSDZ_WEB_VERSION__ || ''); } catch (e) { return ''; }
+  }
+  function fileVersion(rel) {
+    try {
+      const map = window.__SSDZ_ASSET_VERSIONS__;
+      return map && rel && Object.prototype.hasOwnProperty.call(map, rel) ? String(map[rel] || '') : '';
+    } catch (e) { return ''; }
   }
   function withVersion(url) {
     const u = String(url == null ? '' : url);
     if (!u || /^(data:|blob:|https?:|\/\/)/i.test(u)) return u;
-    const v = webVersion();
+    const v = (u.indexOf(BASE) === 0 ? fileVersion(u.slice(BASE.length)) : '') || webVersion();
     if (!v) return u;
     return u + (u.indexOf('?') >= 0 ? '&' : '?') + 'v=' + encodeURIComponent(v);
   }

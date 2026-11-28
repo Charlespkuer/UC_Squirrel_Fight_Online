@@ -12,7 +12,7 @@ const { config, localDate } = require('./config');
 const db = require('./db');
 const runtime = require('./game/runtime');
 const settlement = require('./game/settlement');
-const { ApiError, fail, sendJson, sendError, corsHeaders, readJson, clientIp, matchPath, rateLimit } = require('./http');
+const { fail, sendJson, sendError, corsHeaders, readJson, clientIp, rateLimit } = require('./http');
 const auth = require('./auth');
 const enforcement = require('./game/enforcement');
 
@@ -134,6 +134,58 @@ const ROUTES = [
   ['POST', '/api/campaign/rooms/:code/ack', api.campaign.ack, { auth: true, body: true }],
 ];
 
+// 路由表按「段数」预分组、pattern 预先拆开：每个请求不再对 90 条 pattern 逐条 split。
+// 段数不同必然不匹配，过滤后通常只剩十几条候选。
+const ROUTES_BY_LEN = (() => {
+  const map = new Map();
+  for (const [method, pattern, handler, opts] of ROUTES) {
+    const parts = pattern.split('/');
+    if (!map.has(parts.length)) map.set(parts.length, []);
+    map.get(parts.length).push({ method, parts, handler, opts });
+  }
+  return map;
+})();
+
+function matchRoute(method, segments) {
+  const list = ROUTES_BY_LEN.get(segments.length) || [];
+  const allowed = [];
+  for (const route of list) {
+    const parts = route.parts;
+    let params = null;
+    let ok = true;
+    for (let i = 0; i < parts.length; i++) {
+      const want = parts[i], got = segments[i];
+      if (want.charCodeAt(0) === 58) {
+        if (!got) { ok = false; break; }
+        let value = got;
+        try { value = decodeURIComponent(got); } catch (_) { ok = false; break; }
+        if (!params) params = {};
+        params[want.slice(1)] = value;
+      } else if (want !== got) { ok = false; break; }
+    }
+    if (!ok) continue;
+    if (route.method !== method) { allowed.push(route.method); continue; }
+    return { route, params: params || {}, allowed };
+  }
+  return { route: null, params: {}, allowed };
+}
+
+// 与 URLSearchParams 同口径：`+` 当空格、非法百分号转义保留原文、同名键后者覆盖。
+function parseQuery(text) {
+  const out = {};
+  if (!text) return out;
+  const decode = (value) => {
+    const s = String(value).replace(/\+/g, ' ');
+    try { return decodeURIComponent(s); } catch (_) { return s; }
+  };
+  for (const pair of text.split('&')) {
+    if (!pair) continue;
+    const eq = pair.indexOf('=');
+    out[decode(eq < 0 ? pair : pair.slice(0, eq))] = decode(eq < 0 ? '' : pair.slice(eq + 1));
+  }
+  return out;
+}
+
 function health() {
   const row = db.get('SELECT 1 AS ok');
   return {
@@ -155,7 +207,24 @@ function version() {
 
 // 客户端更新清单：版本号取部署时写入的 scripts/version.json，
 // 注意这里只做通知；客户端是本地打包资源，不能由服务端直接热替换。
+// 结果按平台缓存：包列表/版本号只在发版时变，而这是免鉴权、每客户端 60 秒一次的公共端点。
+// iOS 的版本判定与其它平台不同（按 iOS 最新包），所以缓存键要带上平台。
+const UPDATE_CACHE_MS = 3000;
+let updateCache = { at: 0, key: '', stamp: -1, value: null };
 function updateInfo(ctx) {
+  const platform = String((ctx && ctx.req && ctx.req.headers && ctx.req.headers['x-device-platform']) || '').toLowerCase();
+  const key = platform === 'ios' ? 'ios' : '';
+  const now = Date.now();
+  const stamp = downloadsStamp();
+  if (updateCache.value && updateCache.key === key && updateCache.stamp === stamp && now - updateCache.at < UPDATE_CACHE_MS) {
+    return Object.assign({}, updateCache.value, { serverTime: now });
+  }
+  const value = buildUpdateInfo(key === 'ios');
+  updateCache = { at: now, key, stamp, value };
+  return Object.assign({}, value, { serverTime: now });
+}
+
+function buildUpdateInfo(iosPlatform) {
   let build = {};
   try { build = JSON.parse(fs.readFileSync(path.join(config.gameRoot, 'scripts', 'version.json'), 'utf8')) || {}; }
   catch (e) { build = {}; }
@@ -169,8 +238,7 @@ function updateInfo(ctx) {
   const pkg = api.owner.packageInfo(versionText);
   /* iOS 包常比 EXE/APK 落后一版：iOS 客户端按 iOS 最新包的版本判断，
    * 否则装完最新 IPA 仍会被服务器版本号反复提示。 */
-  const platform = String((ctx && ctx.req && ctx.req.headers && ctx.req.headers['x-device-platform']) || '').toLowerCase();
-  const iosVersion = platform === 'ios' ? String(pkg.ipaVersion || '') : '';
+  const iosVersion = iosPlatform ? String(pkg.ipaVersion || '') : '';
   const version = iosVersion || versionText;
   return {
     ok: true,
@@ -256,16 +324,54 @@ function staticPath(pathname) {
   return { normalized, resolved, canonical };
 }
 
-// 静态资源 gzip 缓存：同一版本（mtime+size）只压一次。
-// 压缩走 libuv 线程池（zlib.gzip 回调），不再用 gzipSync 堵事件循环；同一文件并发首访只压一次。
+// 静态资源压缩缓存：同一版本（mtime+size）只压一次。
+// 压缩走 libuv 线程池（zlib 回调），不再用 gzipSync 堵事件循环；同一文件并发首访只压一次。
+// 支持 br 的客户端优先用 br（JSON / JS 比 gzip 再小 8~23%），其余仍走 gzip。
 const gzipCache = new Map();
 const gzipPending = new Map();
+const brotliCache = new Map();
+const brotliPending = new Map();
 const LONG_CACHE = 'public, max-age=31536000, immutable';
 
 function gzipAsync(buf) {
   return new Promise((resolve, reject) => {
     zlib.gzip(buf, { level: 5 }, (err, out) => (err ? reject(err) : resolve(out)));
   });
+}
+
+function brotliAsync(buf) {
+  return new Promise((resolve, reject) => {
+    zlib.brotliCompress(buf, {
+      params: {
+        [zlib.constants.BROTLI_PARAM_QUALITY]: 5,
+        [zlib.constants.BROTLI_PARAM_SIZE_HINT]: buf.length,
+      },
+    }, (err, out) => (err ? reject(err) : resolve(out)));
+  });
+}
+
+function compressedFile(resolved, st, kind) {
+  const br = kind === 'br';
+  const cache = br ? brotliCache : gzipCache;
+  const pendingMap = br ? brotliPending : gzipPending;
+  // br 产物通常比 gzip 大（JSON 包单份可达数百 KB），保留条数少一些控制常驻内存。
+  const cap = br ? 64 : 128;
+  const key = resolved + '|' + st.size + '|' + Math.round(st.mtimeMs) + '|' + kind;
+  const hit = cache.get(key);
+  if (hit) return Promise.resolve(hit);
+  let pending = pendingMap.get(key);
+  if (!pending) {
+    pending = fs.promises.readFile(resolved)
+      .then((buf) => (br ? brotliAsync(buf) : gzipAsync(buf)))
+      .then((out) => {
+        if (cache.size >= cap) cache.delete(cache.keys().next().value);
+        cache.set(key, out);
+        pendingMap.delete(key);
+        return out;
+      }, (err) => { pendingMap.delete(key); throw err; });
+    pendingMap.set(key, pending);
+  }
+  return pending;
 }
 
 // 网页端构建号：版本号 + 前端文件指纹。只改一个 JS/JSON 也必须换 URL，
@@ -308,26 +414,99 @@ function webVersion() {
   return value;
 }
 
-// 入口页按构建号改写脚本/样式 URL，并注入 `__SSDZ_WEB_VERSION__`：
+// 逐文件版本：URL 只跟随该文件的内容，不再被整包构建号一起改掉。
+// 清单由 `tools/build-online-app.cjs` 写入；源码比清单新（本地直接改文件）就回退到构建号。
+let assetManifestCache = { at: 0, value: null };
+function assetManifest() {
+  const now = Date.now();
+  if (assetManifestCache.value && now - assetManifestCache.at < 5000) return assetManifestCache.value;
+  const files = new Map(), ui = Object.create(null);
+  let manifestAt = 0;
+  try {
+    const file = path.join(config.gameRoot, 'server', 'web-manifest.json');
+    const st = fs.statSync(file);
+    manifestAt = st.mtimeMs;
+    const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const uiPrefix = 'images/ssfight/ui/';
+    for (const entry of (manifest.files || [])) {
+      const rel = String((entry && entry.path) || '');
+      const sha = String((entry && entry.sha256) || '');
+      if (!rel || !/^[0-9a-f]{16,}$/i.test(sha)) continue;
+      const hash = sha.slice(0, 12);
+      files.set(rel, { hash, size: Number(entry.size) || 0 });
+      if (!rel.startsWith(uiPrefix)) continue;
+      // 清单只在构建后可信；文件被改过但没重建清单时必须让客户端重新拉，不能钉在旧 hash。
+      try {
+        const cur = fs.statSync(path.join(config.gameRoot, rel));
+        if (cur.size === Number(entry.size) && cur.mtimeMs <= manifestAt) ui[rel.slice(uiPrefix.length)] = hash;
+      } catch (e) {}
+    }
+  } catch (e) { /* 没有清单（源码直跑）时全部走构建号 */ }
+  const value = { files, ui, manifestAt };
+  assetManifestCache = { at: now, value };
+  return value;
+}
+// 逐文件版本查询每次入口页要跑几十次 statSync（每个 js/css 标签一次）；清单与 mtime 不变时
+// 直接复用上一份结果，窗口和 assetManifest 的 5 秒一致 —— 本地改了文件但没重建清单时最多晚 5 秒发现。
+let assetVersionCache = { at: 0, manifestAt: -1, map: new Map() };
+function assetFileVersion(rel, meta) {
+  const entry = meta.files.get(rel);
+  if (!entry) return '';
+  const now = Date.now();
+  if (assetVersionCache.manifestAt !== meta.manifestAt || now - assetVersionCache.at > 5000) {
+    assetVersionCache = { at: now, manifestAt: meta.manifestAt, map: new Map() };
+  }
+  const cached = assetVersionCache.map.get(rel);
+  if (cached !== undefined) return cached;
+  let value = '';
+  try {
+    const st = fs.statSync(path.join(config.gameRoot, rel));
+    if (st.size === entry.size && st.mtimeMs <= meta.manifestAt) value = entry.hash;
+  } catch (e) { value = ''; }
+  assetVersionCache.map.set(rel, value);
+  return value;
+}
+
+// 入口页按逐文件版本改写脚本/样式 URL，并注入 `__SSDZ_WEB_VERSION__`：
 // 原生包不走这里；网页端刷新后不会出现「新 JS + 旧 UI JSON」的混版本。
-function serveDocument(req, res, resolved, st) {
+let docCompressed = { etag: '', br: null, gz: null };
+async function serveDocument(req, res, resolved, st) {
   let html;
   try { html = fs.readFileSync(resolved, 'utf8'); } catch (_) { return false; }
   const version = webVersion();
+  const meta = assetManifest();
   if (version) {
     const q = encodeURIComponent(version);
-    html = html.replace(/(src|href)="((?:js|css)\/[^"?]+)"/g, (all, attr, file) => attr + '="' + file + '?v=' + q + '"');
+    html = html.replace(/(src|href)="((?:js|css)\/[^"?]+)"/g, (all, attr, file) =>
+      attr + '="' + file + '?v=' + (assetFileVersion(file, meta) || q) + '"');
     if (html.indexOf('__SSDZ_WEB_VERSION__') < 0) {
       html = html.replace('</head>', '<script>window.__SSDZ_WEB_VERSION__=' + JSON.stringify(version) + ';</script></head>');
     }
   }
+  if (Object.keys(meta.ui).length && html.indexOf('__SSDZ_ASSET_VERSIONS__') < 0) {
+    html = html.replace('</head>', '<script>window.__SSDZ_ASSET_VERSIONS__=' + JSON.stringify(meta.ui) + ';</script></head>');
+  }
   const buf = Buffer.from(html, 'utf8');
   const etag = 'W/"' + st.size.toString(16) + '-' + Math.round(st.mtimeMs).toString(16) + '-' + version.replace(/[^A-Za-z0-9._-]/g, '') + '"';
-  const headers = { 'content-type': 'text/html; charset=utf-8', etag, 'cache-control': 'no-cache' };
+  const headers = { 'content-type': 'text/html; charset=utf-8', etag, 'cache-control': 'no-cache', vary: 'Accept-Encoding' };
   if (req.headers['if-none-match'] === etag) { res.writeHead(304, headers); res.end(); return true; }
-  headers['content-length'] = String(buf.length);
+  const accept = String(req.headers['accept-encoding'] || '');
+  let body = buf, encoding = '';
+  if (buf.length > 2048 && (/\bbr\b/.test(accept) || /\bgzip\b/.test(accept))) {
+    // 入口页带逐文件 hash，etag 变了就必须重新压；只留一份，键就是 etag。
+    if (docCompressed.etag !== etag) docCompressed = { etag, br: null, gz: null };
+    if (/\bbr\b/.test(accept)) {
+      if (!docCompressed.br) docCompressed.br = await brotliAsync(buf);
+      body = docCompressed.br; encoding = 'br';
+    } else {
+      if (!docCompressed.gz) docCompressed.gz = await gzipAsync(buf);
+      body = docCompressed.gz; encoding = 'gzip';
+    }
+  }
+  if (encoding) headers['content-encoding'] = encoding;
+  headers['content-length'] = String(body.length);
   res.writeHead(200, headers);
-  if (req.method === 'HEAD') res.end(); else res.end(buf);
+  if (req.method === 'HEAD') res.end(); else res.end(body);
   return true;
 }
 
@@ -384,36 +563,18 @@ async function serveStatic(req, res, pathname) {
   headers['cache-control'] = cache;
   const accept = String(req.headers['accept-encoding'] || '');
   const compressible = /^(text\/|application\/(javascript|json|svg)|image\/svg)/.test(type) && st.size > 2048;
-  if (compressible && /\bgzip\b/.test(accept)) {
-    const key = resolved + '|' + st.size + '|' + Math.round(st.mtimeMs);
-    const hit = gzipCache.get(key);
-    if (hit) {
-      headers['content-encoding'] = 'gzip';
-      headers['content-length'] = String(hit.length);
-      headers['vary'] = 'Accept-Encoding';
-      res.writeHead(200, headers);
-      res.end(hit);
-      return true;
-    }
-    let pending = gzipPending.get(key);
-    if (!pending) {
-      pending = fs.promises.readFile(resolved)
-        .then((buf) => gzipAsync(buf))
-        .then((gz) => {
-          if (gzipCache.size >= 128) gzipCache.delete(gzipCache.keys().next().value);
-          gzipCache.set(key, gz);
-          gzipPending.delete(key);
-          return gz;
-        }, (err) => { gzipPending.delete(key); throw err; });
-      gzipPending.set(key, pending);
-    }
-    let gz;
-    try { gz = await pending; } catch (_) { res.writeHead(500); res.end(); return true; }
-    headers['content-encoding'] = 'gzip';
-    headers['content-length'] = String(gz.length);
+  // 小文件 br 的头部开销和 gzip 差不多，>8 KB 才换 br。
+  const useBr = compressible && st.size > 8192 && /\bbr\b/.test(accept);
+  const useGzip = compressible && /\bgzip\b/.test(accept);
+  if (useBr || useGzip) {
+    let out;
+    try { out = await compressedFile(resolved, st, useBr ? 'br' : 'gzip'); }
+    catch (_) { res.writeHead(500); res.end(); return true; }
+    headers['content-encoding'] = useBr ? 'br' : 'gzip';
+    headers['content-length'] = String(out.length);
     headers['vary'] = 'Accept-Encoding';
     res.writeHead(200, headers);
-    res.end(gz);
+    res.end(out);
     return true;
   }
   headers['content-length'] = String(st.size);
@@ -427,9 +588,19 @@ async function serveStatic(req, res, pathname) {
 const DOWNLOAD_DIR = path.join(config.dataDir, 'downloads');
 const DOWNLOAD_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*\.(?:exe|apk|ipa|dmg|zip)$/i;
 
+// 下载目录的 mtime：新增/替换安装包会变，用它做缓存键（比每次 readdir+逐文件 stat 便宜得多）。
+function downloadsStamp() {
+  try { return fs.statSync(DOWNLOAD_DIR).mtimeMs; } catch (_) { return 0; }
+}
+
+let downloadCache = { at: 0, stamp: -1, value: [] };
 function downloadFiles() {
+  const stamp = downloadsStamp();
+  const now = Date.now();
+  if (downloadCache.stamp === stamp && now - downloadCache.at < 3000) return downloadCache.value;
+  let value;
   try {
-    return fs.readdirSync(DOWNLOAD_DIR)
+    value = fs.readdirSync(DOWNLOAD_DIR)
       .filter((name) => DOWNLOAD_NAME.test(name))
       .map((name) => {
         let size = 0;
@@ -438,8 +609,10 @@ function downloadFiles() {
       })
       .sort((a, b) => a.name.localeCompare(b.name));
   } catch (e) {
-    return [];
+    value = [];
   }
+  downloadCache = { at: now, stamp, value };
+  return value;
 }
 
 function downloadPage() {
@@ -520,10 +693,22 @@ function serveDownload(req, res, pathname) {
 }
 
 async function handle(req, res) {
-  const url = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
+  const rawUrl = String(req.url || '/');
+  // origin-form（绝大多数请求）手拆即可，省掉一次 URL 构造；绝对形式（反代）才走 URL 解析。
   let pathname;
-  try { pathname = decodeURIComponent(url.pathname); }
-  catch (_) { throw fail('BAD_REQUEST', '无效的请求路径'); }
+  let rawQuery = '';
+  if (rawUrl.charCodeAt(0) === 47) {
+    const qIdx = rawUrl.indexOf('?');
+    const rawPath = qIdx >= 0 ? rawUrl.slice(0, qIdx) : rawUrl;
+    rawQuery = qIdx >= 0 ? rawUrl.slice(qIdx + 1) : '';
+    try { pathname = decodeURIComponent(rawPath); }
+    catch (_) { throw fail('BAD_REQUEST', '无效的请求路径'); }
+  } else {
+    const url = new URL(rawUrl, 'http://' + (req.headers.host || 'localhost'));
+    try { pathname = decodeURIComponent(url.pathname); }
+    catch (_) { throw fail('BAD_REQUEST', '无效的请求路径'); }
+    rawQuery = url.search.slice(1);
+  }
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204, corsHeaders(req));
@@ -543,24 +728,16 @@ async function handle(req, res) {
     return;
   }
 
-  let matched = null;
-  let params = {};
-  let allowed = [];
-  for (const [method, pattern, handler, opts] of ROUTES) {
-    const m = matchPath(pattern, pathname);
-    if (!m) continue;
-    if (method !== req.method) { allowed.push(method); continue; }
-    matched = { handler, opts };
-    params = m;
-    break;
-  }
+  const segments = pathname.split('/');
+  const hit = matchRoute(req.method, segments);
+  const matched = hit.route ? { handler: hit.route.handler, opts: hit.route.opts } : null;
+  const params = hit.params;
   if (!matched) {
-    if (allowed.length) throw fail('BAD_REQUEST', '方法不允许，应该用 ' + allowed.join('/'));
+    if (hit.allowed.length) throw fail('BAD_REQUEST', '方法不允许，应该用 ' + hit.allowed.join('/'));
     throw fail('NOT_FOUND', '接口不存在：' + pathname);
   }
 
-  const query = {};
-  for (const [k, v] of url.searchParams) query[k] = v;
+  const query = parseQuery(rawQuery);
 
   const ipOpen = pathname === '/api/health' || pathname === '/api/meta'
     || pathname === '/api/login' || pathname === '/api/register' || pathname === '/api/recover';
@@ -591,7 +768,7 @@ async function handle(req, res) {
       e.extra = enforcement.banExtra({ status: 'banned', reason: session.account.ban_reason || '违规' });
       throw e;
     }
-    if (req.method === 'GET') rateLimit('read:' + session.account.id, 300, 60000);
+    if (req.method === 'GET') rateLimit('read:' + session.account.id, config.readRatePerMin, 60000);
   }
 
   // 赛区名次是纯展示数据：同一请求里 profile / 领奖 / 榜单会重复算整赛区。
@@ -641,6 +818,8 @@ function start(port) {
   const maintenance = require('./game/maintenance');
   maintenance.startScheduler();
   enforcement.startScheduler();
+  // 征战结算不再只能靠玩家轮询触发（否则那个 GET 要替整房跑 4 场模拟 + 逐人结算）。
+  try { require('./game/campaign').startScheduler(); } catch (e) { console.error('[campaign] scheduler failed', e && e.message); }
 
   const backup = require('./game/backup');
   backup.startScheduler();
@@ -660,7 +839,12 @@ function start(port) {
   });
   server.keepAliveTimeout = 30000;
   server.headersTimeout = 35000;
-  server.on('close', () => { maintenance.stopScheduler(); backup.stopScheduler(); enforcement.stopScheduler(); });
+  server.on('close', () => {
+    maintenance.stopScheduler();
+    backup.stopScheduler();
+    enforcement.stopScheduler();
+    try { require('./game/campaign').stopScheduler(); } catch (_) {}
+  });
   const p = port == null ? config.port : port;
   return new Promise((resolve, reject) => {
     server.once('error', reject);

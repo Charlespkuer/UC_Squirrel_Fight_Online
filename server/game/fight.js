@@ -329,7 +329,9 @@ function runRank({ accountId, snapshotId, rev, idemKey, revengeOf }) {
   const selected = opponents.isOffer(snapshotId) ? opponents.resolve(snapshotId, accountId, 'rank') : null;
   if (selected && selected.source === 'bot') return runRankBot({ accountId, selected, rev, idemKey });
 
-  const meSave = store.peek(accountId);
+  // 后面 runOnSave 直接复用这行：同一个请求里同一份存档只解一次。
+  const meRow = store.getRow(accountId);
+  const meSave = meRow ? store.decode(meRow.payload) : null;
   if (!meSave) {
     const e = new Error('还没有存档'); e.code = 'CONFLICT'; throw e;
   }
@@ -468,7 +470,7 @@ function runRank({ accountId, snapshotId, rev, idemKey, revengeOf }) {
         stolen, revengeCost: revenge ? revenge.cost : 0, revengeCups: revenge ? revenge.cups : 0,
         battleId: entry ? entry.id : null,
       };
-    }, { expectRev: rev, snapshotSource: 'rank' });
+    }, { row: meRow, expectRev: rev, snapshotSource: 'rank' });
 
     const v = out.value;
     const won = v.win;
@@ -562,7 +564,8 @@ function runRank({ accountId, snapshotId, rev, idemKey, revengeOf }) {
 }
 
 function runRankBot({ accountId, selected, rev, idemKey }) {
-  const meSave = store.peek(accountId);
+  const meRow = store.getRow(accountId);
+  const meSave = meRow ? store.decode(meRow.payload) : null;
   if (!meSave) { const e = new Error('还没有存档'); e.code = 'CONFLICT'; throw e; }
   if (Number(meSave.level) < 30) { const e = new Error('天梯赛需要达到30级。'); e.code = 'CONFLICT'; throw e; }
   const myDiv = settlement.divisionOf(Number(meSave.level));
@@ -613,7 +616,7 @@ function runRankBot({ accountId, selected, rev, idemKey }) {
         me, foe: foeFighter, result, win, delta, newScore, exp, ups,
         defenderDelta: pair.defenderDelta, battleId: entry ? entry.id : null,
       };
-    }, { expectRev: rev, snapshotSource: 'rank' });
+    }, { row: meRow, expectRev: rev, snapshotSource: 'rank' });
     const v = out.value;
     applyRating(accountId, v.win, v.newScore);
     settlement.bumpDaily(accountId, 'rank', 1);
@@ -677,6 +680,10 @@ function runRecruit({ accountId, targetAccountId, rev, idemKey }) {
   const myMaster = apprentice.rowFor(accountId);
   if (myMaster && myMaster.master_kind === 'account' && Number(myMaster.master_id) === targetId) {
     const e = new Error('不能收自己的师父为徒'); e.code = 'CONFLICT'; throw e;
+  }
+  // 收徒只对好友开放：在扣费与开打之前拦，非好友连尝试都到不了对方的收徒消息。
+  if (!apprentice.areFriends(accountId, targetId)) {
+    const e = new Error('只能收好友为徒，请先加对方为好友'); e.code = 'FORBIDDEN'; throw e;
   }
   const prentices = apprentice.rowsForMaster(accountId);
   if (prentices.length >= apprentice.capFor(meSave.level)) {
@@ -1091,9 +1098,9 @@ function arenaFight({ accountId, rev, idemKey }) {
       } else {
         const position = phase === 'final' ? (win ? 0 : 1) : (win ? 2 : 3);
         const kind = Number(run.kind) || 0;
-        // 任一竞技场（经验 / 碎片 / 幻兽）的冠军都固定多给 1 个金杯。
+        // 任一竞技场（经验 / 碎片 / 幻兽）的冠军都固定多给 1 个金杯，并计入席位「今日金杯」。
         const championCup = position === 0 ? 1 : 0;
-        if (championCup) S.addGoldCup(championCup);
+        if (championCup) S.awardArenaCup(championCup);
         let baseExp = kind === 0 ? tables.exp[position] : 0;
         let shards = kind === 1 ? tables.shards[position] : 0;
         const hatch = kind === 2 ? tables.hatch[position] : 0;

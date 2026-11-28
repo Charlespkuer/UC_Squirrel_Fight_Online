@@ -154,6 +154,8 @@ const config = {
   // 安全
   maxBodyBytes: int(process.env.MAX_BODY_BYTES, 4 * 1024 * 1024, 1024, 16 * 1024 * 1024),
   actionRatePerMin: int(process.env.ACTION_RATE_PER_MIN, 240, 1, 100000),
+  // 登录后只读接口按账号限流：客户端红点 60s 一次、页面按需拉取，正常玩远低于这个值。
+  readRatePerMin: int(process.env.READ_RATE_PER_MIN, 300, 1, 1000000),
   // 同一账号两次动作的最小间隔：连点器不能把动作入口打成连发；
   // 与 240 次/分叠加（只算真正执行成功的动作，失败请求不占间隔，见 http.pace）。
   actionIntervalMs: int(process.env.ACTION_INTERVAL_MS, 80, 0, 60000),

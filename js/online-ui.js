@@ -663,8 +663,7 @@
       try { settleNotes = await settlePendingChoicesOnBoot(); } catch (e) {}
       try { if (window.Main && Main.showHome) Main.showHome();
         else if (window.UI && UI.runAction) UI.runAction('home'); } catch (e) {}
-      // 动画帧表（1.86 MB）不在启动链里：进游戏后空闲时预热，首次开战不必现拉。
-      try { if (window.Engine && Engine.warmAnim) Engine.warmAnim(); } catch (e) {}
+      // 动画帧表（1.86 MB）由 Main.showHome 排到首页落定之后，见 scheduleAnimWarm。
       if (settleNotes.length) setTimeout(() => toast(settleNotes.join('；')), 600);
       // 安全提醒优先于宝箱提示：让玩家先看到“新设备登录”，再继续日常流程。
       try { await showSecurityAlerts(); } catch (e) { /* 提醒失败不能挡进游戏 */ }

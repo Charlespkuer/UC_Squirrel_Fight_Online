@@ -1,6 +1,6 @@
 {
   "name": "ssdz-online-app",
-  "version": "1.0.93",
+  "version": "1.0.94",
   "private": true,
   "scripts": {
     "stage": "node ../tools/build-online-app.cjs --web",

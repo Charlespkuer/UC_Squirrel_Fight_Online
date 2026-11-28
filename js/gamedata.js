@@ -129,9 +129,9 @@
   // 每关一个标定系数（力/敏/速/血同乘）。按 `test-stage-balance` 的模型（推荐等级随机玩家、
   // 连战三场、每场后回 25% 血）标到约 0.6 通关率；改战斗伤害/闪避公式后必须重跑该套件再调。
   const STAGE_CAL = Object.freeze([
-    0.92, 0.899, 0.948, 0.882, 0.907, 0.890, 0.965, 1.005, 1.013, 1.071, 1.046, 1.096,
-    0.997, 1.013, 0.940, 0.923, 0.907, 0.989, 1.054, 1.046, 1.079, 1.046, 1.063, 1.087,
-    1.309, 1.260, 1.219, 1.227, 1.202, 1.276, 1.219, 1.186, 1.169, 1.137, 1.194, 1.210,
+    0.830, 0.811, 0.856, 0.796, 0.819, 0.804, 0.825, 0.860, 0.866, 0.915, 0.895, 0.937,
+    0.900, 0.914, 0.848, 0.833, 0.819, 0.893, 1.001, 0.994, 1.025, 0.994, 1.010, 1.033,
+    1.244, 1.197, 1.158, 1.166, 1.142, 1.212, 1.158, 1.127, 1.111, 1.080, 1.134, 1.150,
   ]);
   const stageCal = (stageId) => {
     const v = STAGE_CAL[Number(stageId) - 1];
@@ -385,7 +385,7 @@
 
   const NEW_PLAYER = {
     name: '', level: 1, exp: 0, power: 5, agility: 5, speed: 4, maxHp: 40,
-    energy: 90, maxEnergy: 90, goldPoint: 100, goldCup: 0, goldCupToday: 0, goldCupDate: '', integral: null,
+    energy: 90, maxEnergy: 90, goldPoint: 100, goldCup: 0, arenaCupToday: 0, arenaCupDate: '', integral: null,
     weapons: [],
     skills: [],
     gears: [], wears: {},

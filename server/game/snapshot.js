@@ -109,13 +109,14 @@ function ensureCurrent(accountId, mode, source) {
 
 function prune(accountId, mode, level) {
   const keep = Math.max(1, config.snapshotsPerLevel);
+  // ORDER BY 会让规划器改走 ix_snap_level(mode, level)，扫全服同等级快照；这里钉死账号索引。
   const rows = db.all(
-    'SELECT id, is_current FROM battle_snapshots WHERE account_id = ? AND mode = ? AND level = ? ORDER BY is_current DESC, revision DESC',
+    'SELECT id, is_current FROM battle_snapshots INDEXED BY ix_snap_account WHERE account_id = ? AND mode = ? AND level = ? ORDER BY is_current DESC, revision DESC',
     Number(accountId), mode, level
   );
   if (rows.length <= keep) return;
   const drop = rows.slice(keep).filter((r) => !Number(r.is_current)).map((r) => String(r.id));
-  for (const id of drop) db.run('DELETE FROM battle_snapshots WHERE id = ?', id);
+  if (drop.length) db.run('DELETE FROM battle_snapshots WHERE id IN (' + drop.map(() => '?').join(',') + ')', ...drop);
 }
 
 // 候选对手：同赛区（或同等级段）的当前快照，排除自己/最近打过/长期不登录。
