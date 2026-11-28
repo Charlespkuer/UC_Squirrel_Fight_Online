@@ -6,6 +6,7 @@ const store = require('../game/store');
 const actions = require('../game/actions');
 const snapshot = require('../game/snapshot');
 const visibility = require('../game/visibility');
+const enforcement = require('../game/enforcement');
 const settlement = require('../game/settlement');
 const serverMail = require('../game/server-mail');
 const apprentice = require('../game/apprentice');
@@ -51,6 +52,8 @@ module.exports = {
       season: settlement.weekKey(),
       hidden: visibility.isHidden(accountId),
       hiddenUntil: visibility.hiddenUntil(accountId),
+      enforcement: enforcement.statusFor(accountId),
+      alerts: enforcement.alerts(accountId),
       serverTime: Date.now(),
       summary: store.summaryOf(payload),
       // 新设备/新地点登录提醒：未读时随整档下发，客户端登录后弹一次。

@@ -8,6 +8,7 @@ const store = require('../game/store');
 const settlement = require('../game/settlement');
 const snapshots = require('../game/snapshot');
 const visibility = require('../game/visibility');
+const enforcement = require('../game/enforcement');
 const { fail, clientIp, rateLimit } = require('../http');
 const { config } = require('../config');
 
@@ -28,6 +29,7 @@ function profileOf(account) {
     },
     hidden: visibility.isHidden(account.id),
     hiddenUntil: visibility.hiddenUntil(account.id),
+    enforcement: enforcement.statusFor(account.id),
     hasSave: !!save,
     save: save ? {
       level: Number(save.level), name: String(save.name), power: Number(save.power),

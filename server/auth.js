@@ -7,6 +7,7 @@ const db = require('./db');
 const devices = require('./device');
 const dev = require('./dev');
 const battle = require('./game/battle');
+const enforcement = require('./game/enforcement');
 const forum = require('./game/forum');
 const nickname = require('../js/nickname');
 const { clientIp } = require('./http');
@@ -21,6 +22,16 @@ function scryptHash(password, saltHex) {
   const salt = Buffer.from(saltHex, 'hex');
   return crypto.scryptSync(String(password), salt, SCRYPT.keylen, { N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p })
     .toString('hex');
+}
+
+function bannedError(reason, extra) {
+  const e = new Error(reason || '账号已被封禁');
+  e.code = 'FORBIDDEN';
+  if (extra) e.extra = enforcement.banExtra(extra);
+  return e;
+}
+function blockedIpError(ban) {
+  return bannedError('此网络因关联账号违规已被封禁。解封请加 QQ 群 ' + enforcement.QQ_GROUP + ' 联系群主。', ban);
 }
 
 function sha256(text) {
@@ -169,6 +180,8 @@ function findAccountStrict(key) {
 // 注册：昵称全服唯一（大小写不敏感；老账号的历史重名不追改，新注册不再产生）。
 // tag 仍保留，社交搜索/旧输入「名字#编号」继续兼容，但界面显示只用昵称。
 function register({ name, password, ip, device }) {
+  const blocked = enforcement.ipBanFor(ip);
+  if (blocked) throw blockedIpError(blocked);
   const cleanName = normalizeName(name);
   const pass = normalizePassword(password);
   const salt = crypto.randomBytes(16).toString('hex');
@@ -272,7 +285,7 @@ function sessionFromRequest(req) {
   }
   const account = db.get('SELECT * FROM accounts WHERE id = ?', Number(s.account_id));
   if (!account) return null;
-  if (Number(account.banned)) throw Object.assign(new Error('账号已被封禁'), { code: 'FORBIDDEN' });
+  if (Number(account.banned)) throw bannedError('账号已被封禁：' + (account.ban_reason || '违规'), { status: 'banned', reason: account.ban_reason || '违规' });
   const device = devices.authorize(req, s, account, clientIp(req));
   return { session: s, account, token, device };
 }
@@ -293,20 +306,24 @@ function touchSession(session, nowMs) {
 }
 
 function login({ name, password, ip, device }) {
+  const blocked = enforcement.ipBanFor(ip);
+  if (blocked) throw blockedIpError(blocked);
   const row = findAccount(name);
   if (!row) throw Object.assign(new Error('没有这个账号'), { code: 'AUTH' });
   if (!verifyPassword(row, password)) throw Object.assign(new Error('密码不对'), { code: 'AUTH' });
-  if (Number(row.banned)) throw Object.assign(new Error('账号已被封禁：' + (row.ban_reason || '违规')), { code: 'FORBIDDEN' });
+  if (Number(row.banned)) throw bannedError('账号已被封禁：' + (row.ban_reason || '违规'), { status: 'banned', reason: row.ban_reason || '违规' });
   devices.bind(row.id, device, ip);
   db.run('UPDATE accounts SET last_seen = ? WHERE id = ?', now(), Number(row.id));
   return row;
 }
 
 function recover({ recoveryCode, password, ip, device }) {
+  const blocked = enforcement.ipBanFor(ip);
+  if (blocked) throw blockedIpError(blocked);
   const hash = sha256(String(recoveryCode || '').trim().toUpperCase());
   const row = db.get('SELECT * FROM accounts WHERE recovery_hash = ?', hash);
   if (!row) throw Object.assign(new Error('恢复码无效'), { code: 'AUTH' });
-  if (Number(row.banned)) throw Object.assign(new Error('账号已被封禁'), { code: 'FORBIDDEN' });
+  if (Number(row.banned)) throw bannedError('账号已被封禁：' + (row.ban_reason || '违规'), { status: 'banned', reason: row.ban_reason || '违规' });
   devices.bind(row.id, device, ip);
   if (password) {
     const pass = normalizePassword(password);

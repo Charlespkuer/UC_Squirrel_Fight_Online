@@ -14,6 +14,7 @@ const runtime = require('./game/runtime');
 const settlement = require('./game/settlement');
 const { ApiError, fail, sendJson, sendError, corsHeaders, readJson, clientIp, matchPath, rateLimit } = require('./http');
 const auth = require('./auth');
+const enforcement = require('./game/enforcement');
 
 const api = {
   account: require('./api/account'),
@@ -143,6 +144,7 @@ function health() {
     date: localDate(),
     uptime: Math.round(process.uptime()),
     serverTime: Date.now(),
+    enforcement: enforcement.health(),
   };
 }
 
@@ -560,6 +562,17 @@ async function handle(req, res) {
   const query = {};
   for (const [k, v] of url.searchParams) query[k] = v;
 
+  const ipOpen = pathname === '/api/health' || pathname === '/api/meta'
+    || pathname === '/api/login' || pathname === '/api/register' || pathname === '/api/recover';
+  if (!ipOpen) {
+    const ipBan = enforcement.ipBanFor(clientIp(req));
+    if (ipBan) {
+      const e = fail('FORBIDDEN', '此网络因关联账号违规已被封禁。解封请加 QQ 群 ' + enforcement.QQ_GROUP + ' 联系群主。');
+      e.extra = enforcement.banExtra(ipBan);
+      throw e;
+    }
+  }
+
   let session = null;
   if (matched.opts.auth !== false) {
     session = auth.sessionFromRequest(req);
@@ -573,7 +586,11 @@ async function handle(req, res) {
       }
       throw fail('AUTH', '登录已失效，请重新登录');
     }
-    if (Number(session.account.banned)) throw fail('FORBIDDEN', '账号已被封禁');
+    if (Number(session.account.banned)) {
+      const e = fail('FORBIDDEN', '账号已被封禁：' + (session.account.ban_reason || '违规'));
+      e.extra = enforcement.banExtra({ status: 'banned', reason: session.account.ban_reason || '违规' });
+      throw e;
+    }
     if (req.method === 'GET') rateLimit('read:' + session.account.id, 300, 60000);
   }
 
@@ -623,6 +640,7 @@ function start(port) {
 
   const maintenance = require('./game/maintenance');
   maintenance.startScheduler();
+  enforcement.startScheduler();
 
   const backup = require('./game/backup');
   backup.startScheduler();
@@ -642,7 +660,7 @@ function start(port) {
   });
   server.keepAliveTimeout = 30000;
   server.headersTimeout = 35000;
-  server.on('close', () => { maintenance.stopScheduler(); backup.stopScheduler(); });
+  server.on('close', () => { maintenance.stopScheduler(); backup.stopScheduler(); enforcement.stopScheduler(); });
   const p = port == null ? config.port : port;
   return new Promise((resolve, reject) => {
     server.once('error', reject);
