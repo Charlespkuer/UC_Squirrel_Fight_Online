@@ -2,8 +2,7 @@
 /* ============================================================
  * tools/test-ssfight-render.cjs — 经典模式显示层（js/ssfight/render.js）回归
  *
- * 不启动浏览器：帧构建测纯逻辑，切页生命周期用最小 DOM 原语运行真实显示/UI代码；
- * 浏览器侧的动画播放实测记录见 docs/经典模式-可行性.md §12.6。
+ * 不启动浏览器：帧构建测纯逻辑，切页生命周期用最小 DOM 原语运行真实显示/UI代码。
  *
  * 钉住的语义（每一条都对应一个真实踩过的坑）：
  *   1. tp:1 切帧、remove 删深度、缺 ma 时沿用该深度上次的矩阵；
@@ -847,9 +846,12 @@ const { buildFrames } = SfRender;
     && /setVisible\(clip, true\)/.test(vipFn) && !/setVisible\(vip, false\)/.test(challengeSrc)
     && /VIP_BADGE_DX = 12/.test(challengeSrc)
     && /VIP_BADGE_DX_KIN = 0/.test(challengeSrc)
-    && /item\.kind === 'master' \|\| item\.kind === 'prentice'/.test(vipFn)
-    && /\(kin \? VIP_BADGE_DX_KIN : VIP_BADGE_DX\)/.test(vipFn),
+    && /const isKin = \(item\) => !!\(item && \(item\.kind === 'master' \|\| item\.kind === 'prentice'\)\)/.test(challengeSrc)
+    && /\(isKin\(item\) \? VIP_BADGE_DX_KIN : VIP_BADGE_DX\)/.test(vipFn),
     '挑战页 vip1..vip4 要按名单里的实时 vipLevel 拨帧显示（未开通/到期回第 2 帧空帧）；只有师徒行贴回名牌右缘让开师/徒徽章，普通好友与其它页仍右移 12 个舞台单位');
+  /* 师徒行右侧就是「师/徒」徽章，「玩家」标签叠上去只剩半个「玩」字露在外面。 */
+  assert.ok(/if \(!vipLevel && !isKin\(item\)\) \{/.test(challengeSrc),
+    '师徒行的「师/徒」徽章旁不再叠「玩家」标签（VIP 行同样不叠）');
 }
 
 /* ---------- 20. 换 tab 后立即有真值、反馈壳与命中对象保持同一棵树 ----------
@@ -938,7 +940,7 @@ async function checkClassicViewLifecycle() {
     GData: { nextExp: () => 100 }, UI: { classic: { catalogInfo: () => ({ page: 0, pages: 1, items: [] }) } }, __errs: [],
   };
   env.window = env; vm.createContext(env);
-  for (const file of ['render.js', 'ui-main.js', 'ui-status.js'])
+  for (const file of ['render.js', 'ui-main.js', 'ui-feedback.js', 'ui-status.js'])
     vm.runInContext(fs.readFileSync(path.join(ROOT, 'js/ssfight', file), 'utf8'), env);
   const render = env.SfRender, toolkit = env.SfUiMain.toolkit;
 
@@ -1049,12 +1051,19 @@ async function checkClassicViewLifecycle() {
     '从技能页签返回会重建 mc_*，装备画稿必须重新挂到新实例上');
   assert.deepEqual(env.__errs, [], '真实挂载和接线不能靠吞异常通过');
   /* 装备画稿是灰阶 + 放置上的 `cx` 颜色变换（`p.cx` 直接就是 Rm/Ra/...，没有 `p.cx.cx` 这一层）。
-   * 以前只认 `p.cx.cx`，彩色套装全被画成黑白；这里用狂战头盔 B 容器 1918 第 71 帧钉住这条路径。 */
+   * 以前只认 `p.cx.cx`，彩色套装全被画成黑白；现在纯色与渐变都要烘进画稿，
+   * 不能再留给 iOS 会整块画黑的 feComponentTransfer。 */
   await render.loadExtra('tags-gear.json');
   const gearHost = body.appendChild(new Node('section'));
   const gearView = await render.mountSymbol(gearHost, '1918', { frame: 71, policy: {} });
-  assert.ok(gearView.root.querySelector('filter'), '装备放置上的 cx 必须落成 SVG filter（否则彩色套装变黑白）');
-  assert.ok(gearView.root.querySelectorAll('[filter]').length > 0, '带 cx 的放置节点要真的挂上 filter');
+  const gearBaked = gearView.root.querySelectorAll('[data-sf-baked]');
+  assert.ok(gearBaked.length > 0, '装备放置上的 cx 必须烘进画稿颜色（否则彩色套装变黑白）');
+  const gearCxFilters = gearView.root.querySelectorAll('[filter]')
+    .filter((node) => /^url\(#cx/.test(node.getAttribute('filter') || ''));
+  assert.deepEqual(gearCxFilters.map((node) => node.getAttribute('filter')), [],
+    '紫狂战头这类纯色/渐变染色不能再挂 cx 滤镜');
+  assert.ok(gearBaked.some((node) => node.getAttribute('fill') === 'rgb(155,122,222)'),
+    '紫狂战头的紫色渐变停靠点要被烘焙出来');
   gearView.destroy(); gearHost.remove();
   env.SfStatus.destroy();
   return { env, Node, body, flushTimeouts: () => {
@@ -1226,8 +1235,8 @@ function checkSharedFeedbackLifecycle() {
   /* ① `wireClickable` 的 mouseenter 必须跑到 `onHover` 回调（挑战页行选中就靠它），
    *   且行/拳套卡都要挂同一个回调。 */
   const wc = chLf.slice(chLf.indexOf('function wireClickable('), chLf.indexOf('function resetHits('));
-  assert.ok(/clip\.__chHoverCb = spec\.onHover \|\| null;/.test(wc) && /if \(clip\.__chHoverCb\) clip\.__chHoverCb\(\);/.test(wc),
-    'wireClickable 要支持 onHover（鼠标一进来就回调），否则行列只能靠点击切换');
+  assert.ok(/SfUiFeedback\.wireSvg\(clip, \{/.test(wc) && /onHover: spec\.onHover \|\| null/.test(wc),
+    'wireClickable 要把 onHover 交给共用 SfUiFeedback.wireSvg（鼠标一进来就回调）');
   const fr = chLf.slice(chLf.indexOf('function fillRows('), chLf.indexOf('function selectRow('));
   assert.ok(/onHover: hoverSelect/.test(fr) && /const hoverSelect = \(\) =>/.test(fr) && /selectRow\(idx\)/.test(fr),
     '挑战页每一行（含拳套卡）悬停都要 selectRow —— 绿条与右侧立绘一起跟着鼠标走');
@@ -1310,6 +1319,7 @@ async function checkFightResults({ env, Node, body, flushTimeouts }) {
   /* 3822 的两个昵称框只有 76.2 单位宽：7 个汉字（84）与 21 个字母（约 126）都要缩字号，
    * 不能裁字 —— 用户 2026-11 报的「联机竞技场决赛弹窗昵称显示不完全」。 */
   const arenaLong = await env.SfFightResult.open({ kind: 'arena', win: true, title: '决赛', arenaSubtitle: '获得冠军',
+    text: '胜利！\u3000经验 +150\u3000金杯 +1',
     player: { name: '一二三四五六七', level: 90 }, foe: { name: 'ABCDEFGHIJKLMNOPQRSTU', level: 90 } });
   const textSize = (clip) => {
     const t = clip && clip.querySelector ? clip.querySelector('text') : null;
@@ -1323,6 +1333,10 @@ async function checkFightResults({ env, Node, body, flushTimeouts }) {
   assert.ok(bakedSub && bakedSub.node.style.display === 'none',
     '决赛/季军赛要盖掉原版「进入下一轮争夺冠亚军」副标题');
   assert.ok(arenaLong.view.root.textContent.includes('获得冠军'), '决赛副标题改成「获得冠军」');
+  const arenaBar = [...arenaLong.view.root.querySelectorAll('rect')]
+    .find((r) => r.getAttribute('fill') === '#eed6a5');
+  assert.ok(arenaBar && Number(arenaBar.getAttribute('width')) < 200 && Number(arenaBar.getAttribute('height')) < 22,
+    '最终结算的奖励条要按文字收紧，不能再是固定 252×28 的亮白条');
   arenaLong.close();
   const previous = await env.SfFightResult.open({ kind: 'rank', text: '旧战果' });
   let resumed = 0;
@@ -1352,9 +1366,9 @@ async function checkFightResults({ env, Node, body, flushTimeouts }) {
   assert.equal(reward.view.byName('getExp').frame, 0, '有经验时 getExp 停第 1 帧');
   assert.equal((reward.view.byName('c1').__attached || []).length, 1, '金松果要占第一格并用原版图标');
   const shardCell = reward.view.byName('c2');
-  const shardImg = shardCell && shardCell.g.querySelector('image');
-  assert.ok(shardImg && /prop-77\.svg/.test(shardImg.getAttribute('href')),
-    '黑凤凰碎片没有 SWF 图标时要挂背包 SVG，不能留空格');
+  const shardClip = shardCell && (shardCell.__attached || [])[0];
+  assert.ok(shardClip && String(shardClip.tag.id) === '3068',
+    '黑凤凰碎片要挂原版 3068（自带 2015 卡面），不能再用背包 SVG');
   assert.equal((reward.view.byName('c3').__attached || []).length, 1, '原版道具继续用 SWF 图标占第三格');
   reward.choose(0);
   assert.equal(reward.host.isConnected, false, '战果动作提交后回收整层');
@@ -1508,6 +1522,9 @@ async function checkClassicFight() {
   const loadedFiles = [];
   env.SfRender = env.window.SfRender = {
     loadExtra: async (file) => { loadedFiles.push(file); return { hash: new Map() }; },
+    loadLootIcons: async () => ({}),
+    stopAt: (clip, n) => { if (clip && clip.gotoAndStop) clip.gotoAndStop(n); },
+    setPinned: (clip, frame) => { if (clip && clip.gotoAndStop) { clip.__pinFrame = null; clip.gotoAndStop(frame); clip.playing = false; } },
   };
   await SfFight._loadFightAssets({
     me: { weapons: [{ id: 3 }, { id: 6 }], skills: [{ id: 12, level: 12 }], pets: [{ id: 1 }] },
@@ -1841,13 +1858,15 @@ async function checkClassicFight() {
     'SfFight 要在战果页出现前调用 rewardFor，并把结果交给 showResultPanel');
   assert.ok(/if \(Number\(item\.id\) === 8\) \{ gold \+= count; continue; \}/.test(uf),
     '战斗中飘到的金松果要与结算金松果合并到同一格');
-  /* ②d³ 竞技场冠军金杯：和战利品同格显示（金杯有背包矢量图 prop-40），
+  /* ②d³ 竞技场冠军金杯：和战利品同格显示，走原版 3061（2015 卡面 + 3060 本体），
    *   不再写进底部正文 —— 正文在经验数字下面会互相压住。 */
   const ob = fs.readFileSync(path.join(ROOT, 'js/online-battle.js'), 'utf8').replace(/\r\n/g, '\n');
+  const lootTable = JSON.parse(fs.readFileSync(path.join(dir, 'loot-icons.json'), 'utf8')).byId || {};
   assert.ok(/const cup = Math\.max\(0, Math\.round\(Number\(reward && reward\.goldCup\)/.test(uf)
-    && /if \(Number\(item\.id\) === 40 && target\.attachImage\)/.test(uf)
-    && /out\.goldCup = cup/.test(ob) && !/arenaParts\.push\('金杯/.test(ob),
-    '竞技场冠军金杯要进奖励格（prop-40 矢量图），不能只写进底部正文压住经验数字');
+    && /out\.goldCup = cup/.test(ob) && !/arenaParts\.push\('金杯/.test(ob)
+    && String((lootTable['40'] || {}).id) === '3061'
+    && !!(byId.get('3061') || {}).Sf && !!byId.get('3060'),
+    '竞技场冠军金杯要进奖励格（原版 3061：2015 卡面 + 3060 本体），不能只写进底部正文压住经验数字');
   /* ②e 开宝箱那两步都要**等玩家**（选箱子 / 翻奖后的确定），且都要有回归入口。 */
   assert.ok(/pickChest: \(i\) =>/.test(uf) && /confirmChest: \(\) =>/.test(uf),
     '开宝箱的"选箱子"与"确定"都要留出入口，否则回归与探针走不到那一步');
@@ -2271,12 +2290,16 @@ function checkHeroAtlasFilling() {
     '三侠优先走现代图集，图集没到时才退回 7689 静态稿');
   assert.ok(/const frame = atlasPaintFrame\(anim\)/.test(uf) && /function atlasPaintFrame\(anim\)/.test(uf),
     '三侠图集新动作起手（idx=-1）要先画第 1 帧，不能 clear 后空一帧');
-  assert.ok(/Engine\.drawFrame\(ctx, frame, \{ sheets: (?:NPC_SHEETS\[npcType\]|bodySheets) \}\)/.test(uf)
+  assert.ok(/Engine\.drawFrame\(ctx, frame, \{ sheets: (?:NPC_SHEETS\[npcType\]|bodySheets), y: atlasDy \}\)/.test(uf)
+    && /const atlasDy = NPC_ATLAS_DY\[npcType\] \|\| 0;/.test(uf)
+    && /Engine\.drawFrame\(ctx, eff\.frames\[eff\.idx\], \{ sheets: eff\.sheets, y: atlasDy \}\)/.test(uf)
     && /canvas\.width = 1170; canvas\.height = 690;/.test(uf)
     && /host\.appendChild\(canvas\)/.test(uf) && /function layoutCanvas\([^)]*\)/.test(uf)
     && /canvas\.width \/ 1170, 0, 0, canvas\.height \/ 690/.test(uf)
     && !/createElementNS\(NS, 'foreignObject'\)/.test(uf),
     '现代 1170×690 动画要画进叠在 HTML 宿主上的普通 canvas；不能再用 foreignObject + canvas（WebKit 合成层会丢缩放/位移）');
+  assert.ok(/const NPC_ATLAS_DY = \{ tl: 4, xh: 31, xm: 19 \};/.test(uf) && !/NPC_ATLAS_DY = \{[^}]*wood/.test(uf),
+    '三侠图集要按原版 7689 矢量脚线下移（tl/xh/xm 各自量值）；木人保持原位');
   assert.ok(/mutant && Engine\.mutantSheets/.test(uf) && /ensureMutantSheets\(kind\)/.test(uf),
     '超级三侠（变异三侠）在经典战斗里也走换色图集，普通三侠仍用原版图集');
   /* 2026-10 用户口径：iOS 15.6.1 经典模式挑战三侠时「定位与缩放大幅改变」。
@@ -2300,10 +2323,10 @@ function checkHeroAtlasFilling() {
     && /layer\.appendChild\(node\)/.test(uf)
     && /main\.style\.zIndex = '2'/.test(uf)
     && /z-index:0/.test(uf)
-    && /pointer-events:none;z-index:3/.test(uf)
+    && /pointer-events:none;z-index:1/.test(uf)
     && /const staticBody = holder\.__hero/.test(uf)
     && !/if \(holder && holder\.g\) holder\.g\.style\.visibility = 'hidden'/.test(uf),
-    '三侠图集 canvas 要压在带整屏底图的主 SVG 之上；顶部覆盖层后挂载仍压在画布上');
+    '层序必须是 底图(0) < 三侠 canvas(1) < 主 SVG(2) < 顶部覆盖(3)：飘字要压在三侠上面');
   /* 现代战斗播放器（js/battle.js）已退役；它的 foreignObject 约束随文件一起移走。 */
   assert.ok(/NPC_HIT_FRAME\[name\]/.test(uf) && /npcEffectName\(npcType, key\)/.test(uf)
     && /Engine\.loadSheets\(\[\.\.\.new Set\(ids\)\]\)/.test(uf),
@@ -2772,6 +2795,19 @@ function checkLevelUpStyle() {
     && /holdBackground\(\)/.test(lv) && /releaseBackground/.test(lv)
     && /sf-levelup-bg-only/.test(css) && /SfLevelUp\.releaseBackground\(\)/.test(cu),
     '升级页要显示四维总增量（属性书 16~19），不放三选一占位；三选一时保留 CG 背景');
+  /* 兜底奖励卡：四维增量也走 16~19 的永久属性书，系统分配点并入同级总量、不再单独提示；
+   * 武技三选一保持原来的「选」字徽；完成页要给出具体学会的武技卡，确定键用原版 4399。 */
+  assert.ok(
+    /const STAT_ICON = \{ power: 16, agility: 17, speed: 18, hp: 19 \}/.test(cu) &&
+    /function statCardsHtml\(u\)/.test(cu) &&
+    /gain\[u\.autoPoint\] \+= statGain\(u\.autoPoint\)/.test(cu) &&
+    !/系统分配/.test(cu) &&
+    /reward-badge ws-badge/.test(cu) &&
+    /function mountVectorButton\(footer/.test(cu) &&
+    /mountVectorButton\(footer, '4399', '确定', onFire, 'gold', \{ frame: 2, fixedFrame: true \}/.test(lv) &&
+    /ws-learned-card\{/.test(css) && /ws-learned-card/.test(lv),
+    '升级奖励兜底卡的四维增量用永久属性书 16~19，系统分配点并入总量；三选一保留原「选」字徽，完成页画具体武技卡，确定键走原版 4399'
+  );
   const zOf = (selector) => {
     const m = new RegExp(selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\{[^}]*z-index:(\\d+)').exec(css);
     return m ? Number(m[1]) : NaN;
@@ -3066,7 +3102,8 @@ function checkVillageBuildings() {
   /* 重挂牧场页时 `mountSymbol(host,…)` 会清掉旧宿主子节点，缓存探针因此脱离 DOM，
    * `getBoundingClientRect().width` 变 0 → layoutScale 退回 1 → 新孵出的幻兽图偏右偏大。
    * 探针必须判 isConnected 并重建。 */
-  assert.ok(/if \(!p \|\| !p\.isConnected\)/.test(vil) && /host\.__petProbe = p/.test(vil),
+  assert.ok(/if \(!p \|\| !p\.isConnected\)/.test(main) && /host\[prop\] = p/.test(main)
+    && /layoutScale\(host, '__petProbe'\)/.test(vil),
     '幻兽牧场重挂后缩放探针要判 isConnected 并重建，否则孵出的幻兽图会偏右偏大');
   /* 详情页：原版是 c1 跳空帧 + 挂「全身」，格子边框不出现。放大后的立绘若还走 paintPetCell，
    * 又会被塞回 4279 的小格子里（边框回来、立绘被裁）。 */
@@ -3259,6 +3296,7 @@ function checkClassicPropUseFlow() {
   const root = ROOT;
   const html = fs.readFileSync(path.join(root, 'scripts/index-online.html'), 'utf8').replace(/\r\n/g, '\n');
   const propUse = fs.readFileSync(path.join(root, 'js/ssfight/ui-prop-use.js'), 'utf8').replace(/\r\n/g, '\n');
+  const uiMain = fs.readFileSync(path.join(root, 'js/ssfight/ui-main.js'), 'utf8').replace(/\r\n/g, '\n');
   const cu = fs.readFileSync(path.join(root, 'js/classic-ui.js'), 'utf8').replace(/\r\n/g, '\n');
   const guide = fs.readFileSync(path.join(root, 'js/ssfight/ui-guide.js'), 'utf8').replace(/\r\n/g, '\n');
   const css = fs.readFileSync(path.join(root, 'css/classic-refine.css'), 'utf8').replace(/\r\n/g, '\n');
@@ -3292,7 +3330,8 @@ function checkClassicPropUseFlow() {
     /const EXCHANGE_GEMS = \[101, 102, 103, 104, 105, 106\]/.test(cu) &&
     fs.existsSync(path.join(root, 'images/ssfight/ui/prop-icons.json')) &&
     ['2993', '3133', '3110', '2988', '2390'].every((id) => ids.has(id)) &&    /function openClassicBuyProp\(id, base, mode, backMode\)/.test(cu) &&
-    /classic-home ssfight-sub ssfight-view sf-prop-use-view/.test(propUse) &&
+    /createSubviewHost\('sf-prop-use-view'/.test(propUse) &&
+    /classic-home ssfight-sub ssfight-view ' \+ className/.test(uiMain) &&
     /sf-prop-use-view\{[^}]*top:-11\.087px;bottom:-11\.087px/.test(css) &&
     /function swapButtons\(use, cancel\)/.test(propUse) &&
     /setExtraTransform\('translate\('/.test(propUse) &&
@@ -3586,7 +3625,10 @@ async function checkFightColorBake(fixture) {
   const { env, Node, body } = fixture;
   const shape = 'runtime-bake-shape', parent = 'runtime-bake-parent';
   const tags = [
-    { id: shape, tp: 2, pt: [{ da: 'M0 0H20V20H0Z', fi: 0 }], Fs: [{ c: 'rgb(100,150,200)', tp: 1 }] },
+    { id: shape, tp: 2, pt: [{ da: 'M0 0H20V20H0Z', fi: 0 }, { da: 'M0 0H18V18H0Z', fi: 1 }],
+      Fs: [{ c: 'rgb(100,150,200)', tp: 1 },
+        { tp: 2, x1: 0, x2: 20, y1: 0, y2: 0, sp: [
+          { offset: 0, 'stop-color': 'rgb(0,0,0)' }, { offset: 1, 'stop-color': 'rgb(255,255,255)' }] }] },
     { id: parent, tp: 39, Sf: [
       { tp: 26, d: 1, id: shape, cx: { Rm: 128, Gm: 128, Bm: 128 } }, { tp: 1 },
       /* 导出器用 opacity 表示"显式重置 ColorTransform"（见 render.js 的 buildFrames）。 */
@@ -3606,6 +3648,13 @@ async function checkFightColorBake(fixture) {
     assert.equal(path.getAttribute('fill'), 'rgb(50,75,100)', '纯色 cx 必须烘到 fill，不再走滤镜');
     assert.equal(path.getAttribute('data-sf-baked'), '1');
     assert.equal(view.root.querySelector('filter'), null, '可烘焙的颜色变换不能再建 SVG filter');
+    /* `addDef` 只记账不写 id；烘焙出来的渐变自己不带 id 时 `url(#cxg…)` 是悬空引用，
+     * 那一层画稿整片不画（超级松鼠角标看着像掉了一层的成因）。 */
+    const bakedRef = view.root.querySelectorAll('path')
+      .map((p) => /^url\(#(cxg.+)\)$/.exec(p.getAttribute('fill') || '')).find(Boolean);
+    assert.ok(bakedRef && view.root.querySelectorAll('linearGradient')
+      .some((g) => g.getAttribute('id') === bakedRef[1]),
+    'cx 烘焙出的渐变定义必须带 id，url(#cxg…) 不能悬空');
     view.gotoAndStop(2);
     assert.equal(path.getAttribute('fill'), 'rgb(100,150,200)', 'cx 撤销后必须还原原稿颜色');
     assert.equal(path.getAttribute('data-sf-baked'), null);
@@ -3702,6 +3751,7 @@ function checkCampaignUnlockGate() {
     '缩字号后必须用 layoutText 重算基线与行距');
   assert.match(render, /function layoutText\(node, opts\)/, 'SfRender 要提供按字号重排行距的公共入口');
   assert.match(render, /layoutText,/, 'SfRender.layoutText 要导出');
+  assert.match(render, /\besc,/, 'SfRender.esc 要导出：三选一面板与状态页共用同一份文本转义');
 }
 
 /* ---------- 主界面「只看风景」：中央点击只淡 HUD/按钮，背景/徒弟/主角/气泡留着 ---------- */

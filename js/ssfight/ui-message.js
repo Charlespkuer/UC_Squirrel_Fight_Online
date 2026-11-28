@@ -4,7 +4,7 @@
 
 
   const T = () => (window.SfUiMain && window.SfUiMain.toolkit) || null;
-  const clipOf = (host, name) => (host && host.byName ? host.byName(name) : null);
+  const clipOf = SfUiMain.toolkit.clipOf;
   const toast = (msg) => { try { if (window.UI && UI.toast) UI.toast(msg); } catch (e) {} };
   // 异步失败要留痕：`window.__errs` 是回归探针唯一能看见"点了没反应"的地方。
   const pushErr = (what, e) => { if (window.__errs) window.__errs.push(what + ': ' + (e && e.message)); };
@@ -68,10 +68,7 @@
 
 
 
-  function stopAt(clip, n) {
-    if (!clip || !clip.gotoAndStop) return;
-    try { clip.gotoAndStop(n); } catch (e) {}
-  }
+  const stopAt = (clip, n) => SfRender.stopAt(clip, n);
   // 原版的 `mc.left._visible = false`（不是切禁用帧）—— 照抄成 CSS `visibility`。
   // ⚠ 点击路由会把 `visibility:hidden` 的元件判成"谁都没命中"（见 ui-main.js 的 refresh），
   function setVisible(clip, on) {
@@ -85,111 +82,25 @@
   }
 
   function refreshShell(clip) {
-    const t = T();
-    if (!t || !clip || !clip.g) return;
-    t.popWrap(clip);
-    const shell = clip.g.querySelector(':scope > g.uc-pop');
-    if (shell) t.wirePopPress(shell);
+    SfUiMain.toolkit.refreshShell(clip, false);
   }
 
   function wireClickable(clip, spec) {
-    const t = T();
-    if (!t || !clip || !clip.g) return;
+    if (!T() || !clip || !clip.g) return;
     spec = spec || {};
-    const idleOf = () => (typeof spec.idle === 'function' ? spec.idle() : (spec.idle == null ? 1 : spec.idle));
     clip.__pinFrame = null;
-    clip.__msgFire = spec.onFire || null;
-    clip.__msgIdle = idleOf;
-    clip.__msgHover = Number(spec.hover) || 0;
-    clip.__msgPress = Number(spec.press) || 0;
-    // 监听器只挂一次：重画时同一颗实例会被重新接线（新的 idle / onFire），不能重复 addEventListener。
-    if (!clip.__msgListeners) {
-      clip.__msgListeners = true;
-      clip.g.addEventListener('mouseenter', () => {
-        if (!clip.__msgHover) return;
-        setPinned(clip, clip.__msgHover);
-        refreshShell(clip);
-      });
-      clip.g.addEventListener('mouseleave', () => { pinIdle(clip); refreshShell(clip); });
-      clip.g.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (clip.__msgPress) {
-          t.pressFlash(clip, idleOf(), () => { pinIdle(clip); refreshShell(clip); }, (f) => setPinned(clip, f));
-        }
-        if (clip.__msgFire) clip.__msgFire();
-      });
-    }
-    pinIdle(clip);
-    clip.g.style.cursor = 'pointer';
-    clip.g.style.pointerEvents = 'auto';
-    t.measureHitBox(clip);
-    t.popWrap(clip);
-    const shell = clip.g.querySelector(':scope > g.uc-pop');
-    if (shell) t.wirePopPress(shell);
+    SfUiFeedback.wireSvg(clip, {
+      idle: spec.idle,
+      hover: spec.hover,
+      press: spec.press,
+      freeze: false,
+      onFire: spec.onFire || null,
+    });
   }
 
-  function setPinned(clip, frame) {
-    if (!clip || !clip.gotoAndStop) return;
-    const want = Math.max(1, Math.round(Number(frame) || 1));
-    clip.__pinFrame = null;
-    if (clip.frame !== want - 1) { try { clip.gotoAndStop(want); } catch (e) {} }
-    clip.playing = false;
-  }
-
-  function pinIdle(clip) {
-    if (!clip || !clip.__msgIdle) return;
-    setPinned(clip, clip.__msgIdle());
-  }
-
-  // `render.js` 的文本容器只按框宽横向裁、纵向放开：一整句塞进去会被切掉右半截，
-  // 全角字的步进用这个字段已经画出来的那一行实测；量不到（`blank` 把占位串清掉了，
-  // ⚠ 不查 `textfields-index.json` 的 `charsPerLine`：那份索引是生成期快照，目前还没把
-  const wrapCache = new WeakMap();
+  // 文本按框宽断行的唯一实现：SfUiMain.toolkit（状态页也用同一份）。
   function wrapToField(clip, text, maxLines) {
-    const src = String(text == null ? '' : text);
-    if (!clip || !clip.__textBox) return src;
-    const tb = clip.__textBox;
-    if (!tb.meta || !tb.meta.bd) return src;
-    const W = tb.meta.bd[1] - tb.meta.bd[0] - (tb.meta.lm || 0) - (tb.meta.rm || 0);
-    if (!(W > 8)) return src;
-    // ⚠ 文本容器的 DOM 就是那个 `<g type="text">` 本身（`__textBox` 挂在它上面），不是 MovieClip。
-    const el = clip.g || clip;
-    const svg = el.ownerSVGElement || (el.ownerDocument && el.ownerDocument.querySelector('#ui svg')) || null;
-    const vb = svg ? String(svg.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number) : null;
-    const rect = svg && svg.getBoundingClientRect ? svg.getBoundingClientRect() : null;
-    const k = (rect && rect.width && vb && vb[2]) ? rect.width / vb[2] : 0;
-    let unit = wrapCache.get(clip);
-    if (!unit) {
-      unit = 0;
-      try {
-        const node = el.querySelector && el.querySelector('text');
-        const r = node && node.getBoundingClientRect ? node.getBoundingClientRect() : null;
-        const n = node && node.textContent ? node.textContent.length : 0;
-        if (k && r && r.width > 1 && n > 0) unit = (r.width / k) / n;
-      } catch (e) { unit = 0; }
-      if (!(unit > 0.2 && unit < 8)) {
-        const h = parseFloat(tb.meta.fh) || 12;
-        unit = h > 0 ? h : 12;
-      }
-      wrapCache.set(clip, unit);
-    }
-    const per = Math.max(3, Math.floor(W / unit));
-    const out = [];
-    for (const para of src.split('\n')) {
-      let line = '', wid = 0;
-      for (const ch of para) {
-        const adv = ch.charCodeAt(0) < 0x2E80 ? 0.55 : 1;
-        if (wid + adv > per && line) { out.push(line); line = ''; wid = 0; }
-        line += ch; wid += adv;
-      }
-      out.push(line);
-    }
-    // 行数上限：正文那格放不下第 4 行，宁可截断也不要冲进下一条记录。
-    if (maxLines && out.length > maxLines) {
-      out.length = maxLines;
-      out[maxLines - 1] = out[maxLines - 1].slice(0, Math.max(1, per - 1)) + '…';
-    }
-    return out.join('\n');
+    return SfUiMain.toolkit.wrapToField(clip, text, maxLines);
   }
 
   function writeField(node, text, maxLines) {
@@ -774,7 +685,7 @@
       const back = clipOf(view, 'back' + n);
       if (!back || !back.g) return;
       const want = hot ? 2 : 1;
-      if (back.frame !== want - 1) setPinned(back, want);
+      if (back.frame !== want - 1) SfRender.setPinned(back, want);
     };
     const move = (ev) => {
       if (!current || current.view !== view) return;

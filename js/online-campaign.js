@@ -51,10 +51,7 @@
     return false;
   }
 
-  function stopAt(clip, frame) {
-    if (!clip) return;
-    try { if (clip.gotoAndStop) clip.gotoAndStop(frame); } catch (e) {}
-  }
+  const stopAt = (clip, frame) => SfRender.stopAt(clip, frame);
 
 
   function freezeView(view) {

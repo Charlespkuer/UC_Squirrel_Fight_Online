@@ -19,8 +19,8 @@ for (const lv of [1,15]) {
   for (const id of [1,2,3,4,7,10,11,12,15,16,17]) {
     for(let seed=0;seed<30;seed++) {
       const r=run(seed,fighter({weapons:[{id,level:lv}]}),fighter({speed:20})).rounds;
-      /* 西瓜刀连击是同一把武器的追加攻击（再打一次，不消耗回合），见下方专项。 */
-      const cap = id===4 ? 2 : 1;
+      /* 西瓜刀连击是同一把武器的追加攻击（再打一次，不消耗回合）；流星锤前两投必中、第三投才判定。 */
+      const cap = id===4 ? 2 : id===10 ? 3 : 1;
       assert(r.filter(x=>x.attacker===0&&x.action==='weapon'&&x.id===id).length <= cap);
     }
   }
@@ -30,6 +30,19 @@ for (const lv of [1,15]) {
     const cap = id===12 && lv>10 ? 2 : 1;
     assert(r.filter(x=>x.attacker===0&&x.action==='skill'&&x.id===id).length <= cap);
   }
+}
+/* 流星锤（10）连投：前两投 100% 必出（与菜刀 / 屎坨坨同口径），第三投才掷三连几率。
+ * 固定随机 0 必中第三投、0.99 必不中 —— 两档分别应打出 3 投 / 2 投。 */
+for (const [rnd, expect] of [[0, 3], [0.99, 2]]) {
+  const realRandom = Math.random;
+  Math.random = () => rnd;
+  let rounds;
+  try { rounds = S.simulate(fighter({weapons:[{id:10,level:1}], pattern:['weapon']}), fighter({speed:200})).rounds; }
+  finally { Math.random = realRandom; }
+  const mine = rounds.filter((r) => r.attacker === 0 && r.action === 'weapon' && Number(r.id) === 10);
+  assert.equal(mine.length, expect, '流星锤连投次数（随机 ' + rnd + '）');
+  assert.equal(mine[1].secondThrow, true, '第二投必须是连投追加');
+  if (expect === 3) assert.equal(mine[2].secondThrow, true, '第三投也要标记为连投追加');
 }
 /* 真·野球拳（12）：原表「有N%几率可多使用一次」= 同一手再打一次野球拳，不是白送一次任意行动；
  * 第一下被闪避也要补（原攻略「就算没打中不是还有第2下么」），真5 的 100% 必须连打两下。 */
@@ -49,6 +62,21 @@ for(let seed=0;seed<60;seed++) {
 }
 assert.equal(fistPairs,60,'真5 每场都要打满两下');
 assert.ok(fistFirstDodged>0,'样本里应出现「第一下被闪避、第二下照打」，实际 '+fistFirstDodged);
+/* 第二拳只结算 60%：固定随机 0.2（不闪避 / 不暴击），两段伤害应正好 60%。 */
+{
+  const oldRandom = Math.random;
+  Math.random = () => 0.2;
+  let rounds;
+  try {
+    rounds = S.simulate(fighter({ power: 100, agility: 100, speed: 100, hp: 4000, maxHp: 4000,
+      skills: [{ id: 12, level: 15 }], pattern: ['skill'] }),
+      fighter({ power: 1, agility: 1, speed: 1, hp: 999999, maxHp: 999999 })).rounds;
+  } finally { Math.random = oldRandom; }
+  const idx = rounds.map((r, i) => i).filter(i => rounds[i].attacker === 0 && rounds[i].action === 'skill' && rounds[i].id === 12);
+  assert.equal(idx.length, 2, '真5 野球拳应有两段');
+  assert.ok(rounds[idx[0]].dmg > 0, '第一段应命中');
+  assert.equal(rounds[idx[1]].dmg, Math.round(rounds[idx[0]].dmg * 0.6), '第二段只结算 60% 伤害');
+}
 for(let seed=0;seed<60;seed++) {
   const rounds=run(seed,fighter({skills:[{id:12,level:10}]}),fighter({speed:200})).rounds;
   assert.equal(rounds.filter(r=>r.attacker===0&&r.action==='skill'&&r.id===12).length,1,'10 级野球拳没有第二下');

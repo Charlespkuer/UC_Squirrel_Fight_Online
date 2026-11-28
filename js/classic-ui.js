@@ -269,42 +269,45 @@
       return '<div class="stat-pill' + (editable ? ' hero-stat-pill' : '') + '"><b>' + s + '</b><span class="stat-value">' + esc(stats[k]) + '</span>' + controls + '</div>';
     }).join('') + '</div>';
   }
-  const STAT_ICON = { power: 3, agility: 4, speed: 5 };
-  const STAT_CHAR = { power: '力', agility: '敏', speed: '速', hp: '命' };
-
-  const pointArt = (key) => {
-    const id = STAT_ICON[key];
-    return id ? '<img alt="" class="reward-icon-img" src="' + atlasIcon('prop', id) + '">' : '<b class="reward-badge">' + STAT_CHAR[key] + '</b>';
-  };
+  // 力/敏/速/血四类升级增量统一用金杯商店的「永久 +1」矢量（道具 16~19），
+  // 与 7795 升级页、金宝箱分配页同一套图；不要再回退到 3/4/5 的限时药丸或文字徽。
+  const STAT_ICON = { power: 16, agility: 17, speed: 18, hp: 19 };
+  const STAT_ROWS = [
+    ['power', '力量', 'red'],
+    ['agility', '敏捷', 'blue'],
+    ['speed', '速度', 'green'],
+    ['hp', '生命', 'pink'],
+  ];
+  function statArt(key) {
+    return '<img alt="" class="reward-icon-img" src="' + atlasIcon('prop', STAT_ICON[key]) + '">';
+  }
+  function statGain(key) {
+    const g = window.State && State.STAT_GAIN && Number(State.STAT_GAIN[key]);
+    return g > 0 ? g : (key === 'hp' ? 5 : 1);
+  }
+  // 系统代分配的那一点并进同级属性总量，和 7795 升级页一致，不再单独占一张卡。
+  function statCardsHtml(u) {
+    const gain = {
+      power: Number(u.power) || 0, agility: Number(u.agility) || 0,
+      speed: Number(u.speed) || 0, hp: Number(u.hp) || 0,
+    };
+    if (u.autoPoint && gain[u.autoPoint] != null) gain[u.autoPoint] += statGain(u.autoPoint);
+    return STAT_ROWS.filter(([key]) => gain[key] > 0).map(([key, label, cls]) =>
+      '<div class="reward-card ' + cls + '"><span class="reward-icon">' + statArt(key) + '</span>' +
+      '<span class="reward-text">' + label + '+' + esc(gain[key]) + '</span></div>').join('');
+  }
 
   function upgradeReward(ups) {
     const list = (ups || []).filter(Boolean);
     if (!list.length) return '';
     return list.map((u) => {
-      const stats = [
-        ['power', '力量', u.power, 'red'],
-        ['agility', '敏捷', u.agility, 'blue'],
-        ['speed', '速度', u.speed, 'green'],
-        ['hp', '生命', u.hp, 'pink'],
-      ].filter(([, , v]) => Number(v) > 0);
-      const cards = stats.map(([key, label, value, cls]) => {
-        const id = STAT_ICON[key];
-        const art = id
-          ? '<img alt="" class="reward-icon-img" src="' + atlasIcon('prop', id) + '">'
-          : '<b class="reward-badge">' + STAT_CHAR[key] + '</b>';
-        return '<div class="reward-card ' + cls + '"><span class="reward-icon">' + art + '</span>' +
-          '<span class="reward-text">' + label + '+' + esc(value) + '</span></div>';
-      });
+      const cards = statCardsHtml(u);
       const bonus = u.attributeBook ? '<div class="reward-card skill"><span class="reward-icon">'+icon('prop',37)+'</span><span class="reward-text">属性书 ×1</span></div>' : u.reward
         ? '<div class="reward-card skill"><span class="reward-icon">' + icon(u.rewardKind === 'weapon' ? 'weapon' : 'skill', u.rewardId) + '</span>' +
           '<span class="reward-text">' + esc(u.reward) + '</span></div>'
         : '';
-      const point = u.autoPoint
-        ? '<div class="reward-card point"><span class="reward-icon">' + pointArt(u.autoPoint) + '</span>' +
-          '<span class="reward-text" title="' + STAT_CHAR[u.autoPoint] + '：系统分配（力/敏/速低于25%时优先补该项，否则四项随机）">' + STAT_CHAR[u.autoPoint] + '+' + State.STAT_GAIN[u.autoPoint] + '<span class="point-tag">系统分配</span></span></div>'
-        : '';
       const wsPick = u.wsChoice
-        ? '<div class="reward-card skill"><span class="reward-icon"><b class="reward-badge ws-badge">选</b></span>' +
+        ? '<div class="reward-card skill ws-pick-card"><span class="reward-icon"><b class="reward-badge ws-badge">选</b></span>' +
           '<span class="reward-text">武器/技能 三选一</span></div>'
         : '';
 
@@ -317,7 +320,7 @@
         '<span class="reward-text">' + esc(g.name) + ' ×' + esc(g.count) + '</span></div>').join('');
       return '<div class="reward-panel">' +
         '<div class="reward-title"><img alt="升级奖励" src="images/ui/icons/prop/prop-28.svg"></div>' +
-        '<div class="reward-row">' + cards.join('') + point + wsPick + bonus + chestCard + giftCards + '</div>' +
+        '<div class="reward-row">' + cards + wsPick + bonus + chestCard + giftCards + '</div>' +
         '<div class="reward-level">升到 ' + esc(u.level) + ' 级</div></div>';
     }).join('');
   }
@@ -1486,9 +1489,9 @@
         return '<div class="reward-card gift"><span class="reward-icon">' + giftIcon(g.id) + '</span>' +
           '<span class="reward-text">' + esc(g.name) + ' ×' + esc(g.count) + '</span></div>';
       }).join('');
-      const rows = (u.reward ? '<div class="reward-card skill"><span class="reward-text">' + esc(u.reward) + '</span></div>' : '')
-        + (u.wsChoice ? '<div class="reward-card skill"><span class="reward-icon"><b class="reward-badge ws-badge">选</b></span><span class="reward-text">武器/技能 三选一</span></div>' : '')
-        + (u.autoPoint ? '<div class="reward-card point"><span class="reward-icon">' + pointArt(u.autoPoint) + '</span><span class="reward-text">' + STAT_CHAR[u.autoPoint] + '+' + State.STAT_GAIN[u.autoPoint] + '<span class="point-tag">系统分配</span></span></div>' : '')
+      const rows = statCardsHtml(u)
+        + (u.reward ? '<div class="reward-card skill"><span class="reward-text">' + esc(u.reward) + '</span></div>' : '')
+        + (u.wsChoice ? '<div class="reward-card skill ws-pick-card"><span class="reward-icon"><b class="reward-badge ws-badge">选</b></span><span class="reward-text">武器/技能 三选一</span></div>' : '')
         + (u.chest ? '<div class="reward-card gift"><span class="reward-icon">' + icon('prop', 90) + '</span><span class="reward-text">金宝箱 ×' + esc(u.chest) + '</span></div>' : '')
         + gifts;
       return '<div class="reward-panel"><div class="reward-level">升到 ' + esc(u.level) + ' 级</div>' +
@@ -2620,8 +2623,12 @@
     syncLive();
   }
 
-  function mountVectorButton(footer, symbol, label, onFire, cls) {
+  function mountVectorButton(footer, symbol, label, onFire, cls, opts) {
     if (!footer) return;
+    const o = opts || {};
+    const baseFrame = Math.max(1, Number(o.frame) || 1);
+    const fixedFrame = !!o.fixedFrame;
+    const bundle = o.bundle || 'tags-social-dialog.json';
     const host = document.createElement('div');
     host.className = 'sf-vector-button';
     host.style.visibility = 'hidden';
@@ -2638,7 +2645,7 @@
     };
     const mount = () => {
       if (!window.SfRender || !SfRender.mountSymbol) { fallback(); return; }
-      SfRender.mountSymbol(host, symbol, { frame: 1, label: label }).then((view) => {
+      SfRender.mountSymbol(host, symbol, { frame: baseFrame, label: label }).then((view) => {
         if (!footer.isConnected || !view || !view.g) {
           if (view) { try { view.destroy(); } catch (e) {} }
           fallback();
@@ -2661,7 +2668,10 @@
         host.style.width = '200px';
         host.style.height = Math.max(58, Math.round(200 * box.height / box.width * 100) / 100) + 'px';
         host.style.visibility = '';
-        const hover = (on) => { try { view.gotoAndStop(on ? 2 : 1); } catch (e) {} };
+        const hover = (on) => {
+          if (fixedFrame) return;
+          try { view.gotoAndStop(on ? 2 : baseFrame); } catch (e) {}
+        };
         const pressed = (on) => host.classList.toggle('pressed', !!on);
         view.g.addEventListener('pointerenter', () => hover(true));
         view.g.addEventListener('pointerleave', () => { hover(false); pressed(false); });
@@ -2677,7 +2687,7 @@
         view.g.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') fire(e); });
       }).catch(fallback);
     };
-    if (window.SfRender && SfRender.loadExtra) SfRender.loadExtra('tags-social-dialog.json').catch(() => {}).then(mount);
+    if (window.SfRender && SfRender.loadExtra) SfRender.loadExtra(bundle).catch(() => {}).then(mount);
     else mount();
   }
   // 天使果实 / 恶魔果实：一次只显示 1 个随机武技（天使=学会，恶魔=遗忘）。
@@ -3471,7 +3481,12 @@
   function openGuideItem(id) {
     const prop = propMap.getValue(id);
     if (!prop) return;
-    modal(prop.name, '<div class="guide-detail"><span class="item-icon">' + icon('prop', id) + '</span><div class="guide-info"><p><b>效果</b>：' + esc(prop.remark || '—') + '</p><p><b>获取方式与概率</b>：</p><ul>' + guideSources(id).map((s) => '<li>' + esc(s) + '</li>').join('') + '</ul></div></div>', [{ label: '返回帮助', cls: 'gold', run: openHelp }], { small: true });
+    const m = modal(prop.name, '<div class="guide-detail"><span class="item-icon">' + icon('prop', id) + '</span><div class="guide-info"><p><b>效果</b>：' + esc(prop.remark || '—') + '</p><p><b>获取方式与概率</b>：</p><ul>' + guideSources(id).map((s) => '<li>' + esc(s) + '</li>').join('') + '</ul></div></div>', [], { small: true });
+    const footer = $('.modal-buttons', m.element);
+    if (!footer) return;
+    // 关卡确认页同款 3644（键面 baked「返回」）；素材未到时 mountVectorButton 自己退回 DOM 药丸。
+    footer.style.minHeight = '88px';
+    mountVectorButton(footer, '3644', '返回', () => { m.close(); openHelp(); }, 'gold', { bundle: 'tags-daoju.json' });
   }
   function onlineGuideItem(id) { return !window.__SSDZ_ONLINE__ || Number(id) !== 89; }
   // 帮助页最下面的公告入口（联机版专用）：系统公告 + 更新公告。
@@ -3722,7 +3737,7 @@
 
   window.UI={...legacy,renderHome,drawHomeHud,drawActor,runAction,currentScreen:()=>screen,refreshHome,renderNumbers,refreshHeader,openHeroPage,
     currentUiMode,applyUiMode,UI_MODE_LSKEY,layoutHeight,smokeSelectors,
-    classic:{page,modal,notice,btn,bind,inlineSvgIcon,icon,goldIcon,propIconSrc,gearIconSrc,statsHtml,portrait,resultModal,stageResult,home,toast,num,setNum,upgradeReward,upsHtml,pickupResult,promptLevelUpChoices,showLevelUps,wsChoiceDialog,openSupportModal,maybeSupportPrompt,supportPanelHtml,copyText,supportMeta,wireSystemFeedback,focusBagProp,
+    classic:{page,modal,notice,btn,bind,mountVectorButton,inlineSvgIcon,icon,goldIcon,propIconSrc,gearIconSrc,statsHtml,portrait,resultModal,stageResult,home,toast,num,setNum,upgradeReward,upsHtml,pickupResult,promptLevelUpChoices,showLevelUps,wsChoiceDialog,openSupportModal,maybeSupportPrompt,supportPanelHtml,copyText,supportMeta,wireSystemFeedback,focusBagProp,
       // 帮助页的词条：`help('gems')` 直接开到那条并高亮；`helpTerm('gems')` 取文案/标题，
       // 别的地方要引用帮助内容时走这两个，不要再抄一份文字。
       help:openHelp,helpTerm,openHeroPage,

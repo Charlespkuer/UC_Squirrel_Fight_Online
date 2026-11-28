@@ -81,11 +81,8 @@
 
 
 
-  const clipOf = (host, name) => (host && host.byName ? host.byName(name) : null);
-  function stopAt(clip, n) {
-    if (!clip || !clip.gotoAndStop) return;
-    try { clip.gotoAndStop(n); } catch (e) {}
-  }
+  const clipOf = SfUiMain.toolkit.clipOf;
+  const stopAt = (clip, n) => SfRender.stopAt(clip, n);
   function setText(clip, str) {
     const t = T();
     if (t && clip) t.setText(clip, str == null ? '' : String(str));
@@ -116,6 +113,8 @@
   const VIP_BADGE_DX_KIN = 0;
   // 带 VIP 角标时昵称要停在角标左边（宽度随角标右移一起放宽）；只对真正超宽的昵称缩字号。
   const VIP_NAME_WIDTH = 90;
+  // 师徒行右侧是原版「师/徒」关系徽章；这一行的「玩家」标签与 VIP 右移都按它分开处理。
+  const isKin = (item) => !!(item && (item.kind === 'master' || item.kind === 'prentice'));
   function resetNameFit(clip) {
     const b = clip && clip.__textBox;
     const node = clip && (clip.g || clip);
@@ -135,8 +134,7 @@
     setVisible(clip, true);
     // 每次显示都重挂偏移：切 tab 会重建 7638 的放置，旧的 __extra 不会跟过来。
     if (clip.setExtraTransform) {
-      const kin = !!(item && (item.kind === 'master' || item.kind === 'prentice'));
-      clip.setExtraTransform('translate(' + (kin ? VIP_BADGE_DX_KIN : VIP_BADGE_DX) + ',0)');
+      clip.setExtraTransform('translate(' + (isKin(item) ? VIP_BADGE_DX_KIN : VIP_BADGE_DX) + ',0)');
     }
   }
   function alignRowText(row) {
@@ -170,57 +168,23 @@
   }
 
   function refreshShell(clip) {
-    const t = T();
-    if (!t || !clip || !clip.g) return;
-    t.popWrap(clip);
-    const shell = clip.g.querySelector(':scope > g.uc-pop');
-    if (shell) t.wirePopPress(shell);
+    SfUiMain.toolkit.refreshShell(clip, false);
   }
 
   function wireClickable(clip, spec) {
-    const t = T();
-    if (!t || !clip || !clip.g) return;
+    if (!T() || !clip || !clip.g) return;
     spec = spec || {};
-    const idleOf = () => (typeof spec.idle === 'function' ? spec.idle() : (spec.idle == null ? 1 : spec.idle));
     clip.__pinFrame = null;
-    clip.__chFire = spec.onFire || null;
-    clip.__chIdle = idleOf;
-    clip.__chAfter = spec.after || null;
-    clip.__chHover = Number(spec.hover) || 0;
-    clip.__chPress = Number(spec.press) || 0;
-    // `onHover`：指针一进来就执行的回调（原版是键盘光标走到哪就选到哪，
-    // ⚠ 回调每次 `wireClickable` 都刷新（闭包捕获的行号会变），监听只挂一次。
-    clip.__chHoverCb = spec.onHover || null;
-    if (!clip.__chListeners) {
-      clip.__chListeners = true;
-      clip.g.addEventListener('mouseenter', () => {
-        if (clip.__chHoverCb) clip.__chHoverCb();
-        if (!clip.__chHover) return;
-        stopAt(clip, clip.__chHover);
-        refreshShell(clip);
-        if (clip.__chAfter) clip.__chAfter();
-      });
-      clip.g.addEventListener('mouseleave', () => {
-        stopAt(clip, clip.__chIdle ? clip.__chIdle() : 1);
-        refreshShell(clip);
-        if (clip.__chAfter) clip.__chAfter();
-      });
-      clip.g.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (clip.__chPress) t.pressFlash(clip, clip.__chIdle ? clip.__chIdle() : 1, () => refreshShell(clip));
-        if (clip.__chAfter) clip.__chAfter();
-        if (clip.__chFire) clip.__chFire();
-      });
-    }
-    // ⚠ 下面这一段每次调用都要跑：`unwire()` 会把元件从点击路由里摘掉，
-    stopAt(clip, idleOf());
-    clip.g.style.cursor = 'pointer';
-    clip.g.style.pointerEvents = 'auto';
-    t.measureHitBox(clip);
-    t.popWrap(clip);
-    const shell = clip.g.querySelector(':scope > g.uc-pop');
-    if (shell) t.wirePopPress(shell);
-    if (clip.__chAfter) clip.__chAfter();
+    // `onHover`：指针一进来就执行的回调（原版是键盘光标走到哪就选到哪）。
+    SfUiFeedback.wireSvg(clip, {
+      idle: spec.idle,
+      hover: spec.hover,
+      press: spec.press,
+      freeze: false,
+      after: spec.after || null,
+      onHover: spec.onHover || null,
+      onFire: spec.onFire || null,
+    });
   }
 
   function resetHits(svg) {
@@ -242,24 +206,14 @@
   let gearTables = null;
   async function loadGearTables() {
     if (gearTables) return gearTables;
-    const j = (f) => SfRender.loadTable(f).catch(() => null);
-    const [frames, slots] = await Promise.all([j('gear-frames.json'), j('gear-slots.json')]);
-    if (!frames || !slots) return null;
-    const cont = {};
-    // showFace 的 mc_head/mc_hand 等挂点使用非 B 立绘容器；B 容器服务战斗骨骼，
-    // 注册原点不同，不能共用。缺失立绘表时不拿战斗稿补位。
-    for (const c of slots.portraitContainer || []) cont[c.type] = c.ids;
-    // 橙装现在有原版 q4 id；旧档的实例 `orange:true` 仍兼容。橙稿帧按同部位同名字的 q4 帧查，
-    const keyOf = (g) => Number(g.type) + '|' + String(g.name || '');
-    const q4 = new Map();
-    for (const g of frames.gear || []) if (Number(g.quality) === 4) q4.set(keyOf(g), g.frame);
-    const orangeFrameById = new Map();
-    for (const g of frames.gear || []) {
-      if (Number(g.quality) !== 3) continue;
-      const f = q4.get(keyOf(g));
-      if (f) orangeFrameById.set(Number(g.id), f);
-    }
-    gearTables = { frameById: new Map((frames.gear || []).map((g) => [Number(g.id), g.frame])), orangeFrameById, cont: cont };
+    const t = await SfUiMain.loadGearTables();
+    if (!t) return null;
+    // 立绘用 portraitContainer（非 B 战斗容器）：同一份 gear-frames 只解析一次。
+    gearTables = {
+      frameById: t.frameById,
+      orangeFrameById: t.orangeFrameById,
+      cont: t.portraitContainerIds,
+    };
     return gearTables;
   }
 
@@ -703,8 +657,7 @@
   function unwire(clip) {
     const t = T();
     if (!t || !clip) return;
-    clip.__chFire = null;
-    clip.__chIdle = () => 1;
+    SfUiFeedback.unwireSvg(clip);
     if (clip.g && clip.g.style) clip.g.style.cursor = 'default';
     t.unregisterHit(clip);
   }
@@ -716,7 +669,7 @@
     let whoLabel = '';
     try { if (item && window.__SSDZ_ONLINE__ && window.OnlineUI && OnlineUI.identity) whoLabel = OnlineUI.identity(item).label || ''; } catch (e) {}
     const rowSig = (row.__shownFrame == null ? '' : row.__shownFrame) + '|' + (item
-      ? [item.name, item.level, item.vipLevel, item.accountId, item.realId, whoLabel].join('|') : '');
+      ? [item.name, item.level, item.vipLevel, item.accountId, item.realId, item.kind, whoLabel].join('|') : '');
     if (row.__rowSig === rowSig) return;
     row.__rowSig = rowSig;
     const vipLevel = item ? Math.max(0, Math.min(VIP_MAX_LEVEL, Math.floor(Number(item.vipLevel) || 0))) : 0;
@@ -746,8 +699,9 @@
       for (const old of (scope.querySelectorAll ? scope.querySelectorAll(selector) : [])) old.remove();
       if (item) {
         const who = OnlineUI.identity(item);
-        // VIP 角标本身只可能出现在玩家行上，再叠「玩家」会压住角标数字；保留 aria-label 即可。
-        if (!vipLevel) {
+        // VIP 角标只可能出现在玩家行上，再叠「玩家」会压住角标数字；师徒行的「师/徒」徽章
+        // 同样占住标签位，只剩半个「玩」字露在外面。两者都只保留 aria-label。
+        if (!vipLevel && !isKin(item)) {
           const badge = document.createElementNS('http://www.w3.org/2000/svg', 'text');
           badge.setAttribute('data-online-source', who.bot ? 'bot' : who.player ? 'player' : 'unknown');
           badge.setAttribute('data-row', String(index));
@@ -1433,6 +1387,14 @@
       const ref = String(info.snapshotRef || '');
       out.snapshotRef = String(frozen ? ref : (ref || foe.snapshotRef || ''));
       out.snapshotId = String(frozen ? (out.snapshotRef || snapshotId) : (info.snapshotId || foe.snapshotId || ''));
+      // 好友状态页的「今日胜率 / 战斗场次」跟面板一起按账号实时取；快照里没有这份数据，
+      // 但列表行可能带着上一次的值，所以成功拿到时必须覆盖。
+      if (!frozen) {
+        for (const key of ['dailyWins', 'dailyFails', 'allWins', 'allFails']) {
+          const n = Number(info[key]);
+          if (Number.isFinite(n)) out[key] = Math.max(0, Math.round(n));
+        }
+      }
       delete out.previewUnavailable;
       return out;
     }).catch(() => foe);

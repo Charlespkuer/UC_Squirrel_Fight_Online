@@ -23,14 +23,6 @@ const DEFAULT_WORDS = [
 let wordCache = null;
 let statsCache = { at: 0, value: null };
 
-function metaGet(key) {
-  const row = db.get('SELECT value FROM meta WHERE key = ?', String(key));
-  return row ? String(row.value) : '';
-}
-function metaSet(key, value) {
-  db.run('INSERT INTO meta (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-    String(key), String(value));
-}
 
 function matchKey(value) {
   return String(value == null ? '' : value).normalize('NFKC').toLowerCase()
@@ -39,7 +31,7 @@ function matchKey(value) {
 }
 
 function seedWords() {
-  if (metaGet('forum.words.seeded') === '1') return;
+  if (db.metaGet('forum.words.seeded') === '1') return;
   db.tx(() => {
     const now = Date.now();
     for (const [word, category] of DEFAULT_WORDS) {
@@ -48,20 +40,20 @@ function seedWords() {
       db.run('INSERT OR IGNORE INTO forum_banned_words (word,match_key,category,note,created_by,created_at) VALUES (?,?,?,?,?,?)',
         word, key, category, '默认词库', 0, now);
     }
-    metaSet('forum.words.seeded', '1');
+    db.metaSet('forum.words.seeded', '1');
   });
   wordCache = null;
 }
 
 function seedFounder() {
   const hasAdmin = !!db.get('SELECT 1 AS x FROM forum_admins LIMIT 1');
-  if (hasAdmin && metaGet('forum.founder.seeded') === '1') return;
+  if (hasAdmin && db.metaGet('forum.founder.seeded') === '1') return;
   for (const playerId of config.forumFounderPlayerIds) {
     const row = db.get('SELECT account_id FROM player_ids WHERE player_id = ?', Number(playerId));
     if (!row) continue;
     db.run('INSERT OR IGNORE INTO forum_admins (account_id,role,created_at,created_by,note) VALUES (?,?,?,?,?)',
       Number(row.account_id), 'admin', Date.now(), 0, '创始管理员（玩家编号 ' + playerId + '）');
-    metaSet('forum.founder.seeded', '1');
+    db.metaSet('forum.founder.seeded', '1');
     return;
   }
 }

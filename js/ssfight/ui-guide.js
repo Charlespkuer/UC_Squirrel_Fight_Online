@@ -67,9 +67,7 @@
   function err(e) {
     if (window.__errs) window.__errs.push('SfGuide: ' + (e && (e.stack || e.message) || e));
   }
-  function escText(s) {
-    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  }
+  function escText(s) { return SfRender.esc(s); }
 
   const TARGET_ART = new Set(['3589', '3590', '3591', '3592', '3593', '3595', '3596', '3597', '3598', '3599', '3602', '3609']);
 
@@ -251,10 +249,7 @@
   }
 
   function freeze(view) {
-    try {
-      if (window.SfUiMain && SfUiMain.toolkit && SfUiMain.toolkit.freezeDescendants) SfUiMain.toolkit.freezeDescendants(view);
-    } catch (e) { err(e); }
-    if (view) view.playing = false;
+    try { SfUiMain.toolkit.freezeView(view); } catch (e) { err(e); }
   }
   function hide() {
     generation++;

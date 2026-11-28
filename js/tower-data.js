@@ -1916,7 +1916,7 @@
     towerLevel, towerMult, towerGold, towerGoldShares, TOWER_FAIL_CONSOLATION,
     TOWER_LEVEL_CAP, TOWER_MULT_CAP_LAYER, TOWER_GOLD_CAP,
     TOWER_GOLD_BASE, TOWER_GOLD_STEP, TOWER_GOLD_CAP_LAYER, TOWER_GOLD_X5_MUL, TOWER_GOLD_X10_MUL,
-    TOWER_EARLY_HP_MUL, towerGoldBase, towerEarlyHpMul,
+    TOWER_EARLY_HP_MUL, towerGoldBase, towerEarlyHpMul, instantOwned,
     endlessLevel, endlessSegment, endlessMult, endlessMechStacks, endlessMechs, ENDLESS_MECH_MAX, endlessTickets,
     GEAR_TIER, gearKeyForLayer, gearTierCap, ENDLESS_BOSS_POOL, BOSS_GEAR_RARITY, bossGearTier, endlessBossWeights,
     bossIsLegendary, legendaryChance,

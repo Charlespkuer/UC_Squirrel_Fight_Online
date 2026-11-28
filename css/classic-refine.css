@@ -151,7 +151,10 @@ g.sf-activity-btn.attention{animation:activity-attention 2.2s ease-in-out 2;
 
 /* ⚠ 不能给原版元件自己的 <g> 加 CSS transform：会覆盖父级每帧重写的原版矩阵。 */
 .uc-pop{transform-box:fill-box;transform-origin:center;transform:scale(1);
-  transition:transform .13s cubic-bezier(.34,1.4,.64,1)}
+  transition:transform .13s cubic-bezier(.34,1.4,.64,1);touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+/* 指针点按会把 <g> 聚焦成浏览器默认黑框；去掉它，键盘焦点仍由 :focus-visible 暖金环兜底。 */
+.uc-pop:focus{outline:none}
+.uc-pop:focus-visible{outline:3px solid #ffe27a;outline-offset:3px}
 /* ⚠ `.sf-hover` 是**点击路由**（ui-main.js 的 routerOf）自己加上去的类：为了让"指针到底停在 */
 .uc-pop:hover,.uc-pop.sf-hover{transform:scale(1.035);filter:drop-shadow(0 0 4px rgba(255,226,122,.9)) brightness(1.04)}
 
@@ -644,7 +647,6 @@ html[data-ui-mode="classic"] .classic-page.classic-tower,
 .free-point-box .allocation-remaining{margin:0;font-size:22px}
 .reward-card.point .reward-icon{border-color:#7a5bbf;box-shadow:inset 0 0 0 4px #efe8ff,0 0 10px #7a5bbf55}
 .reward-card.point .reward-text{display:flex;flex-direction:column;align-items:center;font-size:18px;color:#5b3f96;line-height:1.2}
-.reward-card.point .reward-badge{color:#4a3579;background:radial-gradient(circle at 38% 32%,#efe8ff,#c3b0ee)}
 .point-tag{font-size:13px;color:#8a4a3a;background:#ffe6df;border-radius:8px;padding:0 5px;font-weight:normal}
 .reward-card.skill .reward-badge.ws-badge{color:#2f5f26;background:radial-gradient(circle at 38% 32%,#eaf7dd,#b6dd97)}
 
@@ -666,6 +668,16 @@ html[data-ui-mode="classic"] .classic-page.classic-tower,
 .ws-choice.is-static{cursor:default}
 .ws-choice.is-static:hover{transform:none;box-shadow:inset 0 0 0 4px #fffdf3,0 3px 0 #c8a870}
 @media (prefers-reduced-motion: reduce){.ws-choice{transition:none}.ws-choice:hover{transform:none}}
+
+/* 完成页：本次具体学会的武技（图标 + 名字），与三选一卡同一套视觉。 */
+.ws-learned-row{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:4px}
+.ws-learned-card{display:flex;flex-direction:column;align-items:center;gap:4px;width:150px;padding:12px 10px;
+  border:4px solid #b98a4c;border-radius:22px;background:linear-gradient(#fffdf1,#f5e6c2);
+  box-shadow:inset 0 0 0 4px #fffdf3,0 3px 0 #c8a870}
+.ws-learned-card .item-icon{width:104px;height:104px;display:flex;align-items:center;justify-content:center}
+.ws-learned-card .item-icon img{width:96%;height:96%;object-fit:contain}
+.ws-learned-card .ws-choice-name{font-size:23px}
+.ws-learned-card .ws-choice-kind{font-size:16px}
 
 /* 系统页内容超出时允许向下滚动，避免下半截被裁掉。 */
 .classic-page[data-screen="system"]>.classic-board{overflow-y:auto;overscroll-behavior:contain;
@@ -891,6 +903,8 @@ html[data-ui-mode="classic"] .classic-page.classic-tower,
 .sf-levelup-ws[hidden]{display:none}
 .sf-levelup-ws>.classic-modal.small-modal{width:956px;max-height:620px;padding-left:20px;padding-right:20px}
 .sf-levelup-ws>.classic-modal.small-modal>.modal-body{max-height:490px;overflow-y:auto;scrollbar-gutter:auto}
+.sf-levelup-ws>.classic-modal.sf-levelup-done-modal{width:640px}
+.sf-levelup-done-modal>.modal-body{text-align:center}
 .sf-levelup-ws .sf-levelup-error{margin:4px 8px 0;font-size:22px;line-height:1.4;color:#a2231a;text-align:center}
 .sf-levelup-fallback{position:absolute;top:0;right:0;bottom:0;left:0;inset:0;display:flex;align-items:center;justify-content:center;padding:18px}
 .sf-levelup-fallback>.classic-modal.small-modal{width:956px;max-height:620px}

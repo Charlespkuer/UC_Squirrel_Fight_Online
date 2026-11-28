@@ -5,8 +5,7 @@
 
   const T = () => (window.SfUiMain && window.SfUiMain.toolkit) || null;
   const S = () => (window.State && State.state && State.state()) || null;
-  const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g,
-    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  function esc(v) { return SfRender.esc(v); }
 
   // 原版四维的名字与显示顺序（第 1 帧里四个 4315 数字精灵的实例名，导出数据实测）：
   // ⚠ 第 4 格画的是「命」（生命值）。原版那一行是
@@ -80,83 +79,37 @@
   }
 
 
-  const clipOf = (host, name) => (host && host.byName ? host.byName(name) : null);
+  const clipOf = SfUiMain.toolkit.clipOf;
   // 让元件停在某一帧（不自己播）。状态页的按钮/格子都是"状态精灵"，只能停帧不能 play。
-  function stopAt(clip, n) {
-    if (!clip || !clip.gotoAndStop) return;
-    try { clip.gotoAndStop(n); } catch (e) {}
-  }
+  const stopAt = (clip, n) => SfRender.stopAt(clip, n);
   function setTextByName(host, name, str, opts) {
-    const t = T();
-    const n = clipOf(host, name);
-    if (t && n) t.setText(n, str, opts);
-    return n;
+    return SfUiMain.toolkit.setTextByName(host, name, str, opts);
   }
 
   function refreshShell(clip) {
-    const t = T();
-    if (!t || !clip || !clip.g) return;
-    t.popWrap(clip);
-    const shell = clip.g.querySelector(':scope > g.uc-pop');
-    if (shell) t.wirePopPress(shell);
-    t.freezeDescendants(clip);
+    SfUiMain.toolkit.refreshShell(clip, true);
   }
 
   function wireClickable(clip, spec) {
-    const t = T();
-    if (!t || !clip || !clip.g) return;
+    if (!T() || !clip || !clip.g) return;
     spec = spec || {};
-    const idleOf = () => (typeof spec.idle === 'function' ? spec.idle() : (spec.idle == null ? 1 : spec.idle));
     clip.__pinFrame = null;
-    if (clip.__statusWired) {
-      clip.__statusFire = spec.onFire;
-      clip.__statusIdle = idleOf;
-      pinIdle(clip);
-      refreshShell(clip);
-      return;
-    }
-    clip.__statusWired = true;
-    clip.__statusFire = spec.onFire;
-    clip.__statusIdle = idleOf;
-    pinIdle(clip);
-    clip.g.style.cursor = 'pointer';
-    clip.g.style.pointerEvents = 'auto';
-    t.measureHitBox(clip);
-    t.popWrap(clip);
-    const shell = clip.g.querySelector(':scope > g.uc-pop');
-    if (shell) t.wirePopPress(shell);
-    clip.g.addEventListener('mouseenter', () => {
-      if (!spec.hover) return;
-      setPinned(clip, spec.hover);
-      refreshShell(clip);
+    SfUiFeedback.wireSvg(clip, {
+      idle: spec.idle,
+      hover: spec.hover,
+      press: spec.press,
+      freeze: true,
+      refreshOnWire: true,
+      onFire: spec.onFire || null,
     });
-    clip.g.addEventListener('mouseleave', () => { pinIdle(clip); refreshShell(clip); });
-    clip.g.addEventListener('click', (e) => {
-      e.stopPropagation();
-
-      if (spec.press) t.pressFlash(clip, idleOf(), () => { pinIdle(clip); refreshShell(clip); },
-        (f) => setPinned(clip, f));
-      if (clip.__statusFire) clip.__statusFire();
-    });
-  }
-
-  function setPinned(clip, frame) {
-    if (!clip || !clip.gotoAndStop) return;
-    const want = Math.max(1, Math.round(Number(frame) || 1));
-    clip.__pinFrame = null;
-    if (clip.frame !== want - 1) { try { clip.gotoAndStop(want); } catch (e) {} }
-    clip.playing = false;
-  }
-
-  function pinIdle(clip) {
-    if (!clip || !clip.__statusIdle) return;
-    setPinned(clip, clip.__statusIdle());
   }
 
   function settleStatusButton(clip) {
-    if (!clip || !clip.__statusIdle) return;
-    if (clip.frame !== clip.__statusIdle() - 1) refreshShell(clip);
-    pinIdle(clip);
+    if (!clip) return;
+    const idle = SfUiFeedback.idleOfSvg(clip);
+    if (idle == null) return;
+    if (clip.frame !== idle - 1) refreshShell(clip);
+    SfUiFeedback.pinIdleSvg(clip);
   }
 
   function setVisible(clip, on) {
@@ -285,7 +238,11 @@
     const hs = hero ? ((typeof hero.stats === 'function' ? hero.stats() : hero.stats) || {}) : null;
     const src = foe ? {
       name: foe.name, level: Math.max(1, Math.round(Number(foe.level) || 1)),
-      exp: 0, nextExp: 0, dailyWins: 0, dailyFails: 0, allWins: 0, allFails: 0,
+      exp: 0, nextExp: 0,
+      dailyWins: Math.max(0, Math.round(Number(foe.dailyWins) || 0)),
+      dailyFails: Math.max(0, Math.round(Number(foe.dailyFails) || 0)),
+      allWins: Math.max(0, Math.round(Number(foe.allWins) || 0)),
+      allFails: Math.max(0, Math.round(Number(foe.allFails) || 0)),
       power: Number(foe.power) || 0, agility: Number(foe.agility) || 0,
       speed: Number(foe.speed) || 0, hp: Number(foe.hp) || 0,
     } : hero ? {
@@ -1194,7 +1151,6 @@
       s: (n) => (n * k) / hs,
     };
   }
-  function esc2(v) { return esc(v); }
 
   function heroOwnedItem(kind, id) {
     const hero = Hero();
@@ -1540,54 +1496,9 @@
       writeIconLevel(v, row, true);
     } catch (e) { if (window.__errs) window.__errs.push('detail icon clip: ' + (e && e.message)); }
   }
-  // `render.js` 的文本容器只按框宽横向裁，纵向是放开的 ——
-  // 原版那些字段的框宽在 `textfields.json` 里（例：`des`=4541 宽 150、字号 12
-  const wrapCache = new WeakMap();
-  // 把一个文本容器当尺子，把 `text` 断到它的框宽里（保留已有的 `\n`）。
-  // ⚠ 别用 canvas 量（踩过）：`measureText('国').width / fontSize` 在无头 Chrome 里
-  // 这里改成拿这个字段已经画出来的那一行当尺子：它的屏幕宽度 / 字符数
+  // 文本按框宽断行的唯一实现：SfUiMain.toolkit（消息页也用同一份）。
   function wrapToField(clip, text) {
-    const src = String(text == null ? '' : text);
-    if (!clip || !clip.__textBox) return src;
-    const tb = clip.__textBox;
-    if (!tb.meta || !tb.meta.bd) return src;
-    const W = tb.meta.bd[1] - tb.meta.bd[0] - (tb.meta.lm || 0) - (tb.meta.rm || 0);
-    if (!(W > 8)) return src;
-    // ⚠ 文本容器的 DOM 就是那个 `<g type="text">` 本身（`__textBox` 挂在它上面），
-    // 不能按 `clip.g.…` 取（踩过：`clip.g` 为 undefined，函数直接原样返回、等于没断行）。
-    const el = clip.g || clip;
-    const svg = el.ownerSVGElement || (el.ownerDocument && el.ownerDocument.querySelector('#ui svg')) || null;
-    const vb = svg ? String(svg.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number) : null;
-    const rect = svg && svg.getBoundingClientRect ? svg.getBoundingClientRect() : null;
-    const k = (rect && rect.width && vb && vb[2]) ? rect.width / vb[2] : 0;
-    let unit = wrapCache.get(clip);
-    if (!unit) {
-      unit = 0;
-      try {
-        const node = el.querySelector && el.querySelector('text');
-        const r = node && node.getBoundingClientRect ? node.getBoundingClientRect() : null;
-        const n = node && node.textContent ? node.textContent.length : 0;
-        if (k && r && r.width > 1 && n > 0) unit = (r.width / k) / n;
-      } catch (e) { unit = 0; }
-
-      if (!(unit > 0.2 && unit < 8)) {
-        const h = parseFloat(tb.meta.fh) || 12;
-        unit = h > 0 ? h : 12;
-      }
-      wrapCache.set(clip, unit);
-    }
-    const per = Math.max(3, Math.floor(W / unit));
-    const out = [];
-    for (const para of src.split('\n')) {
-      let line = '', wid = 0;
-      for (const ch of para) {
-        const adv = ch.charCodeAt(0) < 0x2E80 ? 0.55 : 1;
-        if (wid + adv > per && line) { out.push(line); line = ''; wid = 0; }
-        line += ch; wid += adv;
-      }
-      out.push(line);
-    }
-    return out.join('\n');
+    return SfUiMain.toolkit.wrapToField(clip, text);
   }
   // `setText` + 按框宽断行（详情页那几段说明专用）。
   // ⚠ 传进来的 `clip` 是 `byName()` 拿到的那个具名子元件，它自己不是文本容器
@@ -1724,19 +1635,19 @@
       (b.h ? 'height:' + m.s(b.h).toFixed(2) + 'px;' : '');
     const heroReq = heroDetail
       ? '<div class="sf-d-req" style="' + pos(DETAIL.req) + '">' +
-          (pct != null ? '<div class="sf-d-req-rate"><b>下一级成功率</b><i>' + esc2(pct) + '%</i></div>' : '') +
+          (pct != null ? '<div class="sf-d-req-rate"><b>下一级成功率</b><i>' + esc(pct) + '%</i></div>' : '') +
           '<div class="small-label" style="margin-top:4px">本局勇者武技 · 无法直接升级</div>' +
         '</div>'
       : '';
     dom.innerHTML =
       '<div class="sf-d-panel" style="' + pos(DETAIL.panel) + '"></div>' +
       '<div class="sf-d-tab" style="' + pos(DETAIL.tab) + '">' + (isW ? '武器详情' : '技能详情') + '</div>' +
-      '<div class="sf-d-name' + (locked ? ' locked' : '') + '" style="' + pos(DETAIL.name) + '">' + esc2(shownName) + '</div>' +
+      '<div class="sf-d-name' + (locked ? ' locked' : '') + '" style="' + pos(DETAIL.name) + '">' + esc(shownName) + '</div>' +
       '<div class="sf-d-icon' + (locked ? ' locked' : '') + '" style="' + pos(DETAIL.icon) + '"></div>' +
       '<div class="sf-d-stats" style="' + pos(DETAIL.stat) + '">' +
         statRow('阶段', lvText, m) + statRow(isW ? '伤害' : '等级', harm, m) + statRow('类型', base && base.type ? base.type : '被动', m) +
       '</div>' +
-      '<div class="sf-d-desc" style="' + pos(DETAIL.desc) + '">' + esc2(descText) + '</div>' +
+      '<div class="sf-d-desc" style="' + pos(DETAIL.desc) + '">' + esc(descText) + '</div>' +
       (locked
         ? '<div class="sf-d-locked" style="' + pos(DETAIL.req) + '">' + (heroDetail ? '尚未掌握<br>该' : '尚未获得<br>该') + (isW ? '武器' : '技能') + '</div>'
         : (heroDetail
@@ -1744,8 +1655,8 @@
           : (rows.length || pct != null
             ? '<div class="sf-d-req" style="' + pos(DETAIL.req) + '">' +
                 '<div class="sf-d-req-head"><span>需要</span><span>已有</span></div>' +
-                rows.map((r) => '<div class="sf-d-req-row"><b>' + esc2(r.label) + '</b><i class="need">' + esc2(r.need) + '</i><i class="have">' + esc2(r.have) + '</i></div>').join('') +
-                (pct != null ? '<div class="sf-d-req-rate"><b>成功率</b><i>' + esc2(pct) + '%</i></div>' : '') +
+                rows.map((r) => '<div class="sf-d-req-row"><b>' + esc(r.label) + '</b><i class="need">' + esc(r.need) + '</i><i class="have">' + esc(r.have) + '</i></div>').join('') +
+                (pct != null ? '<div class="sf-d-req-rate"><b>成功率</b><i>' + esc(pct) + '%</i></div>' : '') +
               '</div>'
             : ''))) +
       '<button class="sf-d-ok' + ((locked || maxed || heroDetail) ? ' off' : '') + '" style="' + pos({ x: DETAIL.btn.ok.x, y: DETAIL.btn.y, w: DETAIL.btn.ok.w, h: DETAIL.btn.h }) + '">' +
@@ -1795,7 +1706,7 @@
     return { k: k, x: (sx) => (sx * k) / hs, y: (sy) => (sy * k) / hs, s: (n) => (n * k) / hs };
   }
   function statRow(label, value, m) {
-    return '<span class="sf-d-stat"><b>' + esc2(label) + '</b><i>' + esc2(value) + '</i></span>';
+    return '<span class="sf-d-stat"><b>' + esc(label) + '</b><i>' + esc(value) + '</i></span>';
   }
   // 只收详情页那一层（回状态页，格子还在）。
   // ⚠ 底层那一页一直在播：`render.js` 的播放注册表是按视图分开的，
@@ -1848,16 +1759,7 @@
   // ⚠ 这两样都是原版矢量元件自带的，不需要 DOM 补：
 
 
-  function layoutScale(host) {
-    if (!host.__probe) {
-      const p = document.createElement('div');
-      p.style.cssText = 'position:absolute;left:0;top:0;width:100px;height:0;pointer-events:none;visibility:hidden';
-      host.appendChild(p);
-      host.__probe = p;
-    }
-    const w = host.__probe.getBoundingClientRect().width;
-    return w ? w / 100 : 1;
-  }
+  function layoutScale(host) { return SfUiMain.toolkit.layoutScale(host, '__probe'); }
 
   function wireCell(cell, kind, it, i) {
     const t = T();
@@ -2243,6 +2145,39 @@
 
   let seq = 0;
 
+  // 好友页停着时对方可能还在打：每 10 秒按账号重取一次今日胜率 / 场次。
+  // 只改这四个字段，不换面板与装备，免得玩家正看着的页突然变装。
+  const FRIEND_STATS_POLL_MS = 10 * 1000;
+  function watchFriendStats(view) {
+    const foe = Friend();
+    const accountId = Number(foe && (foe.accountId || foe.remoteId) || 0);
+    // 随机 / 天梯的「查看」是抽到的那颗快照，不跟着对方继续战斗变；只轮询好友与师徒行。
+    if (!foe || foe.friend !== true || !(accountId > 0) || !window.Online || !Online.ready) return;
+    const page = current;
+    let busy = false;
+    page.friendStatsTimer = setInterval(async () => {
+      if (busy || current !== page || page.view !== view || page.tab !== 'status') return;
+      if (!window.Online || !Online.ready) return;
+      if (typeof document !== 'undefined' && document.hidden) return;
+      busy = true;
+      try {
+        const data = await Online.get('/api/fighter?accountId=' + encodeURIComponent(accountId), { timeoutMs: 5000 });
+        if (current !== page || page.view !== view || page.tab !== 'status') return;
+        let changed = false;
+        for (const key of ['dailyWins', 'dailyFails', 'allWins', 'allFails']) {
+          const n = Number(data && data[key]);
+          if (!Number.isFinite(n)) continue;
+          const next = Math.max(0, Math.round(n));
+          if (page.friend[key] !== next) { page.friend[key] = next; changed = true; }
+        }
+        // 状态页本来就有 1 秒刷新，这里显式重绘是为了不把可见性完全押在那个定时器上。
+        if (changed) fillValues(view);
+      } catch (e) {
+        // 轮询失败保持上一份数字，下一轮再试。
+      } finally { busy = false; }
+    }, FRIEND_STATS_POLL_MS);
+  }
+
   let openTrace = '';
   async function open(container, opts) {
     openTrace = 'start';
@@ -2284,7 +2219,10 @@
     current = { view: view, container: host, tab: initialTab, gridPage: 0,
 
       friend: o.friend || null, hero: o.hero || null, backTo: o.backTo || null, overlay: !!o.overlay };
-    if (o.friend) setTextByName(view, 'playerName', String(o.friend.name || ''));
+    if (o.friend) {
+      setTextByName(view, 'playerName', String(o.friend.name || ''));
+      watchFriendStats(view);
+    }
 
     try { if (window.Main && Main.resizeLayout) Main.resizeLayout(); } catch (e) {}
     // 这一页是静态页（原版靠键盘选中才切某一项的帧）：交给统一的「静态页策略」
@@ -2315,6 +2253,7 @@
     const overlayHost = current && current.overlay ? current.container : null;
     if (current) {
       if (current.timer) clearInterval(current.timer);
+      if (current.friendStatsTimer) clearInterval(current.friendStatsTimer);
       if (current.detail) destroyItemDetailOnly();
       if (current.view) { try { current.view.destroy(); } catch (e) {} }
     }
@@ -2626,8 +2565,8 @@
         : '';
       return '<li class="' + (g ? '' : 'none') + '">' +
         '<span class="sf-fd-icon gear" data-img="' + gearImg + '"></span>' +
-        '<b>' + esc2(g ? gearName(g) : '（未穿戴）') + '</b>' +
-        '<i>' + esc2(GEAR_PART_NAME[ty] || '') + (g ? ('　+' + lv) : '') + '</i></li>';
+        '<b>' + esc(g ? gearName(g) : '（未穿戴）') + '</b>' +
+        '<i>' + esc(GEAR_PART_NAME[ty] || '') + (g ? ('　+' + lv) : '') + '</i></li>';
     }).join('');
     const stats = ['力|power', '敏|agility', '速|speed', '命|hp'].map((pair) => {
       const kv = pair.split('|');
@@ -2636,7 +2575,7 @@
     dom.innerHTML =
       '<div class="sf-d-panel" style="' + pos(b) + '"></div>' +
       '<div class="sf-fg-head" style="' + pos({ x: b.x + 8, y: b.y + 6, w: b.w - 16, h: 24 }) + '">' +
-        '<b>' + esc2(foe.name || '') + '</b><span>Lv' + esc2(foe.level || 1) + '　查看装备</span></div>' +
+        '<b>' + esc(foe.name || '') + '</b><span>Lv' + esc(foe.level || 1) + '　查看装备</span></div>' +
       '<div class="sf-fg-stats" style="' + pos({ x: b.x + 10, y: b.y + 34, w: b.w - 20, h: 20 }) + '">' + stats + '</div>' +
       '<div class="sf-fg-label" style="' + pos({ x: b.x + 12, y: b.y + 58, w: 60, h: 14 }) + '">身上穿的</div>' +
       '<ul class="sf-fg-list" style="' + pos({ x: b.x + 10, y: b.y + 74, w: b.w - 20, h: 60 }) + '">' + rows + '</ul>' +

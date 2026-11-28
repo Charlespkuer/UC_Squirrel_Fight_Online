@@ -3077,6 +3077,10 @@ test('狼牙棒持续伤害对双方同口径：命中后给对方挂 DOT，并�
       '我方狼牙棒命中后应给自己挂上 DOT');
     assert.ok(mine.rounds.some((r) => r.action === 'dot' && r.attacker === 1 && r.selfDot && r.dmg > 0),
       '敌方行动时应结算我方挂上的 DOT');
+    const dotAt = mine.rounds.findIndex((r) => r.action === 'weapon' && r.attacker === 0 && Number(r.id) === 12 && r.dotApplied);
+    const firstTick = mine.rounds[dotAt + 1];
+    assert.ok(firstTick && firstTick.action === 'dot' && firstTick.clubFirstTick && firstTick.dmg > 0,
+      '狼牙棒挂上 DOT 后应立即补跳一次，再按 4 回合结算');
 
     /* 敌方先手：同一代码路径也要对玩家生效，不能出现单边。 */
     const me2 = base('我方', { agility: 1 });
@@ -3086,6 +3090,16 @@ test('狼牙棒持续伤害对双方同口径：命中后给对方挂 DOT，并�
       '敌方狼牙棒命中后应给我方挂上 DOT');
     assert.ok(theirs.rounds.some((r) => r.action === 'dot' && r.attacker === 0 && r.selfDot && r.dmg > 0),
       '我方行动时应结算敌方挂上的 DOT');
+
+    /* 闪避也挂 DOT：目标敏捷拉满让武器被闪，35% 判定仍要照常掷。 */
+    const me3 = base('我方', { speed: 100, weapons: [{ id: 12, level: 5 }] });
+    const foe3 = base('敌方', { agility: 9999 });
+    const dodged = Sim.simulate(me3, foe3);
+    const dodgeHit = dodged.rounds.find((r) => r.action === 'weapon' && r.attacker === 0 && Number(r.id) === 12);
+    assert.ok(dodgeHit && dodgeHit.dodge && dodgeHit.dotApplied,
+      '狼牙棒被闪避时也应能挂上 DOT');
+    assert.ok(dodged.rounds.some((r) => r.action === 'dot' && r.attacker === 1 && r.selfDot && r.clubFirstTick),
+      '闪避挂上的 DOT 也应立即补跳一次');
   } finally { g.math.random = oldRandom; }
 });
 

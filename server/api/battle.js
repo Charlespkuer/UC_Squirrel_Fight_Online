@@ -184,7 +184,9 @@ module.exports = {
     const accountId = Number(ctx.query.accountId || 0);
     if (!accountId) throw fail('BAD_REQUEST', '缺少 accountId 或 snapshotId');
     const snap = snapshots.currentSnapshot(accountId, 'classic');
-    const live = apprentice.liveFighterOfAccount(accountId);
+    // 同一个存档既用来现算实时面板，也用来读今日胜率 / 场次，避免重复读库。
+    const save = store.peek(accountId);
+    const live = apprentice.liveFighterOfAccount(accountId, save);
     if (!live) throw fail('NOT_FOUND', '对方还没有战斗快照');
     return {
       ok: true,
@@ -192,6 +194,7 @@ module.exports = {
       vipLevel: vip.levelOf(accountId),
       source: 'player', player: true, bot: false, accountId,
       fighter: live,
+      ...store.battleStatsOf(save),
     };
   },
 

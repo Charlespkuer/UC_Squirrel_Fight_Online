@@ -118,5 +118,107 @@
     if (host && host.classList) host.classList.remove('sf-hover', 'pressed', 'picked', 'sf-leaving');
   }
 
-  window.SfUiFeedback = Object.freeze({ bind: bind, tap: tap, pick: pick, clear: clear });
+  // SVG 元件（`clip.g`）的唯一接线通道：监听器、热区/壳、按下闪帧都在这里，
+  // 页面只传 idle/hover/press 与 freeze/css 等策略，不再有“重接模式”。
+  const svgStates = new WeakMap();
+  function svgToolkit() { return window.SfUiMain && window.SfUiMain.toolkit; }
+  function pinSvg(clip, frame) {
+    if (window.SfRender && SfRender.setPinned) SfRender.setPinned(clip, frame);
+  }
+  function refreshSvg(clip, s) {
+    const t = svgToolkit();
+    if (t && t.refreshShell) t.refreshShell(clip, s.options.freeze !== false);
+  }
+  function idleFrame(o) {
+    return typeof o.idle === 'function' ? o.idle() : (o.idle == null ? 1 : o.idle);
+  }
+  function armSvg(clip, s) {
+    const t = svgToolkit();
+    if (!t) return;
+    t.measureHitBox(clip);
+    t.popWrap(clip);
+    const shell = clip.g.querySelector(':scope > g.uc-pop');
+    if (shell) t.wirePopPress(shell);
+    if (s.options.css) bind(clip.g, { hover: false, shell: () => clip.g.querySelector(':scope > g.uc-pop') });
+    s.armed = true;
+    s.armFrame = clip.frame;
+  }
+  function wireSvg(clip, options) {
+    const g = clip && clip.g;
+    const t = svgToolkit();
+    if (!g || !g.addEventListener || !t) return;
+    let s = svgStates.get(clip);
+    if (!s) { s = { bound: false, armed: false, armFrame: null, hovering: false, options: {} }; svgStates.set(clip, s); }
+    const wasArmed = s.armed;
+    s.options = Object.assign({}, s.options, options || {});
+    const o = s.options;
+    o.hover = Number(o.hover) || 0;
+    o.press = Number(o.press) || 0;
+    if (!s.bound) {
+      s.bound = true;
+      g.addEventListener('mouseenter', () => {
+        const x = s.options;
+        s.hovering = true;
+        if (typeof x.onHover === 'function') x.onHover();
+        if (!x.hover) return;
+        pinSvg(clip, x.hover);
+        refreshSvg(clip, s);
+        if (typeof x.after === 'function') x.after();
+      });
+      g.addEventListener('mouseleave', () => {
+        const x = s.options;
+        s.hovering = false;
+        pinSvg(clip, idleFrame(x));
+        refreshSvg(clip, s);
+        if (typeof x.after === 'function') x.after();
+      });
+      g.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const x = s.options;
+        if (x.press) {
+          t.pressFlash(clip, idleFrame(x), () => { pinSvg(clip, idleFrame(x)); refreshSvg(clip, s); },
+            (f) => pinSvg(clip, f));
+        }
+        if (typeof x.after === 'function') x.after();
+        const fire = () => { if (typeof x.onFire === 'function') x.onFire(); };
+        if (x.css) {
+          if (window.SfUiFeedback) SfUiFeedback.tap(g, fire, { delay: 0, press: false });
+          else fire();
+        } else fire();
+      });
+    }
+    g.style.cursor = 'pointer';
+    g.style.pointerEvents = 'auto';
+    if (!s.hovering) pinSvg(clip, idleFrame(o));
+    const shell = g.querySelector(':scope > g.uc-pop');
+    if (!s.armed || !shell || (!s.hovering && clip.frame !== s.armFrame)) armSvg(clip, s);
+    if (typeof o.after === 'function') o.after();
+    // 状态页重接后要把新壳重新钉住；第一次接线不走这一步（与原页一致）。
+    if (wasArmed && o.refreshOnWire) refreshSvg(clip, s);
+  }
+  function idleOfSvg(clip) {
+    const s = clip && svgStates.get(clip);
+    return s ? idleFrame(s.options) : null;
+  }
+  function pinIdleSvg(clip) {
+    const s = clip && svgStates.get(clip);
+    if (!s) return false;
+    pinSvg(clip, idleFrame(s.options));
+    return true;
+  }
+  function unwireSvg(clip) {
+    const s = clip && svgStates.get(clip);
+    if (!s) return;
+    s.armed = false;
+    s.armFrame = null;
+    s.hovering = false;
+    s.options.onFire = null;
+    s.options.idle = () => 1;
+    if (clip.g) clear(clip.g);
+  }
+
+  window.SfUiFeedback = Object.freeze({
+    bind: bind, tap: tap, pick: pick, clear: clear,
+    wireSvg: wireSvg, unwireSvg: unwireSvg, idleOfSvg: idleOfSvg, pinIdleSvg: pinIdleSvg,
+  });
 })();

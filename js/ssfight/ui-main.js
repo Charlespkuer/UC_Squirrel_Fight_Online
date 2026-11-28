@@ -99,6 +99,63 @@
     }
     if (typeof clip.gotoAndStop === 'function') clip.gotoAndStop(n);
   }
+  // 联机自建页面共用的宿主壳与 SVG 小图标（合成 / 道具使用等页）。
+  function createSubviewHost(className, aria, extra) {
+    const ui = document.getElementById('ui');
+    if (!ui) return null;
+    const host = document.createElement('section');
+    host.className = 'classic-home ssfight-sub ssfight-view ' + className + (extra ? ' ' + extra : '');
+    host.setAttribute('aria-label', aria || '');
+    ui.appendChild(host);
+    return host;
+  }
+  function paintSvgIcon(clip, src, className) {
+    if (!clip || !clip.g || !src) return;
+    const host = clip.getContentHost ? clip.getContentHost() : clip.g;
+    if (!host) return;
+    for (const old of host.querySelectorAll('image.' + className)) old.remove();
+    let box = { x: 0, y: 0, width: 44, height: 44 };
+    try { if (clip.g.getBBox) box = clip.g.getBBox(); } catch (e) {}
+    const base = Math.min(Math.max(24, Number(box.width) || 44), Math.max(24, Number(box.height) || 44));
+    const size = Math.round(base * 0.86);
+    const img = document.createElementNS('http://www.w3.org/2000/svg', 'image');
+    img.setAttribute('class', className);
+    img.setAttribute('href', src);
+    img.setAttribute('xlink:href', src);
+    img.setAttribute('x', String((Number(box.x) || 0) + ((Number(box.width) || 44) - size) / 2));
+    img.setAttribute('y', String((Number(box.y) || 0) + ((Number(box.height) || 44) - size) / 2));
+    img.setAttribute('width', String(size));
+    img.setAttribute('height', String(size));
+    img.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    img.setAttribute('pointer-events', 'none');
+    host.appendChild(img);
+  }
+  function clipOf(host, name) {
+    return host && host.byName ? host.byName(name) : null;
+  }
+  function setTextByName(host, name, str, opts) {
+    const n = host && host.byName ? host.byName(name) : null;
+    if (n) setText(n, str, opts);
+    return n;
+  }
+  function freezeView(view) {
+    freezeDescendants(view);
+    if (view) view.playing = false;
+  }
+  function layoutScale(host, key) {
+    if (!host) return 1;
+    const prop = key || '__layoutProbe';
+    let p = host[prop];
+    if (!p || !p.isConnected) {
+      p = document.createElement('div');
+      p.style.cssText = 'position:absolute;left:0;top:0;width:100px;height:0;pointer-events:none;visibility:hidden';
+      host.appendChild(p);
+      host[prop] = p;
+    }
+    const w = p.getBoundingClientRect().width;
+    return w ? w / 100 : 1;
+  }
+
 
   // 原版的 setText(文本框, 字符串)：把文本占位换成真实内容（村庄页用它写昵称）。
   // ⚠ 换行必须交给显示层（`SfRender.setText`）：SVG 的 `<text>` 不会把 `\r`/`\n` 当断行，
@@ -113,6 +170,65 @@
       return;
     }
     if (node.textContent !== undefined) node.textContent = str == null ? '' : String(str);
+  }
+
+  // 文本容器只按框宽横向裁，纵向放开：用字段已经画出来的那一行当尺子，把 `text`
+  // 断进框宽（保留已有 `\n`）。`maxLines` 有值时末行加省略号，避免冲进下一条记录。
+  const wrapToFieldCache = new WeakMap();
+  function wrapToField(clip, text, maxLines) {
+    const src = String(text == null ? '' : text);
+    if (!clip || !clip.__textBox) return src;
+    const tb = clip.__textBox;
+    if (!tb.meta || !tb.meta.bd) return src;
+    const W = tb.meta.bd[1] - tb.meta.bd[0] - (tb.meta.lm || 0) - (tb.meta.rm || 0);
+    if (!(W > 8)) return src;
+    // ⚠ 文本容器的 DOM 就是那个 `<g type="text">` 本身（`__textBox` 挂在它上面），不是 MovieClip。
+    const el = clip.g || clip;
+    const svg = el.ownerSVGElement || (el.ownerDocument && el.ownerDocument.querySelector('#ui svg')) || null;
+    const vb = svg ? String(svg.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number) : null;
+    const rect = svg && svg.getBoundingClientRect ? svg.getBoundingClientRect() : null;
+    const k = (rect && rect.width && vb && vb[2]) ? rect.width / vb[2] : 0;
+    let unit = wrapToFieldCache.get(clip);
+    if (!unit) {
+      unit = 0;
+      try {
+        const node = el.querySelector && el.querySelector('text');
+        const r = node && node.getBoundingClientRect ? node.getBoundingClientRect() : null;
+        const n = node && node.textContent ? node.textContent.length : 0;
+        if (k && r && r.width > 1 && n > 0) unit = (r.width / k) / n;
+      } catch (e) { unit = 0; }
+      if (!(unit > 0.2 && unit < 8)) {
+        const h = parseFloat(tb.meta.fh) || 12;
+        unit = h > 0 ? h : 12;
+      }
+      wrapToFieldCache.set(clip, unit);
+    }
+    const per = Math.max(3, Math.floor(W / unit));
+    const out = [];
+    for (const para of src.split('\n')) {
+      let line = '', wid = 0;
+      for (const ch of para) {
+        const adv = ch.charCodeAt(0) < 0x2E80 ? 0.55 : 1;
+        if (wid + adv > per && line) { out.push(line); line = ''; wid = 0; }
+        line += ch; wid += adv;
+      }
+      out.push(line);
+    }
+    if (maxLines && out.length > maxLines) {
+      out.length = maxLines;
+      out[maxLines - 1] = out[maxLines - 1].slice(0, Math.max(1, per - 1)) + '…';
+    }
+    return out.join('\n');
+  }
+
+  // 悬停/点按切帧后重建的 `uc-pop` 壳：四个页面共用这一份，`freeze` 只差在
+  // 状态/村庄页要把新壳重新按静态页策略冻结。
+  function refreshShell(clip, freeze) {
+    if (!clip || !clip.g) return;
+    popWrap(clip);
+    const shell = clip.g.querySelector(':scope > g.uc-pop');
+    if (shell) wirePopPress(shell);
+    if (freeze) freezeDescendants(clip);
   }
 
   // 昵称是 `main`（7039）里那个文本字段 `name`（7018，框宽 100.65 / 字号 14 / 居中）。
@@ -228,6 +344,8 @@
     // 容器 id 从 gear-slots.json 的 container 声明里取（生成器同时写了名字与数字 id）
     const containerIds = {};
     for (const c of slots.container || []) containerIds[c.type] = c.ids;
+    const portraitContainerIds = {};
+    for (const c of slots.portraitContainer || []) portraitContainerIds[c.type] = c.ids;
 
     const keyOf = (g) => Number(g.type) + '|' + String(g.name || '');
     const q4 = new Map();
@@ -241,7 +359,8 @@
     slotPlan = {
       frameById: new Map(frames.gear.map((g) => [Number(g.id), g.frame])),
       orangeFrameById: orangeFrameById,
-      slots: slots.slots, holders: slots.holders || [], containerIds: containerIds,
+      slots: slots.slots, holders: slots.holders || [],
+      containerIds: containerIds, portraitContainerIds: portraitContainerIds,
     };
     return slotPlan;
   }
@@ -328,6 +447,15 @@
   const GOLD_NUM_DY_STAGE = -1.0;
   const GOLD_NUM_DY = (GOLD_NUM_DY_STAGE / 0.53).toFixed(3);
 
+  // 主界面的金松果和胶囊是同一颗原版形状（7023）：导出时画稿被裁到元件包围盒，
+  // 阴影左下角留下一条直边（帮助页/包裹里那颗 3131 是完整的）。这里把该形状里
+  // 属于图标的路径藏掉，按它们的外框改贴同一颗无框矢量 `prop-8.svg`。
+  const GOLD_ART = 'images/ui/icons/prop/prop-8.svg';
+  // `prop-8.svg` 的 viewBox 不是画稿包围盒（四周约 6 单位留白），要对齐的是 ink 框；
+  // 换素材时这两个框要一起量、一起改。
+  const GOLD_ART_VB = { x: -0.6, y: -1.9, w: 46.7, h: 46.7 };
+  const GOLD_ART_INK = { x: 6.05, y: 4.15, w: 33.4, h: 35.0 };
+
   const ENERGY_DX_STAGE = -1.5;
   const ENERGY_DX = (ENERGY_DX_STAGE / 0.75).toFixed(3);
   // ⚠ 不要用 `filter:drop-shadow()` 给昵称加柔影：Android 16（HyperOS 3 / WebView 133）
@@ -367,6 +495,67 @@
       if (c && c.setExtraTransform) c.setExtraTransform('translate(' + ENERGY_DX + ',0)');
     }
     styleName(main);
+  }
+
+  // 形状路径的外框（只处理导出数据里的绝对坐标命令，够判断"这一段是胶囊还是图标"）。
+  function pathBox(d) {
+    const nums = String(d == null ? '' : d).match(/-?\d+(?:\.\d+)?/g);
+    if (!nums || nums.length < 4) return null;
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (let i = 0; i + 1 < nums.length; i += 2) {
+      const x = Number(nums[i]), y = Number(nums[i + 1]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+    }
+    return x1 >= x0 ? { x0, x1, y0, y1 } : null;
+  }
+
+  function paintGoldArt(main) {
+    const root = main && (main.g || main);
+    if (!root || !root.querySelectorAll) return false;
+    if (main.__goldArt && main.__goldArt.parentNode) return true;
+    // 主界面里横条形状不止一颗（体力/经验条），所以认到胶囊后还要认出左边的图标再动手。
+    for (const shape of root.querySelectorAll('g[type="shape"]')) {
+      const paths = [];
+      for (const n of shape.childNodes || []) {
+        if (n.nodeName === 'path' || n.tagName === 'path') paths.push(n);
+      }
+      if (paths.length < 20) continue;
+      const boxes = paths.map((p) => pathBox(p.getAttribute('d')));
+      const pill = boxes.find((b) => b && b.x1 - b.x0 > 50 && b.y1 - b.y0 > 8 && b.y1 - b.y0 < 22);
+      if (!pill) continue;
+      const hide = [], icon = [];
+      for (let i = 0; i < paths.length; i++) {
+        const b = boxes[i];
+        if (!b) continue;
+        if (b.x1 < pill.x0 + 18 && b.y0 > pill.y0 - 8) { hide.push(paths[i]); icon.push(b); }
+      }
+      if (icon.length < 20) continue;
+      const u = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity };
+      for (const b of icon) {
+        u.x0 = Math.min(u.x0, b.x0); u.x1 = Math.max(u.x1, b.x1);
+        u.y0 = Math.min(u.y0, b.y0); u.y1 = Math.max(u.y1, b.y1);
+      }
+      const s = Math.min((u.x1 - u.x0) / GOLD_ART_INK.w, (u.y1 - u.y0) / GOLD_ART_INK.h);
+      if (!Number.isFinite(s) || s <= 0) continue;
+      for (const p of hide) p.style.display = 'none';
+      const img = document.createElementNS('http://www.w3.org/2000/svg', 'image');
+      img.setAttribute('href', GOLD_ART);
+      img.setAttribute('xlink:href', GOLD_ART);
+      img.setAttribute('x', ((u.x0 + u.x1) / 2 - (GOLD_ART_INK.x + GOLD_ART_INK.w / 2 - GOLD_ART_VB.x) * s).toFixed(2));
+      img.setAttribute('y', ((u.y0 + u.y1) / 2 - (GOLD_ART_INK.y + GOLD_ART_INK.h / 2 - GOLD_ART_VB.y) * s).toFixed(2));
+      img.setAttribute('width', (GOLD_ART_VB.w * s).toFixed(2));
+      img.setAttribute('height', (GOLD_ART_VB.h * s).toFixed(2));
+      img.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+      img.setAttribute('pointer-events', 'none');
+      shape.appendChild(img);
+      main.__goldArt = img;
+      return true;
+    }
+    return false;
   }
 
   // 生效中的药丸 → 主界面右上角三个状态格（原版 showStates）
@@ -1538,6 +1727,7 @@
     if (plan && gearOpts().mode === 'root') { try { attachWears(view, plan.parts, view); } catch (e) {} }
     view.el = container;
     refreshValues(view);
+    try { paintGoldArt(view.byName('main')); } catch (e) { if (window.__errs) window.__errs.push('gold art: ' + (e && e.message)); }
     wireButtons(view);
 
     const talk = await initTalkBoard(view, container);
@@ -2257,8 +2447,7 @@
         if (host.g) {
           const shell = host.g.querySelector(':scope > g.uc-pop');
           if (shell) shell.classList.add('sf-repairing');
-          // 祭坛 mc1 的 placement.cx 会生成一个 feComponentTransfer 滤镜；滤镜区域
-          // 按 bbox 每帧变化，WebView/Chromium 会留下矩形色块。用 CSS 类把宿主
+          // 宿主也一并摘掉 filter，避免动画结束后残留滤镜区域。
           host.g.classList.add('sf-repairing-host');
         }
         repairClips.set(name, clip);
@@ -2412,6 +2601,7 @@
   }
 
   window.SfUiMain = { mount, mountVillage, destroy, refreshValues, showNumber, setText, syncVipBadge, BUTTON_ACTIONS,
+    loadGearTables,
     markMessagesSeen, hasNewMessages,
 
     openActivity: () => openActivityDialog(),
@@ -2443,6 +2633,8 @@
 
       popWrap,
 
+      refreshShell,
+
       popPick,
 
       wirePopPress,
@@ -2455,8 +2647,22 @@
 
       setText,
 
+      wrapToField,
+
       showNumber,
 
       setFrame,
+
+      createSubviewHost,
+
+      paintSvgIcon,
+
+      layoutScale,
+
+      freezeView,
+
+      setTextByName,
+
+      clipOf,
     } };
 })();

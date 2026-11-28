@@ -36,28 +36,7 @@
 
   let gearTables = null;
   async function loadGearTables() {
-    if (gearTables) return gearTables;
-    await SfRender.loadExtra('tags-gear.json');
-    const j = (f) => SfRender.loadTable(f).catch(() => null);
-    const [frames, slots] = await Promise.all([j('gear-frames.json'), j('gear-slots.json')]);
-    if (!frames || !slots) return null;
-    const containerIds = {};
-    for (const c of slots.container || []) containerIds[c.type] = c.ids;
-
-    const keyOf = (g) => Number(g.type) + '|' + String(g.name || '');
-    const q4 = new Map();
-    for (const g of frames.gear) if (Number(g.quality) === 4) q4.set(keyOf(g), g.frame);
-    const orangeFrameById = new Map();
-    for (const g of frames.gear) {
-      if (Number(g.quality) !== 3) continue;
-      const f = q4.get(keyOf(g));
-      if (f) orangeFrameById.set(Number(g.id), f);
-    }
-    gearTables = {
-      frameById: new Map(frames.gear.map((g) => [Number(g.id), g.frame])),
-      orangeFrameById: orangeFrameById,
-      slots: slots.slots, holders: slots.holders || [], containerIds: containerIds,
-    };
+    if (!gearTables) gearTables = await SfUiMain.loadGearTables();
     return gearTables;
   }
   // 一件装备的部位号（0 头 / 1 拳套 / 2 衣服 / 3 鞋）。
@@ -193,26 +172,12 @@
 
 
   let lootIcons = null;
-  async function loadLootIcons() {
-    if (lootIcons) return lootIcons;
-    try { lootIcons = ((await SfRender.loadTable('loot-icons.json')) || {}).byId || {}; }
-    catch (e) { lootIcons = {}; }
-    return lootIcons;
-  }
   function attachLootIcon(target, item) {
     if (!target || !target.attachChild || !item || item.id == null) return null;
     const hit = lootIcons && lootIcons[Number(item.id)];
-    if (!hit) {
-      // 金杯是货币，不在掉落池里（`loot-icons.json` 由掉落池生成）：借用背包那张矢量图。
-      if (Number(item.id) === 40 && target.attachImage) {
-        const C = window.UI && UI.classic;
-        const href = (C && typeof C.propIconSrc === 'function') ? C.propIconSrc(40) : 'images/ui/icons/prop/prop-40.svg';
-        return target.attachImage(href, { pad: 0.08 });
-      }
-      return null;
-    }
+    if (!hit) return null;
     if (hit.id) return target.attachChild(hit.id, 1, 'prize');
-    // 联机自建道具（黑凤凰/黑圣熊碎片）没有原版 SWF 导出：走同一张背包矢量图。
+    // 没有 SWF 库元件的联机自建道具（`loot-icons.json` 里只有 `svg`）：走背包同一张矢量图。
     if (hit.svg && target.attachImage) {
       const C = window.UI && UI.classic;
       const href = (C && typeof C.propIconSrc === 'function') ? C.propIconSrc(Number(item.id)) : ('images/ui/icons/prop/' + hit.svg);
@@ -353,10 +318,7 @@
   let live = null;
   let seq = 0;
 
-  function stopAt(clip, n) {
-    if (!clip || !clip.gotoAndStop) return;
-    try { clip.gotoAndStop(n); } catch (e) {}
-  }
+  const stopAt = (clip, n) => SfRender.stopAt(clip, n);
   function play(clip, n) {
     if (!clip || !clip.gotoAndPlay) return;
     allowNestedAnim(clip);
@@ -975,6 +937,9 @@
     xm_common_attack: 6, xm_skill_attack: 8,
   };
   const NPC_FRAME_MS = 1000 / 20;
+  // 图集按现代 1170×690 舞台的脚线画；经典 7689 矢量身体的脚线更低。
+  // 数值是待机帧脚底与原版矢量模型的差（1170×690 坐标，正数 = 下移）。
+  const NPC_ATLAS_DY = { tl: 4, xh: 31, xm: 19 };
 
   function npcAnimName(npc, action) {
     if (npc === 'wood') return action === 'hit' ? 'wood_hitMe' : 'wood_rest';
@@ -1135,14 +1100,14 @@
     if (!root || !host || !window.document || !document.createElement) return null;
 
     makeBattleBackLayer(battle, root);
-    // TRAP: 主 SVG 仍带整屏底图，canvas 放在 z-index:1 会被它盖住（三侠整只不可见）；
-    // 顶部覆盖层在 canvas 之后挂载，同为 z-index:3 时仍压在画布上。
+    // CONTRACT: 层序 = 底图(0) < 图集 canvas(1) < 主 SVG(2，飘字/状态/特效) < 顶部覆盖(3)。
+    // canvas 必须压在主 SVG 之下，否则伤害数字会被 NPC 挡住；它又在拆出来的底图之上。
     const canvas = document.createElement('canvas');
     canvas.className = 'sf-npc-atlas-layer';
     canvas.setAttribute('aria-hidden', 'true');
     canvas.width = 1170; canvas.height = 690;
     canvas.style.cssText = 'position:absolute;left:0;top:0;width:0;height:0;display:block;' +
-      'pointer-events:none;z-index:3;';
+      'pointer-events:none;z-index:1;';
     host.appendChild(canvas);
     if (holder) holder.__npcLayer = canvas;
     const ctx = canvas.getContext('2d');
@@ -1187,6 +1152,7 @@
     }, 1500);
 
     const bodySheets = mutant && Engine.mutantSheets ? (Engine.mutantSheets(npcType) || NPC_SHEETS[npcType]) : NPC_SHEETS[npcType];
+    const atlasDy = NPC_ATLAS_DY[npcType] || 0;
     const now = () => (window.performance && performance.now ? performance.now() : Date.now());
 
     function layoutCanvas(stamp) {
@@ -1249,10 +1215,10 @@
       clear();
 
       ctx.setTransform(canvas.width / 1170, 0, 0, canvas.height / 690, 0, 0);
-      if (frame) { try { Engine.drawFrame(ctx, frame, { sheets: bodySheets }); } catch (e) {} }
+      if (frame) { try { Engine.drawFrame(ctx, frame, { sheets: bodySheets, y: atlasDy }); } catch (e) {} }
       for (let i = effects.length - 1; i >= 0; i--) {
         const eff = effects[i];
-        try { Engine.drawFrame(ctx, eff.frames[eff.idx], { sheets: eff.sheets }); } catch (e) {}
+        try { Engine.drawFrame(ctx, eff.frames[eff.idx], { sheets: eff.sheets, y: atlasDy }); } catch (e) {}
       }
       paintedFrame = frame; paintDirty = false;
     }
@@ -2374,7 +2340,7 @@
       }
     }
     try { await loadGearTables(); } catch (e) {  }
-    try { await loadLootIcons(); } catch (e) {  }
+    try { lootIcons = await SfRender.loadLootIcons(); } catch (e) {  }
     if (mine !== seq || rec.stopped) return null;
     // 先把（隐藏的）战斗页压上去再挂载；底页留到战斗页可见的那一帧，加载期间不会露出 canvas 首页。
     ui.appendChild(host);
@@ -3074,8 +3040,8 @@
       picks.push({ id: item.id, name: item.name, count });
     }
     const rewards = [];
-    // 竞技场冠军的金杯和飘到的战利品同格显示：金杯有背包矢量图，不再写进底部正文
-    // （正文在经验数字下面会互相压住，且只有文字没有图标）。
+    // 竞技场冠军的金杯和飘到的战利品同格显示：金杯走原版 3061（2015 卡面 + 本体），
+    // 不再写进底部正文（正文在经验数字下面会互相压住，且只有文字没有图标）。
     const cup = Math.max(0, Math.round(Number(reward && reward.goldCup) || 0));
     if (cup > 0) rewards.push({ id: 40, name: '金杯', count: cup });
     if (gold > 0) rewards.push({ id: 8, name: '金松果', count: gold });
@@ -3549,7 +3515,7 @@
     live = rec;
     try {
       await SfRender.loadExtra(FIGHT_CORE_FILE);
-      await loadLootIcons();
+      lootIcons = await SfRender.loadLootIcons();
       if (mine !== seq || rec.stopped) return null;
       rec.view = await SfRender.mountSymbol(host, SYM.fight, { frame: F.chest, label: '战斗宝箱', policy: {}, onClip });
       if (mine !== seq || rec.stopped) return null;

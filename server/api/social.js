@@ -115,6 +115,7 @@ function friendRows(rows) {
       lastSeen,
       snapshotId: snap ? snap.id : '',
       online: lastSeen > 0 && now - lastSeen < 5 * 60 * 1000,
+      ...store.battleStatsOfRow(row),
     };
   });
 }
@@ -296,7 +297,12 @@ module.exports = {
   friends(ctx) {
     const rows = db.all(
       `SELECT f.friend_id, a.name, a.tag, a.last_seen, s.level AS save_level, s.name AS save_name,
-              s.vip_level AS vip_level, s.vip_until AS vip_until
+              s.vip_level AS vip_level, s.vip_until AS vip_until,
+              CASE WHEN json_valid(s.payload) THEN json_extract(s.payload, '$.dailyWins') END AS daily_wins,
+              CASE WHEN json_valid(s.payload) THEN json_extract(s.payload, '$.dailyFails') END AS daily_fails,
+              CASE WHEN json_valid(s.payload) THEN json_extract(s.payload, '$.allWins') END AS all_wins,
+              CASE WHEN json_valid(s.payload) THEN json_extract(s.payload, '$.allFails') END AS all_fails,
+              CASE WHEN json_valid(s.payload) THEN json_extract(s.payload, '$.dailyStatsDate') END AS daily_stats_date
          FROM friendships f
          JOIN accounts a ON a.id = f.friend_id
          LEFT JOIN saves s ON s.account_id = f.friend_id AND s.mode = ?

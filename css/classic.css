@@ -250,6 +250,9 @@ html[data-ui-mode="classic"] .classic-page,
 .reward-card.pink .reward-icon{border-color:#d3739a;box-shadow:inset 0 0 0 4px #ffe8f0,0 0 10px #d3739a66}
 .reward-card.skill .reward-icon{border-color:#5aa62e;box-shadow:inset 0 0 0 4px #e8f8d8,0 0 10px #5aa62e66}
 .reward-card.gift .reward-icon{border-color:#c08a2a;box-shadow:inset 0 0 0 4px #fff4d6,0 0 10px #c08a2a55}
+/* 武技三选一回到「选」字徽卡；只把这张卡加宽，避免长标签压到相邻卡。 */
+.reward-card.ws-pick-card{width:172px}
+.reward-card.ws-pick-card .reward-text{font-size:18px}
 .reward-card.gift .reward-text{color:#8a5f22;font-size:19px}
 .reward-text{font-size:23px;color:#7a5326;font-weight:bold;white-space:nowrap}
 .reward-card.red .reward-text{color:#a33a2a}

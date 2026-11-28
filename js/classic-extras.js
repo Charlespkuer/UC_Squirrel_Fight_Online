@@ -479,14 +479,7 @@
     return Math.max(1, Math.min(top, Math.round(
       RANK_LEVEL_BASE + Math.max(0, (Number(integral) || 0) - RANK_INTEGRAL_BASE) / RANK_INTEGRAL_PER_LEVEL)));
   }
-  function rankWeekKey() {
-    try {
-      if (window.State && typeof State.rankWeekKey === 'function') return State.rankWeekKey();
-    } catch (e) {}
-    const d = new Date(Date.now());
-    d.setDate(d.getDate() - (d.getDay() + 6) % 7);
-    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-  }
+  function rankWeekKey() { return State.rankWeekKey(); }
   function refreshRankShopDay() {
     // State 是唯一判定源：周账、月度账（魔法袋 / 狂战）、永久属性货累计额度、账号累计账都在这里统一刷新。
     if (State.refreshRankShopDay) return State.refreshRankShopDay();

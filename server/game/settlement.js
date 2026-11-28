@@ -65,15 +65,7 @@ function weekKeyOf(nowMs) {
   return dt.getUTCFullYear() + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0') + '-' + String(dt.getUTCDate()).padStart(2, '0');
 }
 
-function metaGet(key) {
-  const row = db.get('SELECT value FROM meta WHERE key = ?', String(key));
-  return row ? String(row.value) : '';
-}
 
-function metaSet(key, value) {
-  db.run('INSERT INTO meta (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-    String(key), String(value));
-}
 
 function weeksBetween(from, to) {
   const a = Date.parse(String(from) + 'T00:00:00Z');
@@ -162,7 +154,7 @@ function captureWeekFinals(week) {
 
 function rollWeekIfNeeded(week) {
   const w = week || weekKey();
-  const previous = metaGet('rank_week');
+  const previous = db.metaGet('rank_week');
   if (previous === w) return 0;
   if (rolling) return 0;
   rolling = true;
@@ -170,7 +162,7 @@ function rollWeekIfNeeded(week) {
     // 先按旧周的积分/人机分数记下“上周最终排名”，再改积分、重置人机。
     if (previous) {
       if (previous === previousWeekKey(w)) captureWeekFinals(previous);
-      metaSet('rank_award_mode', 'final');
+      db.metaSet('rank_award_mode', 'final');
     }
     let rolled = 0;
     db.tx(() => {
@@ -187,7 +179,7 @@ function rollWeekIfNeeded(week) {
         db.run('DELETE FROM ratings WHERE account_id = ? AND season < ?', id, w);
         rolled += 1;
       }
-      metaSet('rank_week', w);
+      db.metaSet('rank_week', w);
     });
     resetBots(w);
     return rolled;
@@ -199,7 +191,7 @@ function rollWeekIfNeeded(week) {
 // 所有天梯读写入口的周检查：每周只搬一次数据（`meta.rank_week` 是幂等标记）。
 function weekTick() {
   const w = weekKey();
-  if (metaGet('rank_week') === w) return 0;
+  if (db.metaGet('rank_week') === w) return 0;
   return rollWeekIfNeeded(w);
 }
 
@@ -280,7 +272,7 @@ function ensureBots(week) {
   const w = week || weekKey();
   // 读榜入口都从这里进来：必须先结算换周，再重置人机，否则旧周的人机分数
   // 会被新周 300 分覆盖，`captureWeekFinals` 就记不下真实的周日 23:59 名次。
-  if (!rolling && metaGet('rank_week') !== w) weekTick();
+  if (!rolling && db.metaGet('rank_week') !== w) weekTick();
   // `botsFor` / `botById` / `divisionRows` 每次读榜都会进来；同一周重复跑
   // 用一行 `week` 做廉价的「别处是否重置过」校验，测试/运维手改库也能生效。
   if (botsReadyWeek === w) {
@@ -587,7 +579,7 @@ function finalAwardStatus(accountId, currentWeek) {
 function rankAwardStatus(accountId) {
   weekTick();
   const week = weekKey();
-  const out = metaGet('rank_award_mode') === 'final'
+  const out = db.metaGet('rank_award_mode') === 'final'
     ? finalAwardStatus(accountId, week)
     : legacyAwardStatus(accountId, week);
   out.final = out.mode === 'final';

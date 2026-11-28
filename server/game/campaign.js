@@ -5,6 +5,7 @@
 
 const crypto = require('node:crypto');
 const db = require('../db');
+const json = require('./json');
 const store = require('./store');
 const battle = require('./battle');
 const apprentice = require('./apprentice');
@@ -25,10 +26,6 @@ function roomCode() {
 }
 
 function newRoomId() { return 'cr_' + crypto.randomBytes(8).toString('base64url'); }
-function gz(obj) { return Buffer.from(JSON.stringify(obj), 'utf8'); }
-function unz(blob) {
-  try { return JSON.parse(store.toBuffer(blob).toString('utf8')); } catch (_) { return null; }
-}
 function clone(obj) { return JSON.parse(JSON.stringify(obj)); }
 
 function memberRow(roomId, accountId) {
@@ -72,7 +69,7 @@ function countReal(roomId) { return realMembers(roomId).length; }
 
 // 把房间的 4 个座位拼出来：真人优先，空位看 seats_json 里的助战快照。
 function seatList(room, members, accountId, levels) {
-  const stored = unz(room.seats_json) || [];
+  const stored = json.tryDecode(room.seats_json) || [];
   const out = [];
   for (let seat = 0; seat < partySize(); seat++) {
     const storedSeat = stored.find((s) => Number(s.seat) === seat);
@@ -150,14 +147,14 @@ function roomView(room, accountId) {
     seats: seatList(room, members, accountId, levels),
     // 原版 `rollDatas`（3437 第 5 帧）：只有已结算房间才有；老房间 / 失败房间为空，
     // 客户端会回落到文字结果。
-    roll: String(room.status) === 'done' ? unz(room.roll_json) : null,
+    roll: String(room.status) === 'done' ? json.tryDecode(room.roll_json) : null,
     me: mine ? {
       dice: Number(mine.dice),
-      reward: unz(mine.reward) || {},
+      reward: json.tryDecode(mine.reward) || {},
       acked: !!Number(mine.acked),
       missed: !!Number(mine.missed),
     } : null,
-    combatIds: unz(room.combat_ids) || [],
+    combatIds: json.tryDecode(room.combat_ids) || [],
   };
 }
 
@@ -440,7 +437,7 @@ function resolveRoomTx(roomId) {
   const boss = data && data.bossFor(room.boss_id);
   if (!boss) return null;
   const members = membersOf(room.id);
-  const stored = unz(room.seats_json) || [];
+  const stored = json.tryDecode(room.seats_json) || [];
 
 
   for (const m of members) {
@@ -452,7 +449,7 @@ function resolveRoomTx(roomId) {
       const missedReward = { missed: true, win: false, exp: 0, gold: 0, loot: null, msg: pay.msg, teamWin: false };
       db.run(
         'UPDATE campaign_members SET missed = 1, reward = ?, dice = -1 WHERE room_id = ? AND account_id = ?',
-        gz(missedReward), String(room.id), Number(m.account_id)
+        json.encode(missedReward), String(room.id), Number(m.account_id)
       );
       m.missed = 1;
       message(m.account_id, '征战未参战：' + pay.msg + '；本局未扣除任何费用。', { code: String(room.code), missed: true });
@@ -632,7 +629,7 @@ function resolveRoomTx(roomId) {
     for (const award of reward.prizeAwards) prizeAwards.set(Number(award.index), award);
     db.run(
       'UPDATE campaign_members SET dice = -1, reward = ?, missed = 0 WHERE room_id = ? AND account_id = ?',
-      gz(reward), String(room.id), accountId
+      json.encode(reward), String(room.id), accountId
     );
     if (v.combatId) combatIds.push({ seat: Number(m.seat), combatId: v.combatId });
     message(accountId,
@@ -866,7 +863,7 @@ function runRoom(roomId) {
   const result = resolveRoom(roomId);
   const room = roomOf(roomId);
   const members = room ? membersOf(room.id) : [];
-  const settled = members.map((m) => ({ member: m, reward: unz(m.reward) || {} }));
+  const settled = members.map((m) => ({ member: m, reward: json.tryDecode(m.reward) || {} }));
   return { ok: true, result, room: room ? roomView(room, room.host_id) : null, settled };
 }
 

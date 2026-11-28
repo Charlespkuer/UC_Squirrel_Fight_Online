@@ -900,10 +900,7 @@
     return el;
   }
   function hideSaveWarning() { if (saveBanner) { saveBanner.remove(); saveBanner = null; } }
-  function esc(text) {
-    return String(text == null ? '' : text).replace(/[&<>"']/g, (ch) => (
-      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
-  }
+  function esc(text) { return SfRender.esc(text); }
 
 
   if (document.addEventListener) {

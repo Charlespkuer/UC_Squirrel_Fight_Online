@@ -263,8 +263,12 @@ function swfSymbolIds() {
  * 名字来源是**掉落池本身**（`js/battle-drops.js` 里的 `{ id, name, count, weight }` 行），
  * 不手抄一份 —— 池子改了这里自动跟着走。
  * 名字必须与 SWF 的 ExportAssets 同名：没有同名导出时 `missing` 会报出来，再单独补映射；
- * 「属性碎片」= **2974**（卡面 2015 + 本体 2973），不要借「金杯」3061 —— 那是货币。 */
+ * 「属性碎片」= **2974**（卡面 2015 + 本体 2973），不要拿金杯 3061 顶替 —— 那是货币。 */
 const LOOT_BUNDLE = 'looticons';
+/* 金杯（道具 40）是货币、不在掉落池里，但竞技场冠军要在战果页奖励格里显示：
+ * 原版 3061 = 2015 卡面 + 3060 本体，和其它战利品同一张卡。不能回退 prop-40.svg ——
+ * 那张只导出了美术，格子的 2443 底卡是黄色，会变成一格黄卡。 */
+const LOOT_EXTRA = [{ id: 40, name: '金杯', symId: '3061' }];
 function lootIconRoots() {
   const sym = swfSymbolIds();
   const src = fs.readFileSync(path.join(ROOT, 'js', 'battle-drops.js'), 'utf8').replace(/\r\n/g, '\n');
@@ -284,7 +288,7 @@ function lootIconRoots() {
   for (const r of rows) {
     const sid = sym.get(r.name);
     if (!sid || sid === 'None') {
-      // 联机自建道具（黑凤凰/黑圣熊碎片）没有 SWF 导出：运行期用 prop SVG 挂进战利品格。
+      // 没有 SWF 导出的联机道具：运行期用 prop SVG 挂进战利品格。
       const svg = path.join(ROOT, 'images', 'ui', 'icons', 'prop', 'prop-' + r.id + '.svg');
       if (fs.existsSync(svg)) { map.byId[r.id] = { name: r.name, svg: 'prop-' + r.id + '.svg' }; continue; }
       map.missing.push(r.id + ':' + r.name);
@@ -293,10 +297,18 @@ function lootIconRoots() {
     map.byId[r.id] = { name: r.name, id: String(sid) };
     roots.push(String(sid));
   }
+  for (const extra of LOOT_EXTRA) {
+    if (map.byId[extra.id]) continue;
+    const sid = extra.symId || sym.get(extra.name);
+    if (!sid || sid === 'None') { map.missing.push(extra.id + ':' + extra.name); continue; }
+    map.byId[extra.id] = { name: extra.name, id: String(sid) };
+    roots.push(String(sid));
+  }
   fs.writeFileSync(path.join(OUT, 'loot-icons.json'), JSON.stringify(Object.assign({
     source: 'references/ssfight/ssfight/ssfight/ssfight.swf（ExportAssets 名字 → 紧邻其前的 DefineSprite）+ js/battle-drops.js（掉落池）',
     how: '原版 `mc.c1.attachMovie(<道具名>, "mc", 100)`（MainMovie.as:18804 战果页 / :18691 开宝箱）：'
-       + '库元件名就是道具名。`byId[道具id].id` = 该图标的元件号；没有 SWF 导出的联机道具用 `byId[道具id].svg` 回退背包矢量图。',
+       + '库元件名就是道具名。`byId[道具id].id` = 该图标的元件号；没有 SWF 导出的联机道具用 `byId[道具id].svg` 回退背包矢量图。'
+       + '金杯 40 不在掉落池里，由 LOOT_EXTRA 指定 3061（卡面 2015 + 本体），保证和其它战利品同卡。',
   }, map), null, 1));
   console.log('  战利品图标：%d 颗（缺 %d 颗在 SWF 里找不到）→ loot-icons.json', roots.length, map.missing.length);
   if (map.missing.length) console.log('    缺：%s', map.missing.join('、'));

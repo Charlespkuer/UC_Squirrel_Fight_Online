@@ -134,6 +134,80 @@ test('全部 288 件装备都有矢量图标文件（装备显示不再回退 PN
   assert.deepEqual(propMissing, [], '这些道具没有矢量图标：' + propMissing.join(','));
 });
 
+test('全部立绘装备帧的 cx 染色都烘进画稿，不再留 iOS 会画黑的滤镜', async () => {
+  class Node {
+    constructor(tag) {
+      this.tagName = tag; this.nodeType = 1; this.childNodes = []; this.parentNode = null;
+      this.attrs = {}; this.style = {}; this._text = '';
+      this.classList = { add() {}, remove() {}, contains() { return false; } };
+    }
+    get firstChild() { return this.childNodes[0] || null; }
+    get children() { return this.childNodes; }
+    get nextSibling() { if (!this.parentNode) return null; return this.parentNode.childNodes[this.parentNode.childNodes.indexOf(this) + 1] || null; }
+    get isConnected() { return this.tagName === 'body' || !!(this.parentNode && this.parentNode.isConnected); }
+    setAttribute(k, v) { this.attrs[k] = String(v); }
+    setAttributeNS(ns, k, v) { this.setAttribute(k, v); }
+    getAttribute(k) { return this.attrs[k] == null ? null : this.attrs[k]; }
+    removeAttribute(k) { delete this.attrs[k]; }
+    appendChild(n) { return this.insertBefore(n, null); }
+    insertBefore(n, before) {
+      if (n === before) return n;
+      if (n.parentNode) n.parentNode.removeChild(n);
+      const i = before ? this.childNodes.indexOf(before) : -1;
+      if (i < 0) this.childNodes.push(n); else this.childNodes.splice(i, 0, n);
+      n.parentNode = this; return n;
+    }
+    removeChild(n) { const i = this.childNodes.indexOf(n); if (i >= 0) this.childNodes.splice(i, 1); n.parentNode = null; return n; }
+    remove() { if (this.parentNode) this.parentNode.removeChild(this); }
+    set textContent(v) { this._text = String(v); }
+    get textContent() { return this._text + this.childNodes.map(n => n.textContent).join(''); }
+    querySelectorAll() { return []; }
+    querySelector() { return null; }
+    addEventListener() {}
+    getBBox() { return { x: 0, y: 0, width: 10, height: 10 }; }
+    getBoundingClientRect() { return { x: 0, y: 0, left: 0, top: 0, width: 320, height: 196 }; }
+    getScreenCTM() { return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }; }
+  }
+  const body = new Node('body');
+  const sandbox = {
+    console,
+    document: { createElementNS: (ns, tag) => new Node(tag), createElement: tag => new Node(tag) },
+    fetch: async url => ({ ok: true, json: async () => json(String(url).split('/').pop()) }),
+    setInterval: () => 0, clearInterval() {}, setTimeout: () => 0, clearTimeout() {},
+  };
+  sandbox.window = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(read('js/ssfight/render.js'), sandbox);
+  const render = sandbox.window.SfRender;
+  await render.loadExtra('tags-gear.json');
+  const slots = json('gear-slots.json');
+  const containers = {};
+  for (const c of slots.portraitContainer) containers[c.type] = c.ids[0];
+  const host = body.appendChild(new Node('div'));
+  const walk = (node, fn) => { fn(node); for (const c of node.childNodes) walk(c, fn); };
+  const bad = [];
+  let count = 0;
+  for (const row of json('gear-frames.json').gear) {
+    const id = containers[row.type];
+    const addrMax = row.type === 0 || row.type === 1 ? 2 : 0;
+    for (let addr = 0; addr <= addrMax; addr++) {
+      const frame = row.frame + addr;
+      const view = await render.mountSymbol(host, id, { frame });
+      count++;
+      walk(view.g, (node) => {
+        const filter = node.getAttribute('filter');
+        if (filter && /^url\(#cx/.test(filter)) bad.push([row.id, id, frame, filter]);
+      });
+      view.destroy();
+    }
+  }
+  assert.equal(count, 576, '立绘装备帧数应为 576（288 件 × 头/拳套的 3 个强化档）');
+  assert.deepEqual(bad, [], '这些装备帧仍在走 cx 滤镜：' + JSON.stringify(bad.slice(0, 5)));
+  const src = read('js/ssfight/render.js');
+  assert.ok(/el\('feColorMatrix'/.test(src) && !/el\('feComponentTransfer'/.test(src),
+    '残余滤镜必须用 feColorMatrix；feComponentTransfer 在 iOS Retina 上会画黑');
+});
+
 test('gamedata 补登记的道具都有矢量图标，且进了 PROP_SVG_IDS（漏一个就显示透明占位）', () => {
   const gamedata = read('js/gamedata.js');
   const start = gamedata.indexOf('const EXTRA_PROPS');

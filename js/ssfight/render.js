@@ -696,31 +696,36 @@
     if (!c) return null;
     return (c.cx && typeof c.cx === 'object') ? c.cx : c;
   }
-  function cxFilterFor(rootDefs, tagId, depth, c) {
-    const key = ['Rm', 'Ra', 'Gm', 'Ga', 'Bm', 'Ba', 'Am', 'Aa']
+  function cxKey(c) {
+    return ['Rm', 'Ra', 'Gm', 'Ga', 'Bm', 'Ba', 'Am', 'Aa']
       .map((k) => (c[k] === undefined ? '' : String(c[k]))).join('_');
-    const id = 'cx' + tagId + '_' + depth + '_' + key;
+  }
+  function cxFilterFor(rootDefs, tagId, depth, c) {
+    const id = 'cx' + tagId + '_' + depth + '_' + cxKey(c);
     if (!hasDef(rootDefs, id)) cxFilter(rootDefs, id, c);
     return id;
   }
   function cxFilter(rootDefs, id, c) {
     const f = el('filter', { id, x: '-20%', y: '-20%', width: '140%', height: '140%',
       'color-interpolation-filters': 'sRGB' });
-    const ct = el('feComponentTransfer');
-    f.appendChild(ct);
-    const map = [['R', 'Rm', 'Ra'], ['G', 'Gm', 'Ga'], ['B', 'Bm', 'Ba'], ['A', 'Am', 'Aa']];
-    for (const [ch, mk, ak] of map) {
-      const fn = el('feFunc' + ch, { type: 'linear' });
-      if (c[mk] !== undefined) fn.setAttribute('slope', c[mk] / 256);
-      if (c[ak] !== undefined) fn.setAttribute('intercept', c[ak] / 255);
-      ct.appendChild(fn);
-    }
+    // 用 feColorMatrix 而不是 feComponentTransfer：后者在 iOS Safari / 部分 GPU 上
+    // 会把整块滤镜区域画黑。矩阵与线性 feFunc 完全等价（乘 / 加都按 0~256、0~255 换算）。
+    const mul = (k) => (c[k] === undefined ? 256 : Number(c[k])) / 256;
+    const add = (k) => (c[k] === undefined ? 0 : Number(c[k])) / 255;
+    const values = [
+      mul('Rm'), 0, 0, 0, add('Ra'),
+      0, mul('Gm'), 0, 0, add('Ga'),
+      0, 0, mul('Bm'), 0, add('Ba'),
+      0, 0, 0, mul('Am'), add('Aa'),
+    ].join(' ');
+    const m = el('feColorMatrix', { type: 'matrix', values: values });
+    f.appendChild(m);
     addDef(rootDefs, id, f);
     return id;
   }
 
-  // 同一套灰稿按部位染色）：每个滤镜都是一次离屏合成，在 Android WebView 上
-
+  // cx 是 SWF 的 ColorTransform。能改画稿的纯色填充/描边和渐变停靠点就直接改，
+  // 不再挂 feComponentTransfer：这个滤镜在 iOS / 部分 GPU 上会把整块滤镜区域画黑。
   const COLOR_RGB = /^rgb\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)$/i;
   const COLOR_HEX = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
   function parseSolidColor(v) {
@@ -741,6 +746,19 @@
     const intercept = c[ak] === undefined ? 0 : Number(c[ak]);
     return Math.max(0, Math.min(255, Math.round(slope * value + intercept)));
   }
+  // 父级 cx 作用于子级已经染过色的画稿：Flash 里两层 ColorTransform 是串联的。
+  function composeCx(parent, child) {
+    if (!parent) return child;
+    if (!child) return parent;
+    const mul = (c, k) => (c[k] === undefined ? 256 : Number(c[k]));
+    const add = (c, k) => (c[k] === undefined ? 0 : Number(c[k]));
+    const out = {};
+    for (const [m, a] of [['Rm', 'Ra'], ['Gm', 'Ga'], ['Bm', 'Ba'], ['Am', 'Aa']]) {
+      out[m] = mul(parent, m) * mul(child, m) / 256;
+      out[a] = mul(parent, m) * add(child, a) / 256 + add(parent, a);
+    }
+    return out;
+  }
   // 这个 cx 是否只改 RGB、且 alpha 恒等（否则还是交给滤镜处理整组合成）。
   function cxRgbOnly(c) {
     if (!c) return false;
@@ -757,27 +775,72 @@
       walkElements(c, fn);
     }
   }
-  function colorPaintList(node) {
+  function attrsOf(node) {
+    const out = [];
+    if (node.attributes && node.attributes.length) {
+      for (let i = 0; i < node.attributes.length; i++) out.push([node.attributes[i].name, node.attributes[i].value]);
+    } else if (node.attrs) {
+      for (const k of Object.keys(node.attrs)) out.push([k, node.attrs[k]]);
+    }
+    return out;
+  }
+  function defById(rootDefs, id) {
+    return hasDef(rootDefs, id) ? defIds(rootDefs).get(id) : null;
+  }
+  // 渐变/图案里只有「所有 stop 都是纯色」才能烘焙；图案（位图）和 href 继承仍走滤镜。
+  function gradientOf(rootDefs, id) {
+    const def = defById(rootDefs, id);
+    if (!def) return null;
+    const tag = String(def.tagName || '').toLowerCase();
+    if (tag !== 'lineargradient' && tag !== 'radialgradient') return null;
+    // 没有 id 的渐变无法生成稳定的烘焙 id（多个匿名 def 会串色），交给滤镜。
+    if (!def.getAttribute('id')) return null;
+    for (const attr of ['href', 'xlink:href']) if (def.getAttribute(attr) != null) return null;
+    try { if (def.getAttributeNS && def.getAttributeNS(XLINK, 'href') != null) return null; } catch (e) { return null; }
+    let stops = 0;
+    for (const s of def.childNodes || []) {
+      if (!s || s.nodeType !== 1 || String(s.tagName || '').toLowerCase() !== 'stop') continue;
+      stops++;
+      if (!parseSolidColor(s.getAttribute('stop-color'))) return null;
+    }
+    return stops ? def : null;
+  }
+  function fillUrlId(v) {
+    const m = /^url\(\s*#([^)\s]+)\s*\)$/i.exec(String(v || '').trim());
+    return m ? m[1] : '';
+  }
+  function colorPaintList(node, rootDefs, allowAnimated) {
     if (!node || !node.childNodes) return null;
-    // ⚠ 节点自己就是一个多帧 MovieClip 时，不能把父级 cx 烘进它当前的画稿：
-    // 一直停在第一档的青色，真2~真5 看起来全一样）。这一档必须挂父级 filter。
-    if (node.__clip && node.__clip.frames && node.__clip.frames.length > 1) return null;
+    // ⚠ 节点自己就是一个多帧 MovieClip 时，正常路径不能把父级 cx 烘进它当前的画稿：
+    // 它下一帧会换掉内部节点，烘过的颜色当场丢失。这里允许逐帧重烘（`allowAnimated`），
+    // 由 showFrame 在每帧建完后重做；换帧的子树不再走一次性的烘焙。
+    if (!allowAnimated && node.__clip && node.__clip.frames && node.__clip.frames.length > 1) return null;
 
     let blocked = false;
     walkElements(node, (p) => {
       if (blocked) return;
       if (p.getAttribute('filter') != null) { blocked = true; return; }
-      if (p.__sfBakedBy && p.__sfBakedBy !== node) { blocked = true; return; }
-      // 子树里还有会自己换帧的 MovieClip：它换帧后新画稿不会经过父级的烘焙，
-      // 这一档必须保留父级 filter（滤镜作用在整棵子树上，换帧也跟得上）。
-      if (p.__clip && p.__clip.frames && p.__clip.frames.length > 1) { blocked = true; return; }
+      if (p.__sfBakedBy && p.__sfBakedBy !== node) {
+        // 子级已经染过的纯色可以在这里再串上父级；带渐变的子级交给滤镜。
+        for (const attr of ['fill', 'stroke']) {
+          const base = p.__sfBasePaint && p.__sfBasePaint[attr];
+          if (!base) continue;
+          if (/^url\(/i.test(base) || !parseSolidColor(base) || !p.__sfCx) { blocked = true; return; }
+        }
+      }
+      // 子树里还有会自己换帧的 MovieClip：一次烘焙跟不上换帧，必须逐帧重烘或保留滤镜。
+      if (!allowAnimated && p.__clip && p.__clip.frames && p.__clip.frames.length > 1) { blocked = true; return; }
       if (!PAINT_TAGS[String(p.tagName || '').toLowerCase()]) return;
       for (const attr of ['fill', 'stroke']) {
         const raw = p.getAttribute(attr);
         if (raw == null || raw === 'none') continue;
-        if (/^url\(/i.test(raw)) { blocked = true; return; }
-        if (/^(inherit|currentColor|context-fill|context-stroke)$/i.test(raw)) { blocked = true; return; }
-        if (!parseSolidColor((p.__sfBasePaint && p.__sfBasePaint[attr]) || raw)) { blocked = true; return; }
+        const base = (p.__sfBasePaint && p.__sfBasePaint[attr]) || raw;
+        if (/^url\(/i.test(base)) {
+          if (!gradientOf(rootDefs, fillUrlId(base))) { blocked = true; return; }
+          continue;
+        }
+        if (/^(inherit|currentColor|context-fill|context-stroke)$/i.test(base)) { blocked = true; return; }
+        if (!parseSolidColor(base)) { blocked = true; return; }
       }
     });
     if (blocked) return null;
@@ -788,23 +851,67 @@
         const raw = p.getAttribute(attr);
         if (raw == null || raw === 'none') continue;
         const base = (p.__sfBasePaint && p.__sfBasePaint[attr]) || raw;
-        paints.push({ el: p, attr: attr, base: base, rgb: parseSolidColor(base) });
+        const gradient = /^url\(/i.test(base) ? gradientOf(rootDefs, fillUrlId(base)) : null;
+        paints.push({ el: p, attr: attr, base: base, rgb: gradient ? null : parseSolidColor(base), gradient: gradient });
       }
     });
     return paints;
   }
-  // 把 cx 烘到纯色填充/描边上。成功返回 true（不要再挂 filter）；失败返回 false。
-  function bakeColorTransform(node, c) {
+  function bakeGradient(rootDefs, def, c) {
+    const srcId = def.getAttribute('id') || '';
+    const id = 'cxg' + srcId + '_' + cxKey(c);
+    if (hasDef(rootDefs, id)) return 'url(#' + id + ')';
+    // WHY: 克隆出来的渐变必须自己带 id，`addDef` 只记账不写属性；
+    // 少了 id 的 `url(#cxg…)` 在浏览器里是悬空引用，那一层画稿整片不画。
+    const out = el(def.tagName, { id });
+    for (const [k, v] of attrsOf(def)) if (k !== 'id') out.setAttribute(k, v);
+    for (const s of def.childNodes || []) {
+      if (!s || s.nodeType !== 1 || String(s.tagName || '').toLowerCase() !== 'stop') continue;
+      const stop = el('stop');
+      for (const [k, v] of attrsOf(s)) {
+        if (k === 'stop-color') {
+          const rgb = parseSolidColor(v);
+          stop.setAttribute(k, 'rgb(' + cxChannel(c, 'Rm', 'Ra', rgb[0]) + ','
+            + cxChannel(c, 'Gm', 'Ga', rgb[1]) + ',' + cxChannel(c, 'Bm', 'Ba', rgb[2]) + ')');
+        } else stop.setAttribute(k, v);
+      }
+      out.appendChild(stop);
+    }
+    addDef(rootDefs, id, out);
+    return 'url(#' + id + ')';
+  }
+  // 同一张画稿可能被父子两级 cx 轮流接管；只保留最近 8 层，避免逐帧 push 无界增长。
+  function rememberPrevCx(el, owner) {
+    const stack = el.__sfPrev || (el.__sfPrev = []);
+    const top = stack[stack.length - 1];
+    if (top && top.by === owner) return;
+    stack.push({ cx: el.__sfCx, by: owner });
+    if (stack.length > 8) stack.splice(0, stack.length - 8);
+  }
+  // 把 cx 烘到纯色填充/描边和渐变停靠点上。成功返回 true（不要再挂 filter）。
+  // `paints` 可由调用方先算好，避免同一棵子树在一次 applyCx 里走两遍。
+  function bakeColorTransform(node, c, rootDefs, allowAnimated, paints) {
     if (!cxRgbOnly(c)) return false;
-    const paints = colorPaintList(node);
+    if (!paints) paints = colorPaintList(node, rootDefs, allowAnimated);
     if (!paints || !paints.length) return false;
     for (const p of paints) {
+      const owner = p.el.__sfBakedBy;
+      let eff = c;
+      if (owner && owner !== node) {
+        eff = composeCx(c, p.el.__sfCx);
+        rememberPrevCx(p.el, owner);
+      }
       if (!p.el.__sfBasePaint) p.el.__sfBasePaint = {};
       p.el.__sfBasePaint[p.attr] = p.base;
       p.el.__sfBakedBy = node;
+      p.el.__sfCx = eff;
       p.el.setAttribute('data-sf-baked', '1');
-      p.el.setAttribute(p.attr, 'rgb(' + cxChannel(c, 'Rm', 'Ra', p.rgb[0]) + ','
-        + cxChannel(c, 'Gm', 'Ga', p.rgb[1]) + ',' + cxChannel(c, 'Bm', 'Ba', p.rgb[2]) + ')');
+      if (p.rgb) {
+        p.el.setAttribute(p.attr, 'rgb(' + cxChannel(eff, 'Rm', 'Ra', p.rgb[0]) + ','
+          + cxChannel(eff, 'Gm', 'Ga', p.rgb[1]) + ',' + cxChannel(eff, 'Bm', 'Ba', p.rgb[2]) + ')');
+      } else {
+        p.el.setAttribute(p.attr, bakeGradient(rootDefs, p.gradient, eff));
+      }
     }
     return true;
   }
@@ -814,27 +921,100 @@
     walkElements(node, (p) => {
       if (p.__sfBakedBy !== node) return;
       const b = p.__sfBasePaint;
+      const stack = p.__sfPrev;
+      const prev = stack && stack.length ? stack.pop() : null;
+      if (stack && !stack.length) p.__sfPrev = null;
+      if (prev && prev.cx && b) {
+        // 父级撤掉时把子级原来的染色重新贴回去（只处理纯色；渐变子级本来就不会被串色）。
+        p.__sfBakedBy = prev.by;
+        p.__sfCx = prev.cx;
+        for (const k of Object.keys(b)) {
+          const rgb = parseSolidColor(b[k]);
+          if (!rgb) continue;
+          p.setAttribute(k, 'rgb(' + cxChannel(prev.cx, 'Rm', 'Ra', rgb[0]) + ','
+            + cxChannel(prev.cx, 'Gm', 'Ga', rgb[1]) + ',' + cxChannel(prev.cx, 'Bm', 'Ba', rgb[2]) + ')');
+        }
+        return;
+      }
       if (b) for (const k of Object.keys(b)) p.setAttribute(k, b[k]);
-      p.__sfBasePaint = null;
+      p.__sfCx = null;
       p.__sfBakedBy = null;
       p.removeAttribute('data-sf-baked');
     });
+  }
+
+  function clearBakeHooks(node) {
+    const cfg = node && node.__bakeCfg;
+    if (!cfg) return;
+    for (const h of cfg.hooks) {
+      const arr = h.clip.__bakeParents;
+      if (!arr) continue;
+      const i = arr.indexOf(cfg);
+      if (i >= 0) arr.splice(i, 1);
+    }
+    cfg.hooks.length = 0;
+    node.__bakeCfg = null;
+    node.__bakeCx = null;
+  }
+  // 逐帧烘焙：换帧会重建内部节点，所以把「谁在换帧后要重烘」登记到每个会换帧的 clip 上。
+  function registerBakeHooks(node, cfg) {
+    const clips = [];
+    if (node.__clip && node.__clip.frames && node.__clip.frames.length > 1) clips.push(node.__clip);
+    walkElements(node, (p) => {
+      if (p.__clip && p.__clip.frames && p.__clip.frames.length > 1) clips.push(p.__clip);
+    });
+    for (const clip of clips) {
+      if (!clip.__bakeParents) clip.__bakeParents = [];
+      if (clip.__bakeParents.indexOf(cfg) < 0) clip.__bakeParents.push(cfg);
+      cfg.hooks.push({ clip: clip });
+    }
+  }
+  function rebakeCfg(cfg) {
+    if (!cfg || !cfg.node || !cfg.node.childNodes) return;
+    if (bakeColorTransform(cfg.node, cfg.c, cfg.rootDefs, true)) {
+      updateAttribute(cfg.node, 'filter', null);
+    } else {
+      // 逐帧烘焙失效（新帧出现位图/嵌套 cx）：先撤掉上一帧烘过的颜色，再挂滤镜，
+      // 否则滤镜会在已经乘过一次的画稿上再乘一次。
+      if (cfg.node.__sfBaked) { restoreColorTransform(cfg.node); cfg.node.__sfBaked = false; }
+      updateAttribute(cfg.node, 'filter', 'url(#' + cxFilterFor(cfg.rootDefs, cfg.tagId, cfg.depth, cfg.c) + ')');
+    }
   }
 
   function applyCx(node, c, rootDefs, tagId, depth) {
     if (!node) return;
     if (!c) {
       // 只有真烘过才遍历子树；绝大多数没有 cx 的节点每帧都走这里，不能退化成 O(N²)。
+      clearBakeHooks(node);
       if (node.__sfBaked) { restoreColorTransform(node); node.__sfBaked = false; }
       updateAttribute(node, 'filter', null);
       return;
     }
-    if (bakeColorTransform(node, c)) {
+    if (node.__bakeCfg && node.__bakeCfg.c === c) {
+      rebakeCfg(node.__bakeCfg);
+      return;
+    }
+    clearBakeHooks(node);
+    if (bakeColorTransform(node, c, rootDefs)) {
       node.__sfBaked = true;
       updateAttribute(node, 'filter', null);
       return;
     }
-    // 烘不了（渐变/位图/嵌套滤镜）：先把本节点上一帧烘过的纯色还原，再挂滤镜，
+    // 纯色/渐变的逐帧画稿：登记换帧重烘，避免 iOS 上 feComponentTransfer 整块画黑。
+    const animatedPaints = colorPaintList(node, rootDefs, true);
+    if (animatedPaints) {
+      const cfg = { node: node, c: c, rootDefs: rootDefs, tagId: tagId, depth: depth, hooks: [] };
+      node.__bakeCfg = cfg;
+      node.__bakeCx = c;
+      registerBakeHooks(node, cfg);
+      if (bakeColorTransform(node, c, rootDefs, true, animatedPaints)) {
+        node.__sfBaked = true;
+        updateAttribute(node, 'filter', null);
+        return;
+      }
+      clearBakeHooks(node);
+    }
+    // 烘不了（位图/嵌套滤镜）：先把本节点上一帧烘过的纯色还原，再挂滤镜，
     // 否则滤镜会把已经乘过一次的颜色再乘一次。
     if (node.__sfBaked) { restoreColorTransform(node); node.__sfBaked = false; }
     updateAttribute(node, 'filter', 'url(#' + cxFilterFor(rootDefs, tagId, depth, c) + ')');
@@ -1297,6 +1477,12 @@
     if (typeof this.__frameFix === 'function') {
       try { this.__frameFix(this); } catch (e) {}
     }
+    const selfCfg = this.g && this.g.__bakeCx ? this.g.__bakeCfg : null;
+    if (selfCfg) rebakeCfg(selfCfg);
+    if (this.__bakeParents && this.__bakeParents.length) {
+      // 自己的 cfg 也可能登记在 __bakeParents 里，别再烘第二遍。
+      for (const cfg of this.__bakeParents.slice()) if (cfg !== selfCfg) rebakeCfg(cfg);
+    }
     return this;
   };
   MovieClip.prototype.tagFor = function (id) {
@@ -1422,8 +1608,8 @@
     for (const img of this.__images || []) if (img.parentNode) img.parentNode.removeChild(img);
     this.__images = [];
   };
-  // 原版 SWF 没有导出的联机自建道具（如黑凤凰/黑圣熊碎片）：用背包同一张 SVG
-  // 补进战利品格。尺寸取格子的实际 bbox，避免不同战果页的格子缩放不一。
+  // 没有 SWF 库导出的联机自建道具：用背包同一张 SVG 补进战利品格（走这条路的
+  // `loot-icons.json` 条目只有 `svg`）。尺寸取格子的实际 bbox，避免不同战果页的格子缩放不一。
   MovieClip.prototype.attachImage = function (href, opts) {
     const src = String(href || '');
     if (!src) return null;
@@ -1662,8 +1848,34 @@
     return view;
   }
 
+  function esc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g,
+      (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  let lootIconsTable = null;
+  async function loadLootIcons() {
+    if (lootIconsTable) return lootIconsTable;
+    try { lootIconsTable = ((await loadTable('loot-icons.json')) || {}).byId || {}; }
+    catch (e) { lootIconsTable = {}; }
+    return lootIconsTable;
+  }
+
+  // 停帧的两种口径：`stopAt` 只拨帧；`setPinned` 还清掉 `__pinFrame` 并钉住播放头。
+  function stopAt(clip, n) {
+    if (!clip || !clip.gotoAndStop) return;
+    try { clip.gotoAndStop(n); } catch (e) {}
+  }
+  function setPinned(clip, frame) {
+    if (!clip || !clip.gotoAndStop) return;
+    const want = Math.max(1, Math.round(Number(frame) || 1));
+    clip.__pinFrame = null;
+    if (clip.frame !== want - 1) { try { clip.gotoAndStop(want); } catch (e) {} }
+    clip.playing = false;
+  }
+
   window.SfRender = {
     load, loaded, loadExtra, loadTable, releaseExtra, queueExtraRelease, mount, mountSymbol, buildFrames, stopTicker,
+    stopAt, setPinned, loadLootIcons, esc,
     prefetch, cancelPrefetch,
     // 网页端构建号 / 给直接加载的图片加 `?v=`（原生包无构建号时原样返回）。
     webVersion, assetUrl: withVersion,

@@ -339,7 +339,9 @@ const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),asse
     UI:{currentUiMode:()=> 'classic',classic:{}},
     SfChallenge:{openOriginalConfirm:async o=>{confirm=o;return {}; }},
     SfUiMain:{toolkit:{freezeDescendants(){freezes++;},addHitArea(){}}},
-    SfRender:{loadExtra:async()=>{},mountSymbol:async()=>view},
+    SfRender:{loadExtra:async()=>{},mountSymbol:async()=>view,
+      stopAt(clip,n){ if (clip && clip.gotoAndStop) clip.gotoAndStop(n); },
+      setPinned(clip,frame){ if (clip && clip.gotoAndStop) { clip.__pinFrame=null; clip.gotoAndStop(frame); clip.playing=false; } }},
   };
   campaign.window=campaign;vm.createContext(campaign);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../js/online-ui.js'),'utf8'),campaign);
@@ -504,6 +506,7 @@ const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),asse
     let serial = 0;
     const ctx = {
       console, Promise, JSON, Math, URL, Date,
+      SfRender: { esc: (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])) },
       __SSDZ_VERSION: version,
       document: {
         hidden: false,

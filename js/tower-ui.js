@@ -478,6 +478,51 @@
     }
   }
 
+  // 把人物/SVG 的屏幕矩形反算到用户坐标，取直接根层的并集当裁切框。
+  // ⚠ 不用 getScreenCTM：iOS 15 会漏掉祖先 CSS transform 的 scale（WebKit 209220）。
+  function fitSvgToModel(svg, view, opts) {
+    if (!svg || !view || !view.g) return;
+    const o = opts || {};
+    const pad = Number.isFinite(Number(o.pad)) ? Number(o.pad) : 7;
+    const zoom = Number.isFinite(Number(o.zoom)) ? Number(o.zoom) : 1.08;
+    let bb = null;
+    try {
+      const sr = svg.getBoundingClientRect();
+      const vb = svg.viewBox && svg.viewBox.baseVal;
+      if (!sr || !vb || !sr.width || !sr.height || !vb.width || !vb.height) throw new Error('no rect');
+      const par = String(svg.getAttribute('preserveAspectRatio') || 'xMidYMid meet');
+      const scale = /slice/.test(par) ? Math.max(sr.width / vb.width, sr.height / vb.height)
+        : Math.min(sr.width / vb.width, sr.height / vb.height);
+      const ax = /xMin/.test(par) ? 0 : /xMax/.test(par) ? 1 : 0.5;
+      const ay = /YMin/.test(par) ? 0 : /YMax/.test(par) ? 1 : 0.5;
+      const x0 = sr.left + (sr.width - vb.width * scale) * ax - vb.x * scale;
+      const y0 = sr.top + (sr.height - vb.height * scale) * ay - vb.y * scale;
+      const toUser = (sx, sy) => ({ x: (sx - x0) / scale, y: (sy - y0) / scale });
+      // 只量隐藏完非松鼠元件后的直接根层（人物 + 尾巴 + 装备）；整棵 v.g 会带舞台空白。
+      let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity, n = 0;
+      for (const child of Array.from(view.g.children || [])) {
+        if (String(child.tagName || '').toLowerCase() !== 'g') continue;
+        if (child.style && child.style.display === 'none') continue;
+        const rr = child.getBoundingClientRect();
+        if (!rr.width || !rr.height) continue;
+        const a = toUser(rr.left, rr.top);
+        const z = toUser(rr.right, rr.bottom);
+        x1 = Math.min(x1, a.x, z.x); y1 = Math.min(y1, a.y, z.y);
+        x2 = Math.max(x2, a.x, z.x); y2 = Math.max(y2, a.y, z.y);
+        n++;
+      }
+      if (n) {
+        const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+        const side = Math.max(x2 - x1, y2 - y1) * zoom + pad * 2;
+        bb = { x: cx - side / 2, y: cy - side / 2, width: side, height: side };
+      }
+    } catch (e) { bb = null; }
+    if (!bb || !bb.width || !bb.height) bb = { x: -35, y: -60, width: 90, height: 90 };
+    svg.setAttribute('viewBox', bb.x + ' ' + bb.y + ' ' + bb.width + ' ' + bb.height);
+    svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    svg.style.width = '100%'; svg.style.height = '100%';
+  }
+
   async function mountClassicSquirrel(host, info, opts) {
     const o = opts || {};
     await loadClassicGear();
@@ -530,50 +575,7 @@
       const c = v.byName(f); if (c && c.g) c.g.style.display = 'none';
     }
     for (const t of v.g.querySelectorAll('text')) { try { t.style.display = 'none'; } catch (e) {} }
-    const svg = host.querySelector('svg');
-    if (svg) {
-      // 人物坐标不是 getBBox() 的局部坐标（父级还有变换）；用屏幕矩形反算到 SVG
-      // ⚠ 不用 getScreenCTM：iOS 15 会漏掉祖先 CSS transform 的 scale（WebKit 209220），
-      let bb = null;
-      try {
-        const sr = svg.getBoundingClientRect();
-        const vb = svg.viewBox && svg.viewBox.baseVal;
-        if (!sr || !vb || !sr.width || !sr.height || !vb.width || !vb.height) throw new Error('no rect');
-        const par = String(svg.getAttribute('preserveAspectRatio') || 'xMidYMid meet');
-        const scale = /slice/.test(par) ? Math.max(sr.width / vb.width, sr.height / vb.height)
-          : Math.min(sr.width / vb.width, sr.height / vb.height);
-        const ax = /xMin/.test(par) ? 0 : /xMax/.test(par) ? 1 : 0.5;
-        const ay = /YMin/.test(par) ? 0 : /YMax/.test(par) ? 1 : 0.5;
-        const x0 = sr.left + (sr.width - vb.width * scale) * ax - vb.x * scale;
-        const y0 = sr.top + (sr.height - vb.height * scale) * ay - vb.y * scale;
-        const toUser = (sx, sy) => ({ x: (sx - x0) / scale, y: (sy - y0) / scale });
-        // 只量隐藏完非松鼠元件后的直接根层（人物 + 尾巴 + 装备）；
-        // 整棵 v.g 的 bbox 会带舞台空白，不能拿来裁切。
-        let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity, n = 0;
-        for (const child of Array.from(v.g.children || [])) {
-          if (String(child.tagName || '').toLowerCase() !== 'g') continue;
-          if (child.style && child.style.display === 'none') continue;
-          const rr = child.getBoundingClientRect();
-          if (!rr.width || !rr.height) continue;
-          const a = toUser(rr.left, rr.top);
-          const z = toUser(rr.right, rr.bottom);
-          x1 = Math.min(x1, a.x, z.x); y1 = Math.min(y1, a.y, z.y);
-          x2 = Math.max(x2, a.x, z.x); y2 = Math.max(y2, a.y, z.y);
-          n++;
-        }
-        if (n) {
-          const pad = Number.isFinite(Number(o.pad)) ? Number(o.pad) : 7;
-          const zoom = Number.isFinite(Number(o.zoom)) ? Number(o.zoom) : 1.08;
-          const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
-          const side = Math.max(x2 - x1, y2 - y1) * zoom + pad * 2;
-          bb = { x: cx - side / 2, y: cy - side / 2, width: side, height: side };
-        }
-      } catch (e) { bb = null; }
-      if (!bb || !bb.width || !bb.height) bb = { x: -35, y: -60, width: 90, height: 90 };
-      svg.setAttribute('viewBox', bb.x + ' ' + bb.y + ' ' + bb.width + ' ' + bb.height);
-      svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-      svg.style.width = '100%'; svg.style.height = '100%';
-    }
+    fitSvgToModel(host.querySelector('svg'), v, o);
     host.classList.add('ready');
     return v;
   }
@@ -623,47 +625,7 @@
           if (String(child.tagName || '').toLowerCase() === 'defs') continue;
           if (keep.size && !keep.has(child)) child.style.display = 'none';
         }
-        const svg = host.querySelector('svg');
-        if (svg) {
-          // 同 `fillClassicFoeArt`：人物坐标要按屏幕矩形反算到 SVG 用户坐标，
-          // 不能直接信 `getBBox()`（父级还有变换）。这里取模型自己的方形包围盒。
-          let bb = null;
-          try {
-            const sr = svg.getBoundingClientRect();
-            const vb = svg.viewBox && svg.viewBox.baseVal;
-            if (!sr || !vb || !sr.width || !sr.height || !vb.width || !vb.height) throw new Error('no rect');
-            const par = String(svg.getAttribute('preserveAspectRatio') || 'xMidYMid meet');
-            const scale = /slice/.test(par) ? Math.max(sr.width / vb.width, sr.height / vb.height)
-              : Math.min(sr.width / vb.width, sr.height / vb.height);
-            const ax = /xMin/.test(par) ? 0 : /xMax/.test(par) ? 1 : 0.5;
-            const ay = /YMin/.test(par) ? 0 : /YMax/.test(par) ? 1 : 0.5;
-            const x0 = sr.left + (sr.width - vb.width * scale) * ax - vb.x * scale;
-            const y0 = sr.top + (sr.height - vb.height * scale) * ay - vb.y * scale;
-            const toUser = (sx, sy) => ({ x: (sx - x0) / scale, y: (sy - y0) / scale });
-            let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity, n = 0;
-            for (const child of Array.from(v.g.children || [])) {
-              if (String(child.tagName || '').toLowerCase() !== 'g') continue;
-              if (child.style && child.style.display === 'none') continue;
-              const rr = child.getBoundingClientRect();
-              if (!rr.width || !rr.height) continue;
-              const a = toUser(rr.left, rr.top);
-              const z = toUser(rr.right, rr.bottom);
-              x1 = Math.min(x1, a.x, z.x); y1 = Math.min(y1, a.y, z.y);
-              x2 = Math.max(x2, a.x, z.x); y2 = Math.max(y2, a.y, z.y);
-              n++;
-            }
-            if (n) {
-              const pad = 7;
-              const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
-              const side = Math.max(x2 - x1, y2 - y1) * 1.08 + pad * 2;
-              bb = { x: cx - side / 2, y: cy - side / 2, width: side, height: side };
-            }
-          } catch (e) { bb = null; }
-          if (!bb || !bb.width || !bb.height) bb = { x: -35, y: -60, width: 90, height: 90 };
-          svg.setAttribute('viewBox', bb.x + ' ' + bb.y + ' ' + bb.width + ' ' + bb.height);
-          svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-          svg.style.width = '100%'; svg.style.height = '100%';
-        }
+        fitSvgToModel(host.querySelector('svg'), v);
         host.classList.add('ready');
       } catch (e) {
         if (window.__errs) window.__errs.push('classic campaign art: ' + (e && e.message));

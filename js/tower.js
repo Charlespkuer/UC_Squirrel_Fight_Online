@@ -155,14 +155,7 @@
     save();
     return true;
   }
-  function mondayKey() {
-    try {
-      if (window.State && typeof State.rankWeekKey === 'function') return State.rankWeekKey();
-    } catch (e) {}
-    const d = new Date(Date.now());
-    d.setDate(d.getDate() - (d.getDay() + 6) % 7);
-    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-  }
+  function mondayKey() { return State.rankWeekKey(); }
   // 联机版无尽塔周奖励的只读账本（周一 00:00 换周；服务端 `claimEndlessTower` 是权威写入口）。
   // 本机时钟只用于预览：换周后最多把上一周的已用额度先当成 0，服务端回包会再校正。
   function onlineWeekState() {
@@ -1766,10 +1759,7 @@
   }
 
   function instantOwnedCount(run, id) {
-    if (!run) return 0;
-    let n = 0;
-    for (const row of run.instantIds || []) if (row && row.id === id) n += Math.max(1, Math.floor(Number(row.count) || 1));
-    return n;
+    return TowerData.instantOwned(run, id);
   }
   function permUsed(run) {
     const list = (run && run.permanent) || [];

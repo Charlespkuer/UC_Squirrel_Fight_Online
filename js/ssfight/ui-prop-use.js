@@ -3,7 +3,7 @@
   'use strict';
 
   const T = () => (window.SfUiMain && SfUiMain.toolkit) || null;
-  const clipOf = (host, name) => (host && host.byName ? host.byName(name) : null);
+  const clipOf = SfUiMain.toolkit.clipOf;
   const stopAt = (clip, frame) => {
     if (!clip || !clip.gotoAndStop) return;
     try { clip.gotoAndStop(frame); } catch (e) {}
@@ -18,15 +18,7 @@
   let session = null;
 
   function createHost(extra) {
-    const ui = document.getElementById('ui');
-    if (!ui) return null;
-    const host = document.createElement('section');
-    // 与 ui-compose / 状态页同一套宿主约定：ssfight-view 保住经典层，
-    // ⚠ 不要加 `ssfight-home`：`main.js` 的 fitCanvas 把 `.ssfight-home` 当成
-    host.className = 'classic-home ssfight-sub ssfight-view sf-prop-use-view' + (extra ? ' ' + extra : '');
-    host.setAttribute('aria-label', '道具使用');
-    ui.appendChild(host);
-    return host;
+    return SfUiMain.toolkit.createSubviewHost('sf-prop-use-view', '道具使用', extra);
   }
 
   // 只拆这一份 session，不碰后来打开的那一份（异步/旧 handle 回来时尤其重要）。
@@ -62,27 +54,7 @@
   }
 
 
-  function paintIcon(clip, src) {
-    if (!clip || !clip.g || !src) return;
-    const host = clip.getContentHost ? clip.getContentHost() : clip.g;
-    if (!host) return;
-    for (const old of host.querySelectorAll('image.sf-prop-use-icon')) old.remove();
-    let box = { x: 0, y: 0, width: 44, height: 44 };
-    try { if (clip.g.getBBox) box = clip.g.getBBox(); } catch (e) {}
-    const base = Math.min(Math.max(24, Number(box.width) || 44), Math.max(24, Number(box.height) || 44));
-    const size = Math.round(base * 0.86);
-    const img = document.createElementNS('http://www.w3.org/2000/svg', 'image');
-    img.setAttribute('class', 'sf-prop-use-icon');
-    img.setAttribute('href', src);
-    img.setAttribute('xlink:href', src);
-    img.setAttribute('x', String((Number(box.x) || 0) + ((Number(box.width) || 44) - size) / 2));
-    img.setAttribute('y', String((Number(box.y) || 0) + ((Number(box.height) || 44) - size) / 2));
-    img.setAttribute('width', String(size));
-    img.setAttribute('height', String(size));
-    img.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-    img.setAttribute('pointer-events', 'none');
-    host.appendChild(img);
-  }
+  function paintIcon(clip, src) { SfUiMain.toolkit.paintSvgIcon(clip, src, 'sf-prop-use-icon'); }
 
 
   let propIconMapPromise = null;

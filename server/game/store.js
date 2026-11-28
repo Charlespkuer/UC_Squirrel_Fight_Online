@@ -8,26 +8,12 @@ const runtime = require('./runtime');
 const snapshots = require('./snapshot');
 const vip = require('./vip');
 const nickname = require('../../js/nickname');
+const { localDate } = require('../config');
+const { encode, toBuffer, decode, tryDecode } = require('./json');
 
 const MODE = 'classic';
 // 旧账号最多 12 个汉字（36 个“三分之一字”）：存档/快照里的旧名字保留原样，
 const LEGACY_NAME_UNITS = 36;
-
-function encode(obj) { return Buffer.from(JSON.stringify(obj), 'utf8'); }
-
-// node:sqlite 的 BLOB 读回来是 Uint8Array（不是 Buffer）——统一成 Buffer 再解码，
-// 否则 `String(blob)` 会得到 "123,34,..." 这种字节列表，JSON.parse 直接炸。
-function toBuffer(blob) {
-  if (blob == null) return Buffer.alloc(0);
-  if (Buffer.isBuffer(blob)) return blob;
-  if (blob instanceof Uint8Array) return Buffer.from(blob.buffer, blob.byteOffset, blob.byteLength);
-  if (typeof blob === 'string') return Buffer.from(blob, 'utf8');
-  return Buffer.from(String(blob), 'utf8');
-}
-
-function decode(blob) {
-  return JSON.parse(toBuffer(blob).toString('utf8'));
-}
 
 function getRow(accountId, mode) {
   return db.get('SELECT * FROM saves WHERE account_id = ? AND mode = ?', Number(accountId), mode || MODE);
@@ -45,6 +31,33 @@ function summaryOf(payload) {
     vipLevel: Math.max(0, Math.min(vip.MAX_LEVEL, Math.floor(Number(v.level) || 0))),
     vipUntil: Math.max(0, Math.floor(Number(v.until) || 0)),
   };
+}
+
+// 状态页「今日胜率 / 战斗场次」：日计数只在下一场战斗时跨天清零，
+// 查看好友这类只读路径必须自己按 `dailyStatsDate` 判今天，不能把昨天的计数带出来。
+function battleStatsFromValues(s) {
+  s = s && typeof s === 'object' ? s : {};
+  const num = (v) => Math.max(0, Math.round(Number(v) || 0));
+  const sameDay = String(s.dailyStatsDate || '') === localDate();
+  return {
+    dailyWins: sameDay ? num(s.dailyWins) : 0,
+    dailyFails: sameDay ? num(s.dailyFails) : 0,
+    allWins: num(s.allWins),
+    allFails: num(s.allFails),
+  };
+}
+function battleStatsOf(payload) {
+  return battleStatsFromValues(payload);
+}
+// 好友列表用 SQL `json_extract` 只取这几个字段，避免为 4 个计数解析整份存档。
+function battleStatsOfRow(row) {
+  return battleStatsFromValues({
+    dailyStatsDate: row && row.daily_stats_date,
+    dailyWins: row && row.daily_wins,
+    dailyFails: row && row.daily_fails,
+    allWins: row && row.all_wins,
+    allFails: row && row.all_fails,
+  });
 }
 
 // 顶层键 diff：只把变了的键发回客户端。
@@ -184,6 +197,6 @@ function peek(accountId, mode) {
 }
 
 module.exports = {
-  MODE, encode, decode, toBuffer, getRow, summaryOf, diffPayload, deepEqual,
+  MODE, encode, decode, tryDecode, toBuffer, getRow, summaryOf, battleStatsOf, battleStatsOfRow, diffPayload, deepEqual,
   housekeeping, runOnSave, createSave, rename, peek,
 };

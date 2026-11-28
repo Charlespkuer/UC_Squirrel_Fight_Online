@@ -158,20 +158,7 @@
     }
   }
 
-  function layoutScale(host) {
-    if (!host) return 1;
-    // ⚠ 缓存探针必须判 `isConnected`：重挂牧场页时 `SfRender.mountSymbol(host, …)` 会把
-    // 只在探针还连着时复用，否则重建一颗。
-    let p = host.__petProbe;
-    if (!p || !p.isConnected) {
-      p = document.createElement('div');
-      p.style.cssText = 'position:absolute;left:0;top:0;width:100px;height:0;pointer-events:none;visibility:hidden';
-      host.appendChild(p);
-      host.__petProbe = p;
-    }
-    const w = p.getBoundingClientRect().width;
-    return w ? w / 100 : 1;
-  }
+  function layoutScale(host) { return SfUiMain.toolkit.layoutScale(host, '__petProbe'); }
   // 卡片内容区（设计 px，相对 container）。`max-width:100%` 生效时 SVG 会按 viewBox 留边，
   // 所以按 meet 反算真实内容区，立绘定位不能直接用 SVG 的外框。
   function cardContentBox(container) {
@@ -211,14 +198,11 @@
 
 
 
-  const clipOf = (host, name) => (host && host.byName ? host.byName(name) : null);
+  const clipOf = SfUiMain.toolkit.clipOf;
   // 换掉某个文本字段（tp11 的放置存的是 `<g type="text">` 元素，不是 MovieClip）。
   // `opts.wrap` 透传给显示层：按字段框宽自动折行（详情页的长技能说明）。
   function setTextByName(host, name, str, opts) {
-    const t = T();
-    const n = clipOf(host, name);
-    if (t && n) t.setText(n, str, opts);
-    return n;
+    return SfUiMain.toolkit.setTextByName(host, name, str, opts);
   }
   // 幻兽技能数值的显示格式：整数不带小数点，半档（10.5 这类）保留一位。
   function skillValueText(v) {
@@ -231,53 +215,24 @@
     return String(text == null ? '' : text).replace(/X/g, skillValueText(value));
   }
   // 让元件停在某一帧（不自己播）。这些按钮是"状态精灵"，只能停帧不能 play。
-  function stopAt(clip, n) {
-    if (!clip || !clip.gotoAndStop) return;
-    try { clip.gotoAndStop(n); } catch (e) {}
-  }
+  const stopAt = (clip, n) => SfRender.stopAt(clip, n);
 
   function refreshShell(clip) {
-    const t = T();
-    if (!t || !clip || !clip.g) return;
-    t.popWrap(clip);
-    const shell = clip.g.querySelector(':scope > g.uc-pop');
-    if (shell) t.wirePopPress(shell);
-    t.freezeDescendants(clip);
+    SfUiMain.toolkit.refreshShell(clip, true);
   }
 
 
   function wireClickable(clip, onFire, opts) {
-    const t = T();
-    if (!t || !clip || !clip.g) return;
+    if (!T() || !clip || !clip.g) return;
     const hoverFrame = (opts && opts.hover != null) ? Number(opts.hover) : 2;
     const idleFrame = (opts && opts.idle != null) ? Number(opts.idle) : 1;
-    clip.__sceneFire = onFire;
-    if (clip.__sceneWired) return;
-    clip.__sceneWired = true;
-    clip.__sceneHover = false;
-    stopAt(clip, idleFrame);
-    clip.g.style.cursor = 'pointer';
-    clip.g.style.pointerEvents = 'auto';
-    t.measureHitBox(clip);
-    t.popWrap(clip);
-    const shell = clip.g.querySelector(':scope > g.uc-pop');
-    if (shell) t.wirePopPress(shell);
-    if (window.SfUiFeedback) SfUiFeedback.bind(clip.g, {
-      hover: false, shell: () => clip.g.querySelector(':scope > g.uc-pop'),
-    });
-    clip.g.addEventListener('mouseenter', () => {
-      clip.__sceneHover = true;
-      if (hoverFrame > 0) stopAt(clip, hoverFrame);
-      refreshShell(clip);
-    });
-    clip.g.addEventListener('mouseleave', () => { clip.__sceneHover = false; stopAt(clip, idleFrame); refreshShell(clip); });
-    clip.g.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const fire = () => {
-        if (clip.__sceneFire) clip.__sceneFire();
-      };
-      if (window.SfUiFeedback) SfUiFeedback.tap(clip.g, fire, { delay: 0, press: false });
-      else fire();
+    SfUiFeedback.wireSvg(clip, {
+      idle: () => idleFrame,
+      hover: hoverFrame,
+      press: 0,
+      freeze: true,
+      css: true,
+      onFire: onFire,
     });
   }
 

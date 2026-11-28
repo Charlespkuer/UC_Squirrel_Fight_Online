@@ -4,15 +4,9 @@
 
   // `State.genAI` 用 Math.random 抽装备/宠物。首领数值必须每局一致：
   // 否则同一只 BOSS 每场强弱不同，既没法做 4 人平衡，也没法复算。
-  function mulberry32(seed) {
-    let t = seed >>> 0;
-    return function random() {
-      t += 0x6D2B79F5;
-      let r = Math.imul(t ^ (t >>> 15), 1 | t);
-      r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
-      return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-    };
-  }
+  const mulberry32 = (typeof module === 'object' && module && module.exports)
+    ? require('./mulberry32').mulberry32
+    : window.Mulberry32.mulberry32;
   function withSeed(seed, fn) {
     const old = Math.random;
     Math.random = mulberry32(seed);

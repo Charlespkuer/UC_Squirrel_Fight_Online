@@ -13,7 +13,7 @@ const GAME_ROOT = process.env.GAME_ROOT
 // 服务端要加载的脚本。顺序和 `scripts/index-online.html` 里这几支必须一致：
 // → gamedata（派生规则）→ tower-rewards（无尽塔周奖励公式，服务端 claimEndlessTower 用）
 // 加载顺序对它没有硬依赖，但必须在 `state.js` 之前（state 的 normalizeSave 会用它清洗 towerWeek）。
-const SCRIPTS = ['js/nickname.js', 'js/campaign-data.js', 'js/gamedict.js', 'js/engine.js', 'js/gamedata.js', 'js/tower-rewards.js', 'js/state.js', 'js/sim.js', 'js/battle-drops.js'];
+const SCRIPTS = ['js/nickname.js', 'js/mulberry32.js', 'js/campaign-data.js', 'js/gamedict.js', 'js/engine.js', 'js/gamedata.js', 'js/tower-rewards.js', 'js/state.js', 'js/sim.js', 'js/battle-drops.js'];
 
 let booted = false;
 let bootInfo = null;

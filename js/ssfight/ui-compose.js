@@ -6,7 +6,7 @@
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const T = () => (window.SfUiMain && SfUiMain.toolkit) || null;
   const C = () => (window.UI && UI.classic) || null;
-  const clipOf = (host, name) => (host && host.byName ? host.byName(name) : null);
+  const clipOf = SfUiMain.toolkit.clipOf;
   const stopAt = (clip, frame) => {
     if (!clip || !clip.gotoAndStop) return;
     try { clip.gotoAndStop(frame); } catch (e) {}
@@ -37,13 +37,7 @@
   }
 
   function createHost() {
-    const ui = document.getElementById('ui');
-    if (!ui) return null;
-    const host = document.createElement('section');
-    host.className = 'classic-home ssfight-sub ssfight-view sf-compose-view';
-    host.setAttribute('aria-label', '道具合成');
-    ui.appendChild(host);
-    return host;
+    return SfUiMain.toolkit.createSubviewHost('sf-compose-view', '道具合成');
   }
 
   function destroy() {
@@ -88,27 +82,7 @@
   }
 
 
-  function paintIcon(clip, src) {
-    if (!clip || !clip.g || !src) return;
-    const host = clip.getContentHost ? clip.getContentHost() : clip.g;
-    if (!host) return;
-    for (const old of host.querySelectorAll('image.sf-compose-icon')) old.remove();
-    let box = { x: 0, y: 0, width: 44, height: 44 };
-    try { if (clip.g.getBBox) box = clip.g.getBBox(); } catch (e) {}
-    const base = Math.min(Math.max(24, Number(box.width) || 44), Math.max(24, Number(box.height) || 44));
-    const size = Math.round(base * 0.86);
-    const img = document.createElementNS('http://www.w3.org/2000/svg', 'image');
-    img.setAttribute('class', 'sf-compose-icon');
-    img.setAttribute('href', src);
-    img.setAttribute('xlink:href', src);
-    img.setAttribute('x', String((Number(box.x) || 0) + ((Number(box.width) || 44) - size) / 2));
-    img.setAttribute('y', String((Number(box.y) || 0) + ((Number(box.height) || 44) - size) / 2));
-    img.setAttribute('width', String(size));
-    img.setAttribute('height', String(size));
-    img.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-    img.setAttribute('pointer-events', 'none');
-    host.appendChild(img);
-  }
+  function paintIcon(clip, src) { SfUiMain.toolkit.paintSvgIcon(clip, src, 'sf-compose-icon'); }
 
   function wireButton(clip, onFire, opts) {
     if (!clip || !clip.g) return;

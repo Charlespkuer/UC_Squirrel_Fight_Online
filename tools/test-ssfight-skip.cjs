@@ -29,7 +29,11 @@ function setup() {
     clearTimeout: id => timers.delete(id),
     requestAnimationFrame(fn) { const id = ++serial; rafs.set(id, fn); return id; },
     cancelAnimationFrame: id => rafs.delete(id),
-    State: { state: () => ({}) }, SfRender: {},
+    State: { state: () => ({}) }, SfRender: {
+      loadLootIcons: async () => ({}),
+      stopAt: (clip, n) => { if (clip && clip.gotoAndStop) clip.gotoAndStop(n); },
+      setPinned: (clip, frame) => { if (clip && clip.gotoAndStop) { clip.__pinFrame = null; clip.gotoAndStop(frame); clip.playing = false; } },
+    },
     BattleDrops: { poolFor: () => [{ id: 1, name: '固定奖品', count: 1, weight: 1 }],
       grant(items) { env.granted.push(...items); } }, granted: [],
   };

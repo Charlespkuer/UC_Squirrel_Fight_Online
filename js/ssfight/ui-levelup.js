@@ -236,10 +236,7 @@
     t.textContent = (page + 1) + '/' + total;
   }
   function freeze(view) {
-    try {
-      if (window.SfUiMain && SfUiMain.toolkit && SfUiMain.toolkit.freezeDescendants) SfUiMain.toolkit.freezeDescendants(view);
-    } catch (e) { err(e); }
-    if (view) view.playing = false;
+    try { SfUiMain.toolkit.freezeView(view); } catch (e) { err(e); }
   }
   function setLevel(view, level) {
     const num = view && view.byName ? view.byName('level') : null;
@@ -522,6 +519,43 @@
       (n > 1 ? '全部随机' : '随便来一个') + '</button></div></div>';
   }
 
+  function rememberWs(entry) {
+    if (!state || !entry || !entry.name) return;
+    if (state.wsLearned.some((x) => x.name === entry.name)) return;
+    state.wsLearned.push({ kind: entry.kind, id: entry.id, name: entry.name });
+  }
+  // 随机选完只有名字，回存档里按名字找回 kind/id，完成页才能给出对应的武技矢量。
+  function resolveWsByName(name) {
+    try {
+      const S = State.state() || {};
+      const scan = (arr, kind) => {
+        for (const raw of arr || []) {
+          const id = Number(String(raw).split(':')[0]);
+          if (!id) continue;
+          const info = State.wsInfo((kind === 'weapon' ? 'w' : 's') + id);
+          if (info && info.name === name) return { kind, id, name };
+        }
+        return null;
+      };
+      return scan(S.weapons, 'weapon') || scan(S.skills, 'skill');
+    } catch (e) { return null; }
+  }
+  // 升级流程里的确定键统一挂原版 4399（绿胶囊 + 确定），素材没就绪时 helper 自己退回 DOM 按钮。
+  function mountConfirm(footer, onFire) {
+    if (!footer) return;
+    const C = window.UI && UI.classic;
+    if (C && typeof C.mountVectorButton === 'function') {
+      C.mountVectorButton(footer, '4399', '确定', onFire, 'gold', { frame: 2, fixedFrame: true });
+      return;
+    }
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'uc-button gold';
+    b.textContent = '确定';
+    b.addEventListener('click', (e) => { e.preventDefault(); onFire(); });
+    footer.appendChild(b);
+  }
+
   function chooseCard(index) {
     if (!state || state.phase !== 'choice' || state.wsBusy) return;
     let c = null;
@@ -535,7 +569,7 @@
       return;
     }
     state.wsError = '';
-    if (state.wsLearned.indexOf(c.name) < 0) state.wsLearned.push(c.name);
+    rememberWs(c);
     state.wsAutoPending = false;
     state.wsAutoTries = 0;
     renderChoice();
@@ -558,6 +592,9 @@
       if (!r || !r.ok) state.wsError = (r && (r.msg || r.message)) || '选择失败，请重试';
       else {
         state.wsError = '';
+        for (const name of (Array.isArray(r.got) ? r.got : [])) {
+          rememberWs(resolveWsByName(name) || { name });
+        }
         // 服务端说成功但本地仍没有候选：最多自动重试 3 次，随后交给玩家点「重试」。
         let left = [];
         try { left = State.currentWSChoices() || []; } catch (e) { left = []; }
@@ -594,12 +631,20 @@
     state.ready = true;
     holdBackground();
     const learned = state.wsLearned.length
-      ? '<p class="free-point-tip">已学会：' + state.wsLearned.map(esc).join('、') + '</p>' : '';
+      ? '<p class="free-point-tip">已学会</p><div class="ws-learned-row">' +
+        state.wsLearned.map((it) =>
+          '<div class="ws-learned-card">' +
+          (it.kind && it.id != null ? '<span class="item-icon">' + wsIconHtml(it.kind, it.id) + '</span>' : '') +
+          '<b class="ws-choice-name">' + esc(it.name) + '</b>' +
+          (it.kind ? '<span class="ws-choice-kind">' + (it.kind === 'weapon' ? '武器' : '技能') + '</span>' : '') +
+          '</div>').join('') + '</div>'
+      : '';
     state.ws.hidden = false;
-    state.ws.innerHTML = '<div class="classic-modal small-modal sf-levelup-ws-modal" role="dialog" aria-modal="true" aria-label="升级奖励已完成">' +
+    state.ws.innerHTML = '<div class="classic-modal small-modal sf-levelup-ws-modal sf-levelup-done-modal" role="dialog" aria-modal="true" aria-label="升级奖励已完成">' +
       '<h2 class="modal-title cartoon">升级奖励</h2>' +
       '<div class="modal-body"><p class="free-point-tip">本次升级的奖励已全部处理完。</p>' + learned + '</div>' +
-      '<div class="modal-buttons"><button type="button" class="uc-button gold" data-lv-done>确定</button></div></div>';
+      '<div class="modal-buttons" data-lv-done-footer></div></div>';
+    mountConfirm(state.ws.querySelector('[data-lv-done-footer]'), finishDone);
   }
 
   function finishDone() {
@@ -609,9 +654,7 @@
     close();
   }
 
-  function esc(v) {
-    return String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  }
+  function esc(v) { return SfRender.esc(v); }
 
   function fallbackHtml(list) {
     const c = window.UI && window.UI.classic;
@@ -619,12 +662,12 @@
       try { return c.upsHtml(list); } catch (e) { err(e); }
     }
     const rows = (list || []).map((u) => {
+      const gain = { hp: Number(u.hp) || 0, agility: Number(u.agility) || 0, power: Number(u.power) || 0, speed: Number(u.speed) || 0 };
+      if (u.autoPoint && gain[u.autoPoint] != null) gain[u.autoPoint] += statGain(u.autoPoint);
       const gains = [];
       for (const key of STAT_ORDER) {
-        const value = Number(u[key]) || 0;
-        if (value > 0) gains.push(STAT[key].name + '+' + value);
+        if (gain[key] > 0) gains.push(STAT[key].name + '+' + gain[key]);
       }
-      if (u.autoPoint) gains.push('系统分配 1 点');
       const extra = [];
       if (u.chest) extra.push('金宝箱×' + u.chest);
       if (u.attributeBook) extra.push('属性书×1');
@@ -654,10 +697,9 @@
     state.host.innerHTML = '<div class="sf-levelup-fallback"><section class="classic-modal small-modal" role="dialog" aria-modal="true" aria-label="升级奖励">' +
       '<h2 class="modal-title cartoon">升级奖励</h2>' +
       '<div class="modal-body">' + fallbackHtml(state.ups) + '</div>' +
-      '<div class="modal-buttons"><button type="button" class="uc-button gold" data-lv-dom-confirm>确定</button></div>' +
+      '<div class="modal-buttons" data-lv-fallback-footer></div>' +
       '</section></div>';
-    const button = state.host.querySelector('[data-lv-dom-confirm]');
-    if (button) button.addEventListener('click', (e) => { e.preventDefault(); confirmReward(); });
+    mountConfirm(state.host.querySelector('[data-lv-fallback-footer]'), confirmReward);
   }
 
   function syncGeometry() {
@@ -719,7 +761,7 @@
       root.addEventListener('keydown', (e) => {
         if (e.repeat || (e.key !== 'Enter' && e.key !== ' ')) return;
         const t = e.target && e.target.closest ? e.target : null;
-        if (t && t.closest('button,[data-ws-pick],[data-lv-done],[data-ws-random]')) return;
+        if (t && t.closest('button,[data-ws-pick],[data-ws-random]')) return;
         if (!state || state.phase !== 'reward') return;
         e.preventDefault();
         confirmReward();
@@ -730,7 +772,6 @@
         const pick = target.closest('[data-ws-pick]');
         if (pick) { e.preventDefault(); chooseCard(pick.dataset.wsPick); return; }
         if (target.closest('[data-ws-random]')) { e.preventDefault(); chooseRandom(); return; }
-        if (target.closest('[data-lv-done]')) { e.preventDefault(); finishDone(); return; }
       });
       st.root = root;
       st.stage = stage;
@@ -864,7 +905,7 @@
         }
       }
     }
-    if (st.phase === 'done' && st.ws && !st.ws.querySelector('[data-lv-done]') && st.phaseAt && Date.now() - st.phaseAt > 1200) {
+    if (st.phase === 'done' && st.ws && !st.ws.querySelector('[data-lv-done-footer]') && st.phaseAt && Date.now() - st.phaseAt > 1200) {
       showDone();
     }
   }

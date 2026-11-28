@@ -133,13 +133,6 @@
       return false;
     }
   }
-  let lootIcons = null;
-  async function loadLootIcons() {
-    if (lootIcons) return lootIcons;
-    try { lootIcons = ((await SfRender.loadTable('loot-icons.json')) || {}).byId || {}; }
-    catch (e) { lootIcons = {}; }
-    return lootIcons;
-  }
 
   function autoCloseMs(options) {
     const ms = Number(options && options.autoClose);
@@ -242,7 +235,7 @@
         if (t && digits) t.showNumber(exp, digits, 0, 0, 0);
       } else stop(getExp, 3);
     }
-    const icons = (await loadLootIcons()) || {};
+    const icons = (await SfRender.loadLootIcons()) || {};
     if (mine !== generation || !host.isConnected) { view.destroy(); return null; }
     const picks = [];
     for (const item of (options.items || [])) {
@@ -424,9 +417,12 @@
           if (target && SfRender.nudge) SfRender.nudge(target, dx, -2.5);
         }
 
-        for (const field of ['name1', 'name2']) {
+        // 3822 原稿把双方昵称贴在卡片外沿，离中央 VS 太远；按左右卡片包围盒向中间收。
+        for (const [field, dx] of [['name1', 24.5], ['name2', -22.5]]) {
           const target = view.byName(field);
-          if (target && window.SfRender && SfRender.fitTextWidth) SfRender.fitTextWidth(target, { ascii: 0.5, min: 6 });
+          if (!target) continue;
+          if (window.SfRender && SfRender.nudge) SfRender.nudge(target, dx, 0);
+          if (window.SfRender && SfRender.fitTextWidth) SfRender.fitTextWidth(target, { ascii: 0.5, min: 6 });
         }
         for (const rec of view.nodes.values()) {
           if (String(rec.id) === '3152') rec.node.style.display = 'none';
@@ -458,10 +454,10 @@
       }
       const body = node('g'); layer.appendChild(body);
       const layout = {
-        // 3822 的卡片下沿约 y=130、原版返回键 y=157：最终结算的正文放 124–152 的横条，
-        // 操作按钮下移到 163；半决赛/季军赛过渡仍用旧版的 y=130 / 10 行距 / 154 按钮位。
+        // 3822 的卡片下沿约 y=124、大框下沿约 y=170：奖励条放在 125–142，
+        // 操作按钮上移到 156，键底仍在 3822 大框内，不再压到框外/返回菜单。
         arena: arenaSettlement
-          ? { x: 160, top: 125.5, width: 23, size: 8.5, rows: 2, actionY: 163, pageY: 160, bottom: 151.5, anchor: 'middle' }
+          ? { x: 160, top: 120.5, width: 26, size: 8.5, rows: 2, actionY: 156, pageY: 160, bottom: 146.5, anchor: 'middle' }
           : { x: 48, y: 130, width: 21, size: 9, leading: 10, rows: 2, actionY: 154, pageY: 139, legacy: true },
         rank: { x: 68, top: 58.5, width: 18, size: 9.5, rows: 5, actionY: 143, pageY: 131, bottom: 133 },
 
@@ -479,11 +475,31 @@
         perPage = Math.max(2, Math.min(perPage, fit));
       }
       let page = 0;
+      // 最终结算的奖励条：按实际文字收紧（1 行时不再是一条 252 宽的亮白条），
+      // 底色换成和卡片同一档的暖米色，避免比 VS 面板更抢眼。
+      let arenaPanel = null;
       if (kind === 'arena' && arenaSettlement && rows.length) {
-        const panel = node('rect', { x: 34, y: 124, width: 252, height: 28, rx: 6,
-          fill: '#fcf4e0', stroke: '#8b5a2b', 'stroke-width': 1.1, opacity: '.95', 'pointer-events': 'none' });
-        layer.insertBefore(panel, body);
+        arenaPanel = node('rect', { x: 0, y: 0, width: 0, height: 0, rx: 6,
+          fill: '#eed6a5', stroke: '#c49a63', 'stroke-width': 0.8, 'pointer-events': 'none' });
+        layer.insertBefore(arenaPanel, body);
       }
+      const sizeArenaPanel = () => {
+        if (!arenaPanel) return;
+        let b = null;
+        try { b = body.getBBox(); } catch (e) { b = null; }
+        // 量不到文字框（个别 WebView 隐藏首帧）就退回原来的整条，别留一条空框。
+        if (!b || !(b.width > 0) || !(b.height > 0)) {
+          arenaPanel.setAttribute('x', '34'); arenaPanel.setAttribute('y', '119');
+          arenaPanel.setAttribute('width', '252'); arenaPanel.setAttribute('height', '28');
+          return;
+        }
+        const w = Math.max(170, b.width + 34);
+        const h = Math.min(28, Math.max(17, b.height + 7));
+        arenaPanel.setAttribute('x', (160 - w / 2).toFixed(2));
+        arenaPanel.setAttribute('y', (133.5 - h / 2).toFixed(2));
+        arenaPanel.setAttribute('width', w.toFixed(2));
+        arenaPanel.setAttribute('height', h.toFixed(2));
+      };
       const paint = () => {
         while (body.firstChild) body.removeChild(body.firstChild);
         const slice = rows.slice(page * perPage, (page + 1) * perPage);
@@ -500,6 +516,7 @@
           size: layout.size, anchor: layout.anchor,
           fill: arenaSettlement ? '#6b3a12' : '#683b1a', gap: 1,
         });
+        sizeArenaPanel();
       };
       const actions = actionList(options);
       record.actions = actions;

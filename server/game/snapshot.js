@@ -4,6 +4,7 @@
 
 const crypto = require('node:crypto');
 const db = require('../db');
+const json = require('./json');
 const { config } = require('../config');
 const visibility = require('./visibility');
 const { fighterFromState, fighterFingerprint } = require('./fighter');
@@ -13,13 +14,7 @@ function newId() {
   return 's_' + crypto.randomBytes(9).toString('base64url');
 }
 
-function gz(value) {
-  return Buffer.from(JSON.stringify(value), 'utf8');
-}
 
-function unz(blob) {
-  try { return JSON.parse(Buffer.from(blob).toString('utf8')); } catch (_) { return null; }
-}
 
 function currentSnapshot(accountId, mode) {
   const row = db.get(
@@ -55,7 +50,7 @@ function hydrate(row) {
     level: Number(row.level),
     revision: Number(row.revision),
     isCurrent: !!Number(row.is_current),
-    fighter: unz(row.json),
+    fighter: json.tryDecode(row.json),
     createdAt: Number(row.created_at),
   };
 }
@@ -84,7 +79,7 @@ function ensureCurrent(accountId, mode, source) {
     Number(accountId), m, level
   );
   for (const row of sameLevelRows) {
-    const f = unz(row.json);
+    const f = json.tryDecode(row.json);
     if (fighterFingerprint(f) === fp) {
       db.tx(() => {
         db.run('UPDATE battle_snapshots SET is_current = 0 WHERE account_id = ? AND mode = ? AND is_current = 1', Number(accountId), m);
@@ -103,7 +98,7 @@ function ensureCurrent(accountId, mode, source) {
     db.run(
       `INSERT INTO battle_snapshots (id, account_id, mode, level, revision, is_current, json, summary, source, created_at)
        VALUES (?,?,?,?,?,1,?,?,?,?)`,
-      id, Number(accountId), m, level, revision, gz(fighter),
+      id, Number(accountId), m, level, revision, json.encode(fighter),
       String(fighter.name || '') + '|' + level + '|' + fighter.power + '/' + fighter.agility + '/' + fighter.speed + '/' + fighter.maxHp,
       String(source || 'sync'), ts
     );
@@ -204,12 +199,12 @@ function renameCurrent(accountId, mode, name) {
     Number(accountId), m
   );
   if (!row) return false;
-  const fighter = unz(row.json);
+  const fighter = json.tryDecode(row.json);
   if (!fighter) return false;
   fighter.name = String(name || '');
   const level = Math.max(1, Number(fighter.level) || Number(row.level) || 1);
   db.run('UPDATE battle_snapshots SET json = ?, summary = ? WHERE id = ?',
-    gz(fighter),
+    json.encode(fighter),
     String(fighter.name || '') + '|' + level + '|' + fighter.power + '/' + fighter.agility + '/' + fighter.speed + '/' + fighter.maxHp,
     row.id
   );

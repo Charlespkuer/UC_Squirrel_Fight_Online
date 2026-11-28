@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { config } = require('../config');
 const { clientIp } = require('../http');
+const { diffManifests } = require('../../js/manifest-diff');
 
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')) || fallback; } catch (_) { return fallback; }
@@ -78,41 +79,6 @@ function oldManifestByBuild(build) {
   if (!build) return null;
   const data = readManifestText(path.join(manifestDir(), String(build).replace(/[^\w.-]/g, '_') + '.json'));
   return data ? { version: data.version, build: data.build, files: data.files } : null;
-}
-
-function diffManifests(oldFiles, newFiles) {
-  const oldMap = new Map((oldFiles || []).map((f) => [String(f.path), f]));
-  const newMap = new Map((newFiles || []).map((f) => [String(f.path), f]));
-  const files = [];
-  const categories = {};
-  let added = 0, changed = 0, removed = 0, bytes = 0;
-  const bump = (filePath) => {
-    const key = filePath.includes('/') ? filePath.split('/')[0] : '根目录';
-    categories[key] = (categories[key] || 0) + 1;
-  };
-  for (const f of newFiles || []) {
-    const before = oldMap.get(String(f.path));
-    if (!before) {
-      files.push({ path: f.path, status: 'added', size: Number(f.size) || 0 });
-      added++; bytes += Number(f.size) || 0; bump(String(f.path));
-    } else if (String(before.sha256) !== String(f.sha256)) {
-      files.push({ path: f.path, status: 'changed', size: Number(f.size) || 0 });
-      changed++; bytes += Number(f.size) || 0; bump(String(f.path));
-    }
-  }
-  for (const f of oldFiles || []) {
-    if (newMap.has(String(f.path))) continue;
-    files.push({ path: f.path, status: 'removed', size: Number(f.size) || 0 });
-    removed++; bump(String(f.path));
-  }
-  files.sort((a, b) => a.path.localeCompare(b.path));
-  const shown = files.slice(0, 500);
-  return {
-    added, changed, removed, count: files.length, bytes,
-    categories,
-    files: shown,
-    truncated: files.length > shown.length,
-  };
 }
 
 function versionParts(value) {

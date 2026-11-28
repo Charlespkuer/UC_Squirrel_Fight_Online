@@ -11,11 +11,7 @@
   let checkGen = 0;
   const DEFAULT_URL = 'https://github.com/Charlespkuer/UC_Squirrel_Fight_remake/releases/latest';
 
-  function esc(s) {
-    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-    }[c]));
-  }
+  function esc(s) { return SfRender.esc(s); }
   function C() { return (window.UI && UI.classic) || null; }
   function toast(msg) {
     try { if (O && O.toast) O.toast(msg); else if (window.UI && UI.toast) UI.toast(msg); } catch (e) {}

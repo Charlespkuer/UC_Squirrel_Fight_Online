@@ -22,6 +22,7 @@ const store = require('../server/game/store');
 const apprentice = require('../server/game/apprentice');
 const fighter = require('../server/game/fighter');
 const snapshots = require('../server/game/snapshot');
+const { localDate } = require('../server/config');
 
 let BASE = '';
 let running = null;
@@ -157,11 +158,24 @@ async function main() {
   /* 师徒页与「查看」按当前存档实时算：防守快照落后时也不能显示旧属性。 */
   db.tx(() => store.runOnSave(idB, ({ save }) => {
     save.level = 33; save.power = 321; save.maxHp = 777;
+    save.dailyStatsDate = localDate(); save.dailyWins = 7; save.dailyFails = 3;
+    save.allWins = 70; save.allFails = 30;
   }));
   const liveListA = await ap(A.token);
   assert.equal(liveListA.prentices[0].stats.power, 321, '徒弟属性按当前存档下发，不读可能落后的防守快照');
   const livePreviewB = await call('GET', '/api/fighter?accountId=' + idB, undefined, A.token);
   assert.equal(livePreviewB.fighter.power, 321, '好友页「查看」按账号取实时面板');
+  /* 状态页的胜率 / 场次也读同一份实时存档；日计数跨天没战斗时不能把昨天的人头带出来。 */
+  assert.equal(livePreviewB.dailyWins, 7, '好友页「查看」实时下发今日胜场');
+  assert.equal(livePreviewB.allWins + livePreviewB.allFails, 100, '好友页「查看」实时下发累计场次');
+  const liveFriendsA = await call('GET', '/api/friends', undefined, A.token);
+  const liveRowB = liveFriendsA.friends.find((f) => Number(f.accountId) === idB);
+  assert.equal(liveRowB && liveRowB.dailyWins, 7, '好友名单也要带实时今日胜场（查看失败时不回落到 0）');
+  assert.equal(liveRowB && liveRowB.allWins, 70, '好友名单也要带实时累计场次');
+  db.tx(() => store.runOnSave(idB, ({ save }) => { save.dailyStatsDate = '2000-01-01'; }));
+  const stalePreviewB = await call('GET', '/api/fighter?accountId=' + idB, undefined, A.token);
+  assert.equal(stalePreviewB.dailyWins, 0, '好友跨天还没战斗时今日胜场要从 0 算');
+  assert.equal(stalePreviewB.allWins, 70, '累计场次跨天不清零');
   /* 高等级徒弟 + 旧档缺镜像：师父存档里没有 `prentices` 行时，
    * `/api/state` 要按当前存档补出面板，关卡也要让这个徒弟先上阵；不能退回师父。 */
   await levelUp(B.token, idB, 65, 0);

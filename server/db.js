@@ -835,4 +835,16 @@ function backupTo(file) {
   db.exec("VACUUM INTO '" + target + "'");
 }
 
-module.exports = { open, close, handle, get, all, run, tx, backupTo, SCHEMA_VERSION };
+function metaGet(key) {
+  const row = get('SELECT value FROM meta WHERE key = ?', String(key));
+  return row ? String(row.value) : '';
+}
+function metaSet(key, value) {
+  run('INSERT INTO meta (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+    String(key), String(value));
+}
+
+module.exports = {
+  open, close, handle, get, all, run, tx, backupTo, SCHEMA_VERSION,
+  metaGet, metaSet,
+};

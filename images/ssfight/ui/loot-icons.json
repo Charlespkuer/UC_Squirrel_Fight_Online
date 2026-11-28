@@ -1,6 +1,6 @@
 {
  "source": "references/ssfight/ssfight/ssfight/ssfight.swf（ExportAssets 名字 → 紧邻其前的 DefineSprite）+ js/battle-drops.js（掉落池）",
- "how": "原版 `mc.c1.attachMovie(<道具名>, \"mc\", 100)`（MainMovie.as:18804 战果页 / :18691 开宝箱）：库元件名就是道具名。`byId[道具id].id` = 该图标的元件号；没有 SWF 导出的联机道具用 `byId[道具id].svg` 回退背包矢量图。",
+ "how": "原版 `mc.c1.attachMovie(<道具名>, \"mc\", 100)`（MainMovie.as:18804 战果页 / :18691 开宝箱）：库元件名就是道具名。`byId[道具id].id` = 该图标的元件号；没有 SWF 导出的联机道具用 `byId[道具id].svg` 回退背包矢量图。金杯 40 不在掉落池里，由 LOOT_EXTRA 指定 3061（卡面 2015 + 本体），保证和其它战利品同卡。",
  "byId": {
   "1": {
    "name": "小体力药剂",
@@ -38,6 +38,10 @@
    "name": "蓝色碎片",
    "id": "3046"
   },
+  "40": {
+   "name": "金杯",
+   "id": "3061"
+  },
   "45": {
    "name": "天使果实种子",
    "id": "2636"
@@ -52,19 +56,19 @@
   },
   "77": {
    "name": "黑凤凰碎片",
-   "svg": "prop-77.svg"
+   "id": "3068"
   },
   "78": {
    "name": "黑圣熊碎片",
-   "svg": "prop-78.svg"
+   "id": "3066"
   },
   "101": {
    "name": "一级宝石",
-   "svg": "prop-101.svg"
+   "id": "2390"
   },
   "102": {
    "name": "二级宝石",
-   "svg": "prop-102.svg"
+   "id": "2412"
   }
  },
  "missing": []
